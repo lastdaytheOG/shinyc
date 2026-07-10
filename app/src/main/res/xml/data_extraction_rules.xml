@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?><!--
+    Amar Vault backup policy (Sprint 3B, Task 3) — API 31+.
+
+    NOTHING is cloud-backed-up and NOTHING participates in device-to-device
+    transfer. The vault is offline-first and privacy-first: the Room database
+    (OCR text, metadata, chat history), embedding index files, id mappings,
+    AI models, and preferences never leave the device.
+
+    allowBackup="false" in the manifest is the primary opt-out; these explicit
+    exclude-everything rules are defense in depth for OEM migration tools that
+    read data_extraction_rules regardless.
+
+    Single source of truth for this policy: docs/BACKUP_AND_PRIVACY.md
+    Keep these rules consistent with backup_rules.xml (API ≤ 30).
+-->
+<data-extraction-rules>
+    <cloud-backup disableIfNoEncryptionCapabilities="true">
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+    </device-transfer>
+</data-extraction-rules>

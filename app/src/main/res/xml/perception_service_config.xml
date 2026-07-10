@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Agent Accessibility Service configuration.
+
+  Place at: app/src/main/res/xml/perception_service_config.xml
+
+  Referenced from AndroidManifest.xml <service> declaration:
+
+      <service
+          android:name="com.amar.vault.agent.perception.PerceptionService"
+          android:exported="false"
+          android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+          <intent-filter>
+              <action android:name="android.accessibilityservice.AccessibilityService" />
+          </intent-filter>
+          <meta-data
+              android:name="android.accessibilityservice"
+              android:resource="@xml/perception_service_config" />
+      </service>
+
+  Key decisions:
+
+  accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged":
+      Only these two fire. We tighten further at runtime via serviceInfo in
+      PerceptionService.onServiceConnected, but the manifest provides a hard ceiling
+      — Android won't deliver anything outside this union regardless of runtime config.
+
+  accessibilityFeedbackType="feedbackGeneric":
+      We provide no audio/haptic feedback. Required field; "generic" is the no-op choice.
+
+  notificationTimeout="100":
+      System coalesces events older than this before delivering. Reduces the
+      amount of debouncing we have to do in onAccessibilityEvent.
+
+  canRetrieveWindowContent="true":
+      REQUIRED for rootInActiveWindow() to work. Without this the tree walker
+      has nothing to walk.
+
+  accessibilityFlags:
+      flagIncludeNotImportantViews: some apps mark everything as "not important"
+        for accessibility; we need them anyway.
+      flagRetrieveInteractiveWindows: multi-window (pip, split-screen) support.
+      flagReportViewIds: populates viewIdResourceName so we can use resource-id
+        selectors reliably.
+
+  packageNames OMITTED on purpose:
+      Manifest-level package filtering is a STATIC allow-list. We use RUNTIME
+      filtering via PackageWatchlist instead, which is dynamic (add/remove as
+      tasks come and go). Omitting this means the service can observe any
+      foreground package, and PackageWatchlist narrows it at runtime.
+
+      If you want defense-in-depth with an outer static filter too (e.g.,
+      "we will never observe banking apps"), add packageNames here as well.
+      That would be an explicit deny-list extension — tell me and I'll add it.
+
+  description text:
+      Shown to the user in Settings → Accessibility when they're deciding whether
+      to enable the service. KEEP IT HONEST. Users ignoring this permission
+      dialog is a misfeature, not a feature. The copy below tells them exactly
+      what the service does and why.
+-->
+<accessibility-service
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagIncludeNotImportantViews|flagRetrieveInteractiveWindows|flagReportViewIds"
+    android:canRetrieveWindowContent="true"
+    android:canPerformGestures="true"
+    android:notificationTimeout="100"
+    android:description="@string/perception_service_description"
+    android:summary="@string/perception_service_summary" />

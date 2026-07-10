@@ -1,0 +1,149 @@
+package com.amar.vault.benchmark
+
+import com.amar.vault.retrieval.RetrievalRequest
+import com.amar.vault.retrieval.RetrievalService
+import com.amar.vault.retrieval.SearchRepository
+import kotlin.math.ln
+
+/**
+ * Module 3 — Retrieval quality evaluation.
+ *
+ * Runs each golden case's queries through the REAL production [RetrievalService]
+ * (HybridSearchService → final ranking) — never a re-implementation — and scores the
+ * final ranked list against the case's expectations.
+ *
+ * Metrics: Precision@1/5/10, Recall@5/10, MRR, NDCG@10 — averaged over all scored
+ * queries. Result ids are resolved to their parent document (via the explicit
+ * `parentDocumentId` from Sprint 3B) so chunk-level hits score against document-level
+ * expectations.
+ *
+ * Honesty rules:
+ *  - a case whose expected documents are not present in the corpus is SKIPPED and
+ *    counted in `cases.skipped` (with a per-case row explaining why);
+ *  - if zero cases are scorable, all quality metrics are reported as unmeasured.
+ */
+class RetrievalEvaluator(
+    private val retrieval: RetrievalService,
+    private val repository: SearchRepository,
+) {
+
+    data class QueryScore(
+        val caseId: String,
+        val query: String,
+        val p1: Double, val p5: Double, val p10: Double,
+        val r5: Double, val r10: Double,
+        val mrr: Double, val ndcg10: Double,
+    )
+
+    suspend fun evaluate(cases: List<BenchmarkCase>): BenchmarkSection {
+        val retrievalCases = cases.filter { it.supportsRetrieval }
+        val scores = mutableListOf<QueryScore>()
+        val rows = mutableListOf<Map<String, String>>()
+        var skipped = 0
+
+        for (case in retrievalCases) {
+            val relevant = (case.expectedResults + case.documentId).filter { it.isNotBlank() }.toSet()
+            // Scorable only if every expected document actually exists in the corpus —
+            // otherwise the case measures the dataset, not retrieval.
+            val present = repository.getByIds(relevant.toList())
+                .map { it.parentDocumentId ?: it.id }.toSet()
+            val missing = relevant - present
+            if (missing.isNotEmpty()) {
+                skipped++
+                rows.add(mapOf(
+                    "caseId" to case.id, "status" to "SKIPPED",
+                    "reason" to "expected document(s) not indexed: ${missing.joinToString()}"
+                ))
+                continue
+            }
+
+            for (query in case.queries) {
+                val result = retrieval.retrieve(RetrievalRequest(query))
+                // Collapse chunk hits to unique parent documents, preserving rank order.
+                val ranked = result.items.map { it.parentDocumentId ?: it.id }.distinct()
+                val score = score(case, query, ranked, relevant)
+                scores.add(score)
+                rows.add(mapOf(
+                    "caseId" to case.id, "status" to "SCORED", "query" to query,
+                    "p1" to fmt(score.p1), "p5" to fmt(score.p5), "p10" to fmt(score.p10),
+                    "r5" to fmt(score.r5), "r10" to fmt(score.r10),
+                    "mrr" to fmt(score.mrr), "ndcg10" to fmt(score.ndcg10),
+                ))
+            }
+        }
+
+        val none = scores.isEmpty()
+        val noneNote = if (none) "no scorable cases (dataset empty or documents not indexed)" else ""
+        fun agg(name: String, pick: (QueryScore) -> Double) = MetricValue(
+            name = name,
+            value = if (none) null else scores.map(pick).average(),
+            unit = "ratio", higherIsBetter = true, note = noneNote,
+        )
+
+        return BenchmarkSection(
+            id = "retrieval.quality",
+            title = "Retrieval quality (RetrievalService → HybridSearchService → final ranking)",
+            metrics = listOf(
+                agg("precision@1") { it.p1 },
+                agg("precision@5") { it.p5 },
+                agg("precision@10") { it.p10 },
+                agg("recall@5") { it.r5 },
+                agg("recall@10") { it.r10 },
+                agg("mrr") { it.mrr },
+                agg("ndcg@10") { it.ndcg10 },
+                MetricValue("queries.scored", scores.size.toDouble(), "count", true),
+                MetricValue("cases.skipped", skipped.toDouble(), "count", false,
+                    if (skipped > 0) "expected documents missing from index" else ""),
+            ),
+            rows = rows,
+        )
+    }
+
+    private fun score(
+        case: BenchmarkCase, query: String,
+        ranked: List<String>, relevant: Set<String>,
+    ): QueryScore {
+        fun precisionAt(k: Int): Double {
+            if (k <= 0) return 0.0
+            val topK = ranked.take(k)
+            return topK.count { it in relevant }.toDouble() / k
+        }
+        fun recallAt(k: Int): Double {
+            if (relevant.isEmpty()) return 0.0
+            return ranked.take(k).count { it in relevant }.toDouble() / relevant.size
+        }
+        val firstRelevant = ranked.indexOfFirst { it in relevant }
+        val mrr = if (firstRelevant >= 0) 1.0 / (firstRelevant + 1) else 0.0
+
+        return QueryScore(
+            caseId = case.id, query = query,
+            p1 = precisionAt(1), p5 = precisionAt(5), p10 = precisionAt(10),
+            r5 = recallAt(5), r10 = recallAt(10),
+            mrr = mrr, ndcg10 = ndcgAt(10, ranked, relevant, case.expectedRank),
+        )
+    }
+
+    /**
+     * NDCG@k. Graded relevance when the case supplies [expectedRank] (most relevant
+     * first → gain = position weight); binary relevance otherwise.
+     */
+    private fun ndcgAt(k: Int, ranked: List<String>, relevant: Set<String>, expectedRank: List<String>): Double {
+        fun gain(id: String): Double = when {
+            expectedRank.isNotEmpty() -> {
+                val idx = expectedRank.indexOf(id)
+                if (idx >= 0) (expectedRank.size - idx).toDouble() else 0.0
+            }
+            id in relevant -> 1.0
+            else -> 0.0
+        }
+        fun dcg(ids: List<String>): Double = ids.take(k).withIndex().sumOf { (i, id) ->
+            gain(id) / (ln((i + 2).toDouble()) / ln(2.0))
+        }
+        val ideal = (if (expectedRank.isNotEmpty()) expectedRank else relevant.toList())
+            .sortedByDescending { gain(it) }
+        val idcg = dcg(ideal)
+        return if (idcg == 0.0) 0.0 else dcg(ranked) / idcg
+    }
+
+    private fun fmt(v: Double) = "%.4f".format(java.util.Locale.US, v)
+}

@@ -1,0 +1,118 @@
+package com.amar.vault
+
+import android.Manifest
+import android.content.ComponentCallbacks2
+import android.content.pm.PackageManager
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+// TODO(Phase4_AgentRuntime): Restore imports when Agent Runtime is reintegrated.
+// import com.amar.vault.agent.CurrentActivityHolder
+// import com.amar.vault.agent.intent.AppIndex
+import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+@AndroidEntryPoint
+class MainActivity : ComponentActivity() {
+
+    @Inject
+    lateinit var vectorSearchManager: VectorSearchManager
+
+    private var screenshotObserver: ScreenshotObserver? = null
+    private var folderSyncObserver: FolderSyncObserver? = null
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        if (permissions.values.all { it }) startObservers()
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        setContent { VaultApp() }
+
+        // TODO(Phase4_AgentRuntime): Restore AppIndex attach when Agent Runtime is reintegrated.
+        // AppIndex.attach(applicationContext)
+
+        requestPermissions()
+    }
+
+    // ---- Activity-context tracking for agent executors ----
+    //
+    // OpenAppExecutor (and future UI executors) need a live Activity context
+    // to launch third-party apps on Android 10+ without hitting Background
+    // Activity Launch restrictions. ApplicationContext.startActivity() with
+    // FLAG_ACTIVITY_NEW_TASK silently fails on modern Android for non-system
+    // targets. By publishing this Activity to CurrentActivityHolder while
+    // resumed, executors can route launches through the real foreground
+    // window, which Android recognizes as user-initiated.
+
+    override fun onResume() {
+        super.onResume()
+        // TODO(Phase4_AgentRuntime): Restore CurrentActivityHolder publish when Agent Runtime is reintegrated.
+        // CurrentActivityHolder.set(this)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // TODO(Phase4_AgentRuntime): Restore CurrentActivityHolder clear when Agent Runtime is reintegrated.
+        // CurrentActivityHolder.clear(this)
+    }
+
+    private fun requestPermissions() {
+        val permissions = mutableListOf(Manifest.permission.READ_MEDIA_IMAGES)
+
+        val notGranted = permissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+
+        if (notGranted.isEmpty()) {
+            startObservers()
+        } else {
+            permissionLauncher.launch(notGranted.toTypedArray())
+        }
+    }
+
+    private fun startObservers() {
+        // Original screenshot observer (always active)
+        screenshotObserver = ScreenshotObserver(applicationContext, scope)
+        screenshotObserver?.register()
+
+        // Folder sync observer (watches all selected folders for new photos)
+        folderSyncObserver = FolderSyncObserver(applicationContext, scope)
+        folderSyncObserver?.register()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        scope.launch {
+            vectorSearchManager.saveState()
+        }
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE) {
+            AppEmbeddingEngine.release()
+            android.util.Log.d("MemoryManager", "Released ONNX engine — level $level")
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+
+        screenshotObserver?.unregister()
+        folderSyncObserver?.unregister()
+
+        vectorSearchManager.destroy()
+    }
+}

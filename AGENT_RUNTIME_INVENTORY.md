@@ -1,0 +1,24 @@
+# Agent Runtime Missing Dependency Inventory
+
+This document lists every missing type under `com.amar.vault.agent.*` referenced in the active source files.
+
+| Missing Type | Referenced File | Referenced Lines | Usage Purpose | MVP Dependency |
+|---|---|---|---|---|
+| `com.amar.vault.agent.runtime.reducer.ReducerEngine` | [AmarApplication.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/AmarApplication.kt) | 4, 18, 34, 39 | Main event reducer engine that processes state snapshots and updates the app's world state. | NO |
+| `com.amar.vault.agent.runtime.events.AccessibilityEventBus` | [AmarApplication.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/AmarApplication.kt) | 19, 44 | Event bus for dispatching and receiving AccessibilityEvents from the perception layer. | NO |
+| `com.amar.vault.agent.runtime.ime.ImeCoordinator` | [AmarApplication.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/AmarApplication.kt) | 20, 42, 45 | Coordinator for IME state, capturing text input events and syncing cursor context. | NO |
+| `com.amar.vault.agent.runtime.semantic.SemanticBridge` | [AmarApplication.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/AmarApplication.kt) | 21, 50 | Bridge between layout node attributes and semantic identities/roles on screens. | NO |
+| `com.amar.vault.agent.runtime.metrics.InjectionMetrics` | [AmarApplication.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/AmarApplication.kt) | 22, 51 | Telemetry tracker recording latency and reliability metrics for UI interaction/injection steps. | NO |
+| `com.amar.vault.agent.runtime.recovery.OverlayDetector` | [AmarApplication.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/AmarApplication.kt) | 23, 52 | Detection service for identifying floating system windows and security overlay shields. | NO |
+| `com.amar.vault.agent.runtime.recovery.RecoveryEngine` | [AmarApplication.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/AmarApplication.kt) | 24, 53 | Automated recovery system that handles UI state resets and failure loops during task execution. | NO |
+| `com.amar.vault.agent.runtime.orchestrator.PhaseOrchestrator` | [AmarApplication.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/AmarApplication.kt) | 25, 54 | Orchestrator managing sequential phase execution of high-level workflows. | NO |
+| `com.amar.vault.agent.runtime.replay.EventHistoryRecorder` | [AmarApplication.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/AmarApplication.kt) | 26, 55 | Recorder logging frame-by-frame snapshots for workflow replay and error debugging. | NO |
+| `com.amar.vault.agent.runtime.adapters.AdapterManifestLoader` | [AmarApplication.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/AmarApplication.kt) | 27, 58, 59 | Loader to scan and parse declarative JSON app manifests. | NO |
+| `com.amar.vault.agent.runtime.adapters.FrameworkAdapterRegistry` | [AmarApplication.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/AmarApplication.kt) | 28, 59 | Registry containing both native adapters (WhatsApp, Gemini) and loaded declarative adapters. | NO |
+| `com.amar.vault.agent.runtime.telemetry.TelemetryExporter` | [AmarApplication.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/AmarApplication.kt) | 29, 61 | Background exporter uploading telemetry and run statistics to local disk files. | NO |
+| `com.amar.vault.agent.runtime.state.WorldStateStore` | [AmarApplication.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/AmarApplication.kt) | 30, 46 | Data store maintaining current device foreground state and screen details. | NO |
+| `com.amar.vault.agent.perception.PerceptionService` | [AmarApplication.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/AmarApplication.kt) | 43 | Accessibility service that monitors window transitions and captures layout hierarchies. | NO |
+| `com.amar.vault.agent.CurrentActivityHolder` | [MainActivity.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/MainActivity.kt) | 11, 58, 63 | Tracks the active ComponentActivity instance to bypass background activity launch restrictions. | NO |
+| `com.amar.vault.agent.intent.AppIndex` | [MainActivity.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/MainActivity.kt) | 12, 41 | Attaches an app resolver tracking launcher components on the user's device. | NO |
+| `com.amar.vault.agent.debug.DebugAgentScreen` | [VaultNavHost.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/VaultNavHost.kt) | 22, 125 | Compose screen harness for manual injection step execution and control testing. | NO |
+| `com.amar.vault.agent.debug.DebugBrainScreen` | [VaultNavHost.kt](file:///d:/Version1/app/src/main/java/com/amar/vault/VaultNavHost.kt) | 23, 135 | Compose screen interface testing natural language router actions with model outputs. | NO |

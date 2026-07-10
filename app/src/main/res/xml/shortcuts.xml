@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Direct Share / Sharing Shortcuts declaration (Phase 5C #2).
+
+  This <share-target> tells the Android Sharesheet that dynamic, long-lived
+  shortcuts published with the matching category can be surfaced as Direct Share
+  targets (the row of app+destination suggestions at the top of the sheet). The
+  actual per-folder targets are published at runtime by ShareTargetPublisher.
+
+  We only declare the official mechanism here — Android alone decides ranking and
+  whether/where these rows appear. See ShareTargetPublisher for the honest notes.
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <share-target android:targetClass="com.amar.vault.ShareHandlerActivity">
+        <data android:mimeType="text/plain" />
+        <data android:mimeType="image/*" />
+        <data android:mimeType="video/*" />
+        <data android:mimeType="audio/*" />
+        <data android:mimeType="application/pdf" />
+        <data android:mimeType="*/*" />
+        <category android:name="com.amar.vault.category.SAVE_TO_FOLDER" />
+    </share-target>
+</shortcuts>

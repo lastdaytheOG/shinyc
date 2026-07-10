@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "workflows": [
+    {
+      "id": "whatsapp_search_hi",
+      "goal": "search hi on whatsapp",
+      "package_id": "com.whatsapp",
+      "expected_outcome": "Succeeded",
+      "expected_failure_class": null,
+      "max_duration_ms": 10000,
+      "notes": "Current baseline ~7.5s (env verifier + replay overhead). Optimize down toward 5000ms in Phase 4."
+    },
+    {
+      "id": "telegram_search_hello",
+      "goal": "search hello on telegram",
+      "package_id": "org.telegram.messenger",
+      "expected_outcome": "Succeeded",
+      "expected_failure_class": null,
+      "max_duration_ms": 10000,
+      "notes": ""
+    },
+    {
+      "id": "twitter_search_puppy",
+      "goal": "search puppy on twitter",
+      "package_id": "com.twitter.android",
+      "expected_outcome": "Succeeded",
+      "expected_failure_class": null,
+      "max_duration_ms": 10000,
+      "notes": "Routes through NativeSearchExecutor deep link. Twitter alias added in Phase 3."
+    },
+    {
+      "id": "instagram_search_pizza",
+      "goal": "search pizza on instagram",
+      "package_id": "com.instagram.android",
+      "expected_outcome": "Succeeded",
+      "expected_failure_class": null,
+      "max_duration_ms": 10000,
+      "notes": "Routes through NativeSearchExecutor explore-tags deep link."
+    },
+    {
+      "id": "gmail_search_inbox",
+      "goal": "search inbox on gmail",
+      "package_id": "com.google.android.gm",
+      "expected_outcome": "Succeeded",
+      "expected_failure_class": null,
+      "max_duration_ms": 20000,
+      "notes": "open_search trap filter required"
+    },
+    {
+      "id": "gemini_search_dog",
+      "goal": "search dog on gemini",
+      "package_id": "com.google.android.apps.bard",
+      "expected_outcome": "Succeeded",
+      "expected_failure_class": null,
+      "max_duration_ms": 15000,
+      "notes": "Multi-environment: must reach assistant_robin surface, not AIM"
+    },
+    {
+      "id": "chatgpt_search_hello",
+      "goal": "search hello on chatgpt",
+      "package_id": "com.openai.chatgpt",
+      "expected_outcome": "Succeeded",
+      "expected_failure_class": null,
+      "max_duration_ms": 30000,
+      "notes": "Works as of Phase 3 baseline. Originally suspected broken; foundInput filter (reject ghost editables) appears to have fixed it. Investigate root cause when timing allows."
+    }
+  ]
+}

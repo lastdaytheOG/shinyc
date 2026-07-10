@@ -1,0 +1,103 @@
+# ==============================
+# Large AI models
+# ==============================
+*.onnx
+*.litertlm
+*.bin
+*.gguf
+
+# ==============================
+# Large / private assets
+# ==============================
+app/src/main/assets/
+app/src/main/ml/
+
+# ==============================
+# Android Studio
+# ==============================
+.idea/
+*.iml
+
+# ==============================
+# Build outputs
+# ==============================
+build/
+**/build/
+.gradle/
+.cxx/
+**/.cxx/
+
+# ==============================
+# Local Android configuration
+# ==============================
+local.properties
+
+# ==============================
+# Secrets and signing credentials
+# ==============================
+.env
+.env.*
+secrets.properties
+keystore.properties
+*.jks
+*.keystore
+
+# ==============================
+# Text files
+# ==============================
+*.txt
+
+# ==============================
+# Logs and debug outputs
+# ==============================
+*.log
+
+# ==============================
+# UI / device dumps
+# ==============================
+chatgpt_dump.xml
+current_state.xml
+edit.xml
+gemini_dump.xml
+google_search_dump.xml
+now.xml
+real_gemini.xml
+wa_after.xml
+wa_main.xml
+wa_search_open.xml
+whatsapp_tree.xml
+window_dump.xml
+
+# ==============================
+# Replay and generated test data
+# ==============================
+replays/
+replay*.json
+gemini_replay.json
+telemetry.csv
+
+# ==============================
+# Specific unwanted files
+# ==============================
+project_structure.txt
+git-files.txt
+final-check.txt
+final-check-2.txt
+final-check-shinyc.txt
+logcat.txtgit
+findstr
+set
+type
+
+# ==============================
+# Local scripts
+# ==============================
+pull_replays.bat
+regress.bat
+
+# ==============================
+# OS junk
+# ==============================
+.DS_Store
+Thumbs.db
+desktop.ini
