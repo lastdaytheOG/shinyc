@@ -209,9 +209,14 @@ class DocProfileRecorder(
         }
     }
 
-    /** Called from the OCR ladder (observation only): tier-1 accepted vs full-ensemble escalation. */
-    fun ocrTierOutcome(accepted: Boolean) {
-        pages[ocrPage]?.let { it.tierAccepted = accepted }
+    /**
+     * Called from the OCR ladder (observation only): tier-1 accepted vs full-ensemble escalation.
+     * [pageNum] routes the outcome to an explicit page so attribution stays correct when several
+     * OCR fallback pages run concurrently (Sprint P5). Callers without an [OcrPageTag] (the single
+     * image/screenshot path) pass null and fall back to the last [beginPageOcr] page.
+     */
+    fun ocrTierOutcome(accepted: Boolean, pageNum: Int? = null) {
+        pages[pageNum ?: ocrPage]?.let { it.tierAccepted = accepted }
     }
 
     private fun recordBitmap(width: Int, height: Int, bytes: Long) {
@@ -311,6 +316,15 @@ object IndexingProfiler {
     fun clear() {
         synchronized(profiles) { profiles.clear() }
     }
+}
+
+/**
+ * Sprint P5 — carries the PDF page number into the (page-agnostic) OCR ladder so its tier-outcome
+ * attribution stays correct when multiple OCR fallback pages run concurrently. Absent on the
+ * image/screenshot path, which OCRs one bitmap with no page identity.
+ */
+class OcrPageTag(val page: Int) : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<OcrPageTag>
 }
 
 /** Time [block] into [stage] when a recorder exists; pure pass-through when null. */

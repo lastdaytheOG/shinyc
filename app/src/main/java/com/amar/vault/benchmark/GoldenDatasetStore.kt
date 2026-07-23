@@ -28,6 +28,12 @@ import java.io.File
  */
 class GoldenDatasetStore(private val context: Context) {
 
+    data class MediaCheck(
+        val usable: Boolean,
+        val code: String,
+        val detail: String,
+    )
+
     companion object {
         const val ASSET_DIR = "benchmark/GoldenDataset"
         const val DEVICE_DIR = "benchmark/GoldenDataset"
@@ -58,6 +64,46 @@ class GoldenDatasetStore(private val context: Context) {
         return runCatching {
             context.assets.open("$ASSET_DIR/${case.mediaFile}").use { BitmapFactory.decodeStream(it) }
         }.getOrNull()
+    }
+
+    /**
+     * Cheap, allocation-free media validation for release gates.  It deliberately checks the
+     * same precedence as [loadMediaBitmap]: a broken device override must not silently fall
+     * back to an asset and make the benchmark appear valid under a different input.
+     */
+    fun checkMedia(case: BenchmarkCase): MediaCheck {
+        if (case.mediaFile.isBlank()) {
+            return MediaCheck(false, "OCR_MEDIA_PATH_MISSING", "mediaFile is blank")
+        }
+        val deviceFile = File(deviceDir, case.mediaFile)
+        if (deviceFile.exists()) {
+            return checkBitmap(
+                open = { deviceFile.inputStream() },
+                location = "device:${deviceFile.absolutePath}",
+            )
+        }
+        val assetPath = "$ASSET_DIR/${case.mediaFile}"
+        return runCatching { context.assets.open(assetPath).close(); true }.fold(
+            onSuccess = {
+                checkBitmap(
+                    open = { context.assets.open(assetPath) },
+                    location = "asset:$assetPath",
+                )
+            },
+            onFailure = {
+                MediaCheck(false, "OCR_MEDIA_MISSING", "not found at device:${deviceFile.absolutePath} or asset:$assetPath")
+            },
+        )
+    }
+
+    private fun checkBitmap(open: () -> java.io.InputStream, location: String): MediaCheck {
+        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        val decoded = runCatching { open().use { BitmapFactory.decodeStream(it, null, options) } }.isSuccess
+        return if (decoded && options.outWidth > 0 && options.outHeight > 0) {
+            MediaCheck(true, "OCR_MEDIA_READY", "$location (${options.outWidth}x${options.outHeight})")
+        } else {
+            MediaCheck(false, "OCR_MEDIA_UNDECODABLE", "$location is not a decodable bitmap")
+        }
     }
 
     private fun loadFromAssets(): List<BenchmarkDataset> {

@@ -7,6 +7,7 @@ import android.util.Log
 import com.amar.vault.indexing.IndexingProfiler
 import com.amar.vault.indexing.ProfilerStage
 import com.amar.vault.indexing.timedStage
+import com.amar.vault.planning.PlannerShadowRegistry
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -137,6 +138,42 @@ class DocumentIndexer private constructor(private val context: Context) {
         val prof = IndexingProfiler.beginOrNull(uriKey, fileName, mimeType.substringAfterLast('/'))
 
         try {
+            // Exact-byte reuse happens before PDFBox/OCR. Room verifies every cache hit, so a
+            // stale cache file or partial prior write cannot suppress normal extraction.
+            val sourceFingerprint = if (mimeType == "application/pdf") {
+                val fingerprintStartedAt = System.currentTimeMillis()
+                try {
+                    com.amar.vault.indexing.PdfSourceReuseCache.fingerprint(context, uri)
+                } finally {
+                    IndexMetrics.recordDuration(
+                        IndexMetrics.Timing.PDF_SOURCE_FINGERPRINT,
+                        System.currentTimeMillis() - fingerprintStartedAt,
+                    )
+                }
+            } else null
+            if (sourceFingerprint != null) {
+                val cached = com.amar.vault.indexing.PdfSourceReuseCache.lookup(context, sourceFingerprint)
+                if (cached != null && dao.countByContentHash(cached.textHash) == cached.chunkCount) {
+                    IndexMetrics.increment(IndexMetrics.Event.INDEX_SKIPPED_DUP)
+                    IndexMetrics.increment(IndexMetrics.Event.PDF_SOURCE_REUSE_HIT)
+                    return IndexResult.Duplicate(fileName, cached.textHash)
+                }
+                if (cached != null) com.amar.vault.indexing.PdfSourceReuseCache.forget(context, sourceFingerprint)
+            }
+
+            // Sprint P6 — progressive PDF path: strip/OCR page by page and commit each page's
+            // chunks to Room + BM25 immediately, so the document is searchable within seconds
+            // (page 1 first) instead of only after the whole file finishes. PDF-only and gated;
+            // anything else falls through to the legacy all-or-nothing batch path below.
+            if (mimeType == "application/pdf" &&
+                sourceFingerprint != null &&
+                com.amar.vault.indexing.AdaptivePdfOcrControl.progressivePdfIndexing
+            ) {
+                return doIndexStreaming(
+                    uri, mimeType, fileName, uriKey, sourceFingerprint, baseId, progress, startMs,
+                )
+            }
+
             // ── 1. Extract pages (single read — no double read) ─────────
             progress?.emit(IndexProgress(fileName, IndexProgress.Phase.EXTRACTING))
 
@@ -156,6 +193,17 @@ class DocumentIndexer private constructor(private val context: Context) {
             prof?.stageMs(ProfilerStage.EXTRACT, System.currentTimeMillis() - tExtract)
             prof?.fileType = content.itemType
             val pagedChunks = content.pagedChunks
+
+            // Shadow-only planner observation after the legacy extractor has supplied evidence.
+            // The plan is logged for replay; no worker consults it yet.
+            val observedPageCount = pagedChunks.mapNotNull { it.pdfPage }.distinct().size
+                .takeIf { it > 0 } ?: 1
+            PlannerShadowRegistry.observeDocument(
+                sourceId = uriKey,
+                mimeType = mimeType,
+                pageCount = observedPageCount,
+                nonEmptyPages = pagedChunks.mapNotNull { it.pdfPage }.distinct().size,
+            )
 
             if (pagedChunks.isEmpty()) return IndexResult.Failure(fileName, IndexError.EmptyContent)
 
@@ -231,6 +279,15 @@ class DocumentIndexer private constructor(private val context: Context) {
                 }
             }
 
+            if (sourceFingerprint != null) {
+                com.amar.vault.indexing.PdfSourceReuseCache.remember(
+                    context = context,
+                    sourceHash = sourceFingerprint,
+                    textHash = contentHash,
+                    chunkCount = pagedChunks.size,
+                )
+            }
+
             progress?.emit(IndexProgress(fileName, IndexProgress.Phase.DONE,
                 pagedChunks.size, pagedChunks.size))
 
@@ -248,6 +305,99 @@ class DocumentIndexer private constructor(private val context: Context) {
         } finally {
             inFlight.remove(uriKey)
         }
+    }
+
+    /**
+     * Sprint P6 — progressive PDF indexing. Commits each page's chunks to Room + BM25 as they are
+     * produced (see [com.amar.vault.indexing.PdfFormatExtractor.extractStreaming]) so the document
+     * is searchable page-by-page within seconds instead of only after the whole file finishes.
+     *
+     * Identity/dedup uses the source-byte [sourceFingerprint] (computed before extraction) as every
+     * row's contentHash — a stable per-file key available up front, which is what makes streaming
+     * possible (the legacy text-SHA needs the entire document first). A complete re-add was already
+     * skipped by the reuse-cache pre-check in [doIndex]; here we delete any prior rows for this
+     * exact source (a crashed partial index) and stream fresh. Rerun self-heals: on failure the
+     * fingerprint is never cached as complete, so the next run deletes the partial rows and retries.
+     */
+    private suspend fun doIndexStreaming(
+        uri: Uri,
+        mimeType: String,
+        fileName: String,
+        uriKey: String,
+        sourceFingerprint: String,
+        baseId: String?,
+        progress: MutableSharedFlow<IndexProgress>?,
+        startMs: Long,
+    ): IndexResult {
+        val descriptor = contentExtractor.descriptorFor(mimeType)
+            ?: return IndexResult.Failure(fileName, IndexError.UnsupportedFormat(mimeType))
+        val targetId = baseId ?: UUID.randomUUID().toString()
+
+        // Clear any prior (partial) rows for this exact source before streaming fresh.
+        persister.deletePartialByContentHash(sourceFingerprint)
+
+        progress?.emit(IndexProgress(fileName, IndexProgress.Phase.EXTRACTING))
+        var committed = 0
+        try {
+            IndexMetrics.timed(IndexMetrics.Timing.DOC_EXTRACT) {
+                contentExtractor.extractStreaming(context, uri, mimeType) { pageChunks ->
+                    val rows = pageChunks.map { pc ->
+                        val tags = TagEngine.generate(pc.text, descriptor.tag)
+                        val tagSuffix = if (tags.isNotEmpty()) "\n[${tags.joinToString(" ")}]" else ""
+                        val finalText = pc.text + tagSuffix
+                        val item = VaultItem(
+                            id          = "${targetId}_chunk${pc.chunkIndex}",
+                            uri         = uriKey,
+                            ocrText     = finalText,
+                            lang        = LanguageDetector.detect(pc.text),
+                            itemType    = descriptor.itemType,
+                            pageNum     = pc.pdfPage ?: pc.chunkIndex,
+                            sourceFile  = fileName,
+                            timestamp   = System.currentTimeMillis(),
+                            pHash       = 0L,
+                            contentHash = sourceFingerprint,
+                            parentDocumentId = targetId,
+                            chunkIndex       = pc.chunkIndex,
+                            totalChunks      = 0, // unknown while streaming; informational only for docs
+                        )
+                        item to finalText
+                    }
+                    // Commit this page: Room rows (→ FTS searchable) then BM25 (→ lexical searchable).
+                    persister.persistDocumentChunks(rows.map { it.first })
+                    bm25Updater.update(
+                        rows.map { (item, text) ->
+                            com.amar.vault.indexing.IndexEntry(
+                                id = item.id, text = text,
+                                parentId = targetId, chunkIndex = item.chunkIndex, totalChunks = 0,
+                            )
+                        }
+                    )
+                    committed += rows.size
+                    progress?.emit(IndexProgress(fileName, IndexProgress.Phase.STORING, committed, committed))
+                }
+            }
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            Log.e(TAG, "Progressive index failed for $fileName after $committed chunk(s)", e)
+            return IndexResult.Failure(fileName, IndexError.ExtractionFailed(e))
+        }
+
+        if (committed == 0) return IndexResult.Failure(fileName, IndexError.EmptyContent)
+
+        // Mark complete for exact-source reuse (every row's contentHash == this fingerprint).
+        com.amar.vault.indexing.PdfSourceReuseCache.remember(
+            context = context,
+            sourceHash = sourceFingerprint,
+            textHash = sourceFingerprint,
+            chunkCount = committed,
+        )
+        progress?.emit(IndexProgress(fileName, IndexProgress.Phase.DONE, committed, committed))
+
+        val elapsed = System.currentTimeMillis() - startMs
+        IndexMetrics.recordDuration(IndexMetrics.Timing.DOC_INDEX_TOTAL, elapsed)
+        Log.d(TAG, "Progressively indexed $fileName: $committed chunks in ${elapsed}ms (searchable page-by-page)")
+        return IndexResult.Success(fileName, committed, elapsed)
     }
 
     // ════════════════════════════════════════════════════════════════════════

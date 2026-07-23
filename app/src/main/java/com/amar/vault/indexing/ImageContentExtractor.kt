@@ -7,7 +7,6 @@ import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import com.amar.vault.IndexMetrics
-import com.googlecode.tesseract.android.TessBaseAPI
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -17,11 +16,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
-import java.io.File
-import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -43,8 +38,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 class ImageContentExtractor(private val context: Context) {
 
     companion object {
-        private const val TESS_DATA_DIR = "tessdata"
-
         // Sprint P4 — tier-1 acceptance floor for the PDF escalation ladder. Pages
         // with fewer recognized words (title pages, sparse forms) always escalate:
         // correctness over speed.
@@ -88,8 +81,6 @@ class ImageContentExtractor(private val context: Context) {
     private val barcodeScanner by lazy {
         com.google.mlkit.vision.barcode.BarcodeScanning.getClient()
     }
-    private val tessApi: TessBaseAPI by lazy { initTesseract() }
-    private val tessMutex = Mutex()
 
     /** OCR text + QR payloads extracted from a single bitmap. */
     data class ImageContent(val ocrText: String, val qrPayloads: List<String>)
@@ -206,21 +197,46 @@ class ImageContentExtractor(private val context: Context) {
         recorder?.setInput(bitmap.width, bitmap.height)
         val tLadder = System.currentTimeMillis()
 
-        // Tier 1 — identical calls, order and merge as ensemble strategy 1.
+        if (AdaptivePdfOcrControl.mode == AdaptivePdfOcrControl.Mode.LEGACY_ENSEMBLE) {
+            val merged = runEnsemble(bitmap, precomputedRaw = null, renderHiRes = renderHiRes, recorder = recorder)
+            recorder?.let {
+                it.setTotalMs((System.currentTimeMillis() - tLadder).toDouble())
+                OcrInstrumentation.publish(
+                    it.buildReport(sourceId ?: "pdfpage@${System.identityHashCode(bitmap)}", merged)
+                )
+            }
+            return normalize(merged)
+        }
+
+        // Tier 1 — same inputs, merge and RAW-strategy semantics as ensemble strategy 1.
+        // The EN and HI passes are independent models reading the SAME immutable InputImage, so
+        // they run CONCURRENTLY instead of EN-then-HI. Every accepted bilingual page pays for both
+        // (routing to one would drop Devanagari on mixed eng+hin pages), so overlapping them turns
+        // the hot-path cost from EN+HI into max(EN, HI). Output is byte-identical: mergeTexts is a
+        // pure function of the two final strings, independent of which finished first. No new
+        // thread-safety surface — runEnsemble already calls `recognize` from parallel strategies,
+        // so IndexMetrics + recorder are already exercised concurrently.
         val tierStart = System.nanoTime()
         val image = InputImage.fromBitmap(bitmap, 0)
-        val en = recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
-        val hi = recognize(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
+        val (en, hi) = coroutineScope {
+            val enDeferred = async { recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder) }
+            val hiDeferred = async { recognize(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder) }
+            enDeferred.await() to hiDeferred.await()
+        }
         val tier1 = mergeTexts(en, hi)
         // Record tier-1 as strategy RAW with its real latency (runEnsemble will NOT overwrite it
         // on escalation, because precomputedRaw short-circuits its RAW pass — see the guard below).
+        // With the two passes overlapped, this wall time is now max(EN, HI), not EN+HI.
         recorder?.record(OcrStrategy.RAW, tier1, (System.nanoTime() - tierStart) / 1_000_000.0)
 
         val tier1Final = normalize(mergeAllOcrResults(listOf(tier1)))
         if (tier1Healthy(tier1Final)) {
             IndexMetrics.increment(IndexMetrics.Event.PDF_OCR_TIER1_ACCEPTED)
             // Sprint E3 — observation only: attribute the ladder outcome to the current page.
-            kotlin.coroutines.coroutineContext[DocProfileRecorder]?.ocrTierOutcome(accepted = true)
+            // Sprint P5 — route by OcrPageTag so concurrent fallback pages attribute correctly.
+            kotlin.coroutines.coroutineContext[DocProfileRecorder]?.ocrTierOutcome(
+                accepted = true, pageNum = kotlin.coroutines.coroutineContext[OcrPageTag]?.page,
+            )
             recorder?.let {
                 it.setTotalMs((System.currentTimeMillis() - tLadder).toDouble())
                 OcrInstrumentation.publish(
@@ -231,7 +247,10 @@ class ImageContentExtractor(private val context: Context) {
         }
         IndexMetrics.increment(IndexMetrics.Event.PDF_OCR_ESCALATED)
         // Sprint E3 — observation only: attribute the ladder outcome to the current page.
-        kotlin.coroutines.coroutineContext[DocProfileRecorder]?.ocrTierOutcome(accepted = false)
+        // Sprint P5 — route by OcrPageTag so concurrent fallback pages attribute correctly.
+        kotlin.coroutines.coroutineContext[DocProfileRecorder]?.ocrTierOutcome(
+            accepted = false, pageNum = kotlin.coroutines.coroutineContext[OcrPageTag]?.page,
+        )
         val merged = runEnsemble(bitmap, precomputedRaw = tier1, renderHiRes = renderHiRes, recorder = recorder)
         recorder?.let {
             it.setTotalMs((System.currentTimeMillis() - tLadder).toDouble())
@@ -576,7 +595,7 @@ class ImageContentExtractor(private val context: Context) {
         // so mutex convoying (one slow page stalling every other document's strategy 5) was
         // previously invisible. This makes the serialization amplification measurable.
         val tQueue = System.currentTimeMillis()
-        return tessMutex.withLock {
+        return TesseractRuntime.withApi(context) { tessApi ->
             IndexMetrics.recordDuration(
                 IndexMetrics.Timing.OCR_TESSERACT_QUEUE, System.currentTimeMillis() - tQueue
             )
@@ -630,22 +649,4 @@ class ImageContentExtractor(private val context: Context) {
         }
     }
 
-    private fun initTesseract(): TessBaseAPI {
-        val tessDir = File(context.filesDir, TESS_DATA_DIR)
-        tessDir.mkdirs()
-        listOf("eng.traineddata", "hin.traineddata").forEach { filename ->
-            val destFile = File(tessDir, filename)
-            if (!destFile.exists()) {
-                try {
-                    context.assets.open("$TESS_DATA_DIR/$filename").use { input ->
-                        FileOutputStream(destFile).use { output -> input.copyTo(output) }
-                    }
-                } catch (e: Exception) { e.printStackTrace() }
-            }
-        }
-        val api = TessBaseAPI()
-        val success = api.init(context.filesDir.absolutePath, "eng+hin")
-        if (!success) android.util.Log.e("Tesseract", "Init failed")
-        return api
-    }
 }

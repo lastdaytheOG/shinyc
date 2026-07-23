@@ -37,6 +37,12 @@ object IndexMetrics {
         // Sprint 4A — PDF text-trust gate outcomes (per page).
         const val PDF_PAGE_TRUSTED = "pdf.page_trusted"
         const val PDF_PAGE_OCR_FALLBACK = "pdf.page_ocr_fallback"
+        /** Rendered fallback page contained no non-white pixel, so OCR was provably unnecessary. */
+        const val PDF_PAGE_BLANK_SKIPPED = "pdf.page_blank_skipped"
+        /** Exact source bytes matched a complete prior PDF index; PDFBox/OCR/chunking were skipped. */
+        const val PDF_SOURCE_REUSE_HIT = "pdf.source_reuse_hit"
+        /** Three-page scan probe selected OCR-only extraction and skipped full text stripping. */
+        const val PDF_SCAN_DOMINANT_PLAN = "pdf.scan_dominant_plan"
         // Sprint P4 — OCR escalation ladder outcomes (per fallback page). The
         // acceptance rate is THE validation signal for the ladder: accepted pages
         // ran 2 inference passes instead of the full ensemble's 7.
@@ -58,6 +64,7 @@ object IndexMetrics {
         // score recorded as milli-units (score × 1000) so the timer's avg is usable.
         const val PDF_OCR_FALLBACK = "pdf.ocr_fallback_ms"
         const val PDF_TRUST_SCORE_MILLI = "pdf.trust_score_milli"
+        const val PDF_SOURCE_FINGERPRINT = "pdf.source_fingerprint_ms"
         // Sprint P1 — document-path stage timings (PDF/Word/Excel/EPUB), recorded by
         // DocumentIndexer.doIndex and surfaced by the Sprint 3C IndexingBenchmark.
         const val DOC_EXTRACT = "doc.extract_ms"

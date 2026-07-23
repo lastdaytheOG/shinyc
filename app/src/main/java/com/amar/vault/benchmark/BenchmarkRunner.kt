@@ -5,6 +5,7 @@ import android.os.Build
 import com.amar.vault.VaultDatabase
 import com.amar.vault.VaultLog
 import com.amar.vault.VectorSearchManager
+import com.amar.vault.planning.PlannerShadowRegistry
 import com.amar.vault.retrieval.Bm25Index
 import com.amar.vault.retrieval.LexicalRetriever
 import com.amar.vault.retrieval.RetrievalService
@@ -88,6 +89,8 @@ class BenchmarkRunner private constructor(
     ): BenchmarkRunReport = withContext(Dispatchers.IO) {
         val runId = reportStore.newRunId(suite)
         val startedAt = System.currentTimeMillis()
+        // A baseline pinned after this point cannot be a valid "before" snapshot for this run.
+        val baselineAtRunStart = reportStore.readBaseline()
         val cases = datasetStore.allCases()
         val notes = mutableListOf<String>()
         if (cases.isEmpty()) notes.add("golden dataset is empty — add cases (see docs/BENCHMARKS.md)")
@@ -151,6 +154,20 @@ class BenchmarkRunner private constructor(
         runModule("Indexing profiler", full || perf) {
             IndexingProfilerBenchmark(context).run()
         }
+        runModule("Planner shadow", full || perf) {
+            PlannerShadowBenchmark.section(PlannerShadowRegistry.snapshot())
+        }
+        var datasetAudit: GoldenDatasetAudit.Result? = null
+        runModule("Golden dataset validity", full || perf) {
+            GoldenDatasetAudit(datasetStore, repository).inspect(cases).also { datasetAudit = it }.toSection()
+        }
+        runModule("Planner readiness", full || perf) {
+            PlannerReadinessAudit.section(
+                dataset = requireNotNull(datasetAudit) { "golden dataset validity audit did not run" },
+                shadowRecords = PlannerShadowRegistry.snapshot(),
+                baselineRunId = baselineAtRunStart?.runId,
+            )
+        }
         runModule("Storage", full || perf) {
             StorageBenchmark(context, db).run()
         }
@@ -161,7 +178,7 @@ class BenchmarkRunner private constructor(
         sections.add(battery.toSection(batterySessions))
 
         // Regression vs pinned baseline (Module 11).
-        val baseline = reportStore.readBaseline()
+        val baseline = baselineAtRunStart
         val corpusCount = runCatching {
             db.openHelper.readableDatabase.query("SELECT COUNT(*) FROM vault_items").use { c ->
                 if (c.moveToFirst()) c.getLong(0) else 0L

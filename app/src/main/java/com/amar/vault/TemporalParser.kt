@@ -37,6 +37,13 @@ object TemporalParser {
         var limit: Int? = null
         var timeRange: TimeRange? = null
         var confidence = 0.0f
+
+        // \b treats many Indic vowel marks as non-word characters, which can place a false
+        // boundary inside a Devanagari word (for example the final matra in "पिछले").
+        // Define a term boundary explicitly over letters, marks, numbers and underscore instead.
+        fun termRegex(term: String): Regex = Regex(
+            "(?<![\\p{L}\\p{M}\\p{N}_])${Regex.escape(term)}(?![\\p{L}\\p{M}\\p{N}_])"
+        )
         
         fun getDayBounds(cal: Calendar): TimeRange {
             val start = cal.clone() as Calendar
@@ -94,7 +101,7 @@ object TemporalParser {
 
         // 1. Evaluate relative expressions (multi-word and single-word date-ranges) first
         for (word in LAST_MONTH) {
-            val regex = Regex("\\b$word\\b")
+            val regex = termRegex(word)
             if (regex.containsMatchIn(cleanedQuery)) {
                 val cal = now.clone() as Calendar
                 cal.add(Calendar.MONTH, -1)
@@ -105,7 +112,7 @@ object TemporalParser {
         }
         
         for (word in THIS_MONTH) {
-            val regex = Regex("\\b$word\\b")
+            val regex = termRegex(word)
             if (regex.containsMatchIn(cleanedQuery)) {
                 val cal = now.clone() as Calendar
                 timeRange = getMonthBounds(cal)
@@ -115,7 +122,7 @@ object TemporalParser {
         }
 
         for (word in LAST_WEEK) {
-            val regex = Regex("\\b$word\\b")
+            val regex = termRegex(word)
             if (regex.containsMatchIn(cleanedQuery)) {
                 val cal = now.clone() as Calendar
                 cal.add(Calendar.WEEK_OF_YEAR, -1)
@@ -126,7 +133,7 @@ object TemporalParser {
         }
 
         for (word in THIS_WEEK) {
-            val regex = Regex("\\b$word\\b")
+            val regex = termRegex(word)
             if (regex.containsMatchIn(cleanedQuery)) {
                 val cal = now.clone() as Calendar
                 timeRange = getWeekBounds(cal)
@@ -136,7 +143,7 @@ object TemporalParser {
         }
         
         for (word in YESTERDAY) {
-            val regex = Regex("\\b$word\\b")
+            val regex = termRegex(word)
             if (regex.containsMatchIn(cleanedQuery)) {
                 val cal = now.clone() as Calendar
                 cal.add(Calendar.DAY_OF_YEAR, -1)
@@ -147,7 +154,7 @@ object TemporalParser {
         }
         
         for (word in TODAY) {
-            val regex = Regex("\\b$word\\b")
+            val regex = termRegex(word)
             if (regex.containsMatchIn(cleanedQuery)) {
                 val cal = now.clone() as Calendar
                 timeRange = getDayBounds(cal)
@@ -157,7 +164,7 @@ object TemporalParser {
         }
 
         for (word in DAY_BEFORE_YESTERDAY) {
-            val regex = Regex("\\b$word\\b")
+            val regex = termRegex(word)
             if (regex.containsMatchIn(cleanedQuery)) {
                 val cal = now.clone() as Calendar
                 cal.add(Calendar.DAY_OF_YEAR, -2)
@@ -179,7 +186,7 @@ object TemporalParser {
         
         var parsedMonth: Int? = null
         for ((word, calendarMonth) in MONTHS) {
-            val regex = Regex("\\b$word\\b")
+            val regex = termRegex(word)
             if (regex.containsMatchIn(cleanedQuery)) {
                 parsedMonth = calendarMonth
                 cleanedQuery = cleanedQuery.replace(regex, "").trim()
@@ -222,7 +229,7 @@ object TemporalParser {
         
         // 3. Evaluate ordering (latest / oldest) limits after relative date parsing
         for (word in LATEST_WORDS) {
-            val regex = Regex("\\b$word\\b")
+            val regex = termRegex(word)
             if (regex.containsMatchIn(cleanedQuery)) {
                 sort = SortOrder.DESC
                 if (word == "latest" || word == "नवीनतम" || word == "newest" || word == "last" || word == "current") {
@@ -245,7 +252,10 @@ object TemporalParser {
             }
         }
         
-        cleanedQuery = cleanedQuery.replace(Regex("\\s+"), " ").trim()
+        cleanedQuery = cleanedQuery
+            .replace(Regex("\\s+"), " ")
+            .replace(Regex("\\s+([?.!,;:])"), "$1")
+            .trim()
         
         val intent = if (sort != null || timeRange != null) {
             TemporalIntent(timeRange = timeRange, sort = sort, limit = limit)

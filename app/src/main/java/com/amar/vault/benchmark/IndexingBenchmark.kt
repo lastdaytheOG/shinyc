@@ -90,10 +90,32 @@ class IndexingBenchmark(
         // ── Sprint 4A: PDF text-trust gate (observed, this process) ──────────
         val pagesTrusted = snap[IndexMetrics.Event.PDF_PAGE_TRUSTED] ?: 0
         val pagesOcr = snap[IndexMetrics.Event.PDF_PAGE_OCR_FALLBACK] ?: 0
+        val pagesBlankSkipped = snap[IndexMetrics.Event.PDF_PAGE_BLANK_SKIPPED] ?: 0
+        val scanDominantPlans = snap[IndexMetrics.Event.PDF_SCAN_DOMINANT_PLAN] ?: 0
         val pagesTotal = pagesTrusted + pagesOcr
         val noPdfNote = if (pagesTotal == 0L) "no PDF pages extracted this process yet" else ""
         metrics.add(MetricValue("observed.pdf.pagesTrusted", pagesTrusted.toDouble(), "count", true, noPdfNote))
         metrics.add(MetricValue("observed.pdf.pagesOcrFallback", pagesOcr.toDouble(), "count", false, noPdfNote))
+        metrics.add(MetricValue(
+            "observed.pdf.pagesBlankSkipped", pagesBlankSkipped.toDouble(), "count", true,
+            if (pagesOcr > 0) "fallback pages rendered as exactly opaque white; OCR eliminated without heuristic" else noPdfNote,
+        ))
+        metrics.add(MetricValue(
+            "observed.pdf.scanDominantPlans", scanDominantPlans.toDouble(), "count", true,
+            if (scanDominantPlans > 0) "three-page probe skipped all-pages PDF text stripping" else noPdfNote,
+        ))
+        val sourceReuseHits = snap[IndexMetrics.Event.PDF_SOURCE_REUSE_HIT] ?: 0
+        val fingerprintCount = snap["${IndexMetrics.Timing.PDF_SOURCE_FINGERPRINT}.count"] ?: 0
+        metrics.add(MetricValue(
+            "observed.pdf.sourceReuseHits", sourceReuseHits.toDouble(), "count", true,
+            if (fingerprintCount > 0) "exact source-byte cache hit; complete prior PDF index reused" else noPdfNote,
+        ))
+        metrics.add(MetricValue(
+            "observed.pdf.sourceFingerprint.avg",
+            if (fingerprintCount > 0) snap["${IndexMetrics.Timing.PDF_SOURCE_FINGERPRINT}.avg"]?.toDouble() else null,
+            "ms", false,
+            if (fingerprintCount > 0) "SHA-256 read performed before PDF parsing to enable exact reuse" else noPdfNote,
+        ))
         metrics.add(MetricValue(
             "observed.pdf.ocrFallbackPercent",
             if (pagesTotal > 0) pagesOcr * 100.0 / pagesTotal else null,

@@ -39,7 +39,14 @@ interface Bm25Index {
  */
 class NativeBm25Index : Bm25Index {
 
-    private val engine = NativeSearchEngine().also { it.initEngine() }
+    // Lazy so merely constructing/injecting this boundary does NOT link the native library
+    // (System.loadLibrary runs in NativeSearchEngine's companion init). This upholds the
+    // interface's stated rule — the write path and the JVM test tier must not transitively
+    // load the .so — so a Robolectric/JVM test can build the object graph without an
+    // UnsatisfiedLinkError; native loads only when a BM25 operation is actually invoked.
+    // Production is unchanged: the first addDocument/search/clear at startup initializes it
+    // (thread-safe via lazy), a few ms later than eager construction.
+    private val engine by lazy { NativeSearchEngine().also { it.initEngine() } }
 
     @Synchronized
     override fun addDocument(docId: String, text: String) = engine.addDocument(docId, text)

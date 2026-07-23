@@ -6,6 +6,7 @@ import android.net.Uri
 import com.amar.vault.indexing.IndexingProfiler
 import com.amar.vault.indexing.ProfilerStage
 import com.amar.vault.indexing.timedStage
+import com.amar.vault.planning.PlannerShadowRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -53,6 +54,10 @@ class IndexingPipeline private constructor(private val context: Context) {
     ) = withContext(Dispatchers.Default) {
 
         val t0 = System.currentTimeMillis()
+
+        // Shadow-only planner observation. Disabled by default and intentionally before no
+        // existing decision; it cannot alter dedup, OCR, persistence, or vector behaviour.
+        PlannerShadowRegistry.observeImage(uri, itemType, bitmap.width, bitmap.height)
 
         val duplicateTarget = baseId?.let { dao.getByIds(listOf(it)).firstOrNull() }
 

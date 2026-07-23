@@ -53,4 +53,26 @@ class DocumentContentExtractor(
             itemType = extractor.itemType,
         )
     }
+
+    /** The format's tag/itemType descriptors — known before extraction (static per format). */
+    data class Descriptor(val tag: String, val itemType: String)
+
+    fun descriptorFor(mimeType: String): Descriptor? =
+        registry.extractorFor(mimeType)?.let { Descriptor(it.tag, it.itemType) }
+
+    /**
+     * Sprint P6 — progressive extraction. Streams chunk batches (per page for PDFs) to [onBatch]
+     * so the caller commits them to the index incrementally. Metadata (tag/itemType) is available
+     * up front via [descriptorFor]; this call only drives the batch emission.
+     */
+    suspend fun extractStreaming(
+        context: Context,
+        uri: Uri,
+        mimeType: String,
+        onBatch: suspend (List<PagedChunk>) -> Unit,
+    ) {
+        val extractor = registry.extractorFor(mimeType)
+            ?: error("Unsupported mime type '$mimeType' — call isSupported() before extractStreaming()")
+        extractor.extractStreaming(context, uri, chunker, onBatch)
+    }
 }

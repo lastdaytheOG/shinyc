@@ -1,5 +1,6 @@
 package com.amar.vault.indexing
 
+import com.amar.vault.planning.PlannerShadowRegistry
 import com.amar.vault.VaultLog
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
@@ -241,6 +242,12 @@ object OcrInstrumentation {
     /** Production Evaluation Mode toggle. When true, real indexing publishes reports to [snapshot]. */
     @Volatile
     var enabled: Boolean = false
+        set(value) {
+            field = value
+            // One developer capture session must observe OCR, document profiling, and the
+            // planner together. Planner shadow is observation-only; no worker reads a plan.
+            PlannerShadowRegistry.setDefaultCaptureEnabled(value)
+        }
 
     private const val MAX_REPORTS = 500
     private val reports = Collections.synchronizedList(ArrayList<OcrImageReport>())
@@ -260,6 +267,7 @@ object OcrInstrumentation {
 
     fun clear() {
         synchronized(reports) { reports.clear() }
+        PlannerShadowRegistry.clear()
     }
 
     /** Human-readable per-image flow: timings → contribution → merge (developer log). */

@@ -42,7 +42,13 @@ class OcrBenchmark(
             val bitmap = datasetStore.loadMediaBitmap(case)
             if (bitmap == null) {
                 skipped++
-                rows.add(mapOf("caseId" to case.id, "status" to "SKIPPED", "reason" to "media file missing/undecodable: ${case.mediaFile}"))
+                val media = datasetStore.checkMedia(case)
+                rows.add(mapOf(
+                    "caseId" to case.id,
+                    "status" to "SKIPPED",
+                    "code" to media.code,
+                    "reason" to media.detail,
+                ))
                 continue
             }
             val t0 = System.currentTimeMillis()
