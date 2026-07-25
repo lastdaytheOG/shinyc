@@ -392,12 +392,23 @@ class PdfFormatExtractor : FormatExtractor {
      * this strips ONE page at a time and emits that page's chunks immediately — so a caller that
      * commits per batch makes page 1 searchable in ~ms and each later page the moment it finishes.
      *
-     * Deliberately simple and strictly serial: it trades the batch path's scan-dominant strip-skip
-     * and concurrent-OCR pool for incrementality and low risk. Those optimizations can be ported
-     * here once this path is proven on device. Per-page strip is O(1) work per page (PDFBox parses
-     * only the requested page), so total strip cost is the same as the batch single-pass — it is
-     * just no longer a blocking prefix. [extract] is untouched and is the rollback path
-     * ([AdaptivePdfOcrControl.progressivePdfIndexing] = false).
+     * Sprint P6.2 (Tier 1) — the strip/OCR overlap + concurrent-OCR pool + scan-dominant strip-skip
+     * from [extract] are now ported here (device-measured: OCR was ~44% of pipeline time, the single
+     * largest stage). Structure mirrors [extract]: a single producer owns the [PDDocument] (PDFBox is
+     * not thread-safe per document) and strips/scores/renders page by page under [docMutex]; rendered
+     * fallback pages are handed to a bounded pool of OCR consumers so the render/strip of later pages
+     * overlaps the OCR of earlier ones. Concurrency = [AdaptivePdfOcrControl.pdfOcrConcurrency]
+     * (1 = the exact pre-P6.2 strictly-serial path), clamped to [MAX_OCR_CONCURRENCY]; memory is
+     * bounded by [OCR_FALLBACK_PERMIT] and Tesseract stays serialized by its own runtime mutex.
+     *
+     * Progressive-emission invariant preserved: pages are emitted in STRICT page order via
+     * [emitReadyPages] (an ordered gate under [emitMutex]) — page 1 emits the instant it is final,
+     * chunkIdx numbering matches the serial/batch path exactly, and a later page that finishes OCR
+     * first is buffered until earlier pages emit (its searchability is not delayed — only its emit
+     * ORDER is normalized). [onBatch] therefore stays sequential, honoring the interface contract.
+     * [extract] is untouched and is the instant rollback path
+     * ([AdaptivePdfOcrControl.progressivePdfIndexing] = false; or pdfOcrConcurrency = 1 to keep
+     * streaming but force strictly-serial OCR).
      */
     override suspend fun extractStreaming(
         context: Context,
@@ -405,57 +416,227 @@ class PdfFormatExtractor : FormatExtractor {
         chunker: Chunker,
         onBatch: suspend (List<PagedChunk>) -> Unit,
     ) {
+        // Sprint P6.1 — observation-only instrumentation, mirroring [extract]. Before this, the
+        // streaming path recorded NONE of the IndexMetrics sub-stage timers and wired in no
+        // profiler, so the whole per-import extraction cost landed in the benchmark's
+        // "unattributed" bucket. Every `prof?.…` / recordDuration below feeds an already-measured
+        // elapsed value; nothing is re-timed and NO control flow depends on it. The profiler is
+        // found via the coroutine context (null unless the capture toggle is on).
+        val prof = kotlin.coroutines.coroutineContext[DocProfileRecorder]
+
+        // Per-document sub-stage accumulators (nanos). stripNs/nfcNs/trustNs are mutated only by the
+        // single producer; chunkNs only inside [emitReadyPages] under [emitMutex]. All are read in
+        // the finally AFTER coroutineScope joins (the happens-before edge). Flushed there so a
+        // mid-loop failure still reports partial time — matches [extract]'s partial-on-failure.
+        var stripNs = 0L
+        var nfcNs = 0L
+        var trustNs = 0L
+        var chunkNs = 0L
         var chunkIdx = 0
+
+        val tOpen = System.nanoTime()
         val stream = openDocStream(context, uri)
+        val openNs = System.nanoTime() - tOpen
+        IndexMetrics.recordDuration(IndexMetrics.Timing.PDF_OPEN, nsToMs(openNs))
+        prof?.stageNs(ProfilerStage.PDF_OPEN, openNs)
         stream.use {
+            val tLoad = System.nanoTime()
             val doc = PDDocument.load(stream)
+            val loadNs = System.nanoTime() - tLoad
+            IndexMetrics.recordDuration(IndexMetrics.Timing.PDF_LOAD, nsToMs(loadNs))
+            prof?.stageNs(ProfilerStage.PDF_LOAD, loadNs)
             doc.use {
+                try {
                 val pageCount = doc.numberOfPages
-                val stripper = PDFTextStripper()
-                var renderer: PDFRenderer? = null // built once, only if some page needs OCR
-                for (page in 1..pageCount) {
-                    // Strip THIS page only — no all-pages prefix, so a text page 1 is ready in ms.
-                    stripper.startPage = page
-                    stripper.endPage = page
-                    val stripped = UnicodeText.nfc(stripper.getText(doc).trim())
-                    val trust = TextTrustScorer.score(stripped)
-                    val pageText: String = if (trust.trusted) {
-                        IndexMetrics.increment(IndexMetrics.Event.PDF_PAGE_TRUSTED)
-                        stripped
-                    } else {
-                        IndexMetrics.increment(IndexMetrics.Event.PDF_PAGE_OCR_FALLBACK)
-                        try {
-                            val r = renderer ?: PDFRenderer(doc).also { renderer = it }
-                            val bitmap = r.renderImageWithDPI(page - 1, OCR_RENDER_DPI, ImageType.RGB)
-                            if (RenderedPdfPageInspector.isExactlyBlank(bitmap)) {
-                                IndexMetrics.increment(IndexMetrics.Event.PDF_PAGE_BLANK_SKIPPED)
-                                bitmap.recycle()
-                                ""
-                            } else {
-                                val renderHiRes: suspend () -> Bitmap? = {
-                                    runCatching {
-                                        r.renderImageWithDPI(page - 1, ESCALATION_RENDER_DPI, ImageType.RGB)
-                                    }.getOrNull()
-                                }
-                                try {
-                                    OCR_FALLBACK_PERMIT.withPermit {
-                                        ocrEngine(context).extractPdfPageText(bitmap, renderHiRes)
-                                    }
-                                } finally {
-                                    bitmap.recycle()
-                                }
+                prof?.pageCount = pageCount
+
+                // Final per-page text, 1-indexed. null = not yet ready. Written by the producer
+                // (trusted / blank / render-fail pages) and by OCR consumers (fallback pages) at
+                // DISJOINT indices; read only inside [emitReadyPages] under [emitMutex].
+                val pageTexts = arrayOfNulls<String>(pageCount + 1)
+
+                coroutineScope {
+                    // Serializes ALL PDDocument access (PDFBox is not thread-safe per document): the
+                    // producer's per-page strip/render and a consumer's escalation-only re-render.
+                    val docMutex = Mutex()
+                    // Serializes chunking + onBatch + chunkIdx so the streaming contract still holds
+                    // (onBatch invoked sequentially, in page order) while OCR runs in parallel.
+                    val emitMutex = Mutex()
+                    val ocrConcurrency = AdaptivePdfOcrControl.pdfOcrConcurrency
+                        .coerceIn(1, MAX_OCR_CONCURRENCY)
+                    val jobs = Channel<OcrJob>(
+                        capacity = ocrConcurrency,
+                        onUndeliveredElement = { it.bitmap.recycle() },
+                    )
+
+                    // Ordered incremental emission: under [emitMutex], flush every contiguous ready
+                    // page starting at the frontier. Called after each page's text is finalized (by
+                    // producer and consumers); each call drains as far as the ready prefix allows.
+                    // Because every write to pageTexts[p] is followed by an emitReadyPages() call,
+                    // the globally-last such call (last mutex acquisition) sees all pages ready and
+                    // drains to pageCount+1 — so no trailing emit is needed after the scope joins.
+                    var nextToEmit = 1
+                    suspend fun emitReadyPages() = emitMutex.withLock {
+                        while (nextToEmit <= pageCount) {
+                            val text = pageTexts[nextToEmit] ?: break
+                            if (text.isNotBlank()) {
+                                val tChunk = System.nanoTime()
+                                val batch = chunker.chunk(text).map { PagedChunk(it, nextToEmit, chunkIdx++) }
+                                chunkNs += System.nanoTime() - tChunk
+                                if (batch.isNotEmpty()) onBatch(batch)
                             }
-                        } catch (ce: CancellationException) {
-                            throw ce
-                        } catch (e: Exception) {
-                            VaultLog.w(TAG, "Page $page OCR fallback failed: ${e.message} — keeping stripper text")
-                            stripped
+                            nextToEmit++
                         }
                     }
-                    if (pageText.isNotBlank()) {
-                        val batch = chunker.chunk(pageText).map { PagedChunk(it, page, chunkIdx++) }
-                        if (batch.isNotEmpty()) onBatch(batch)
+
+                    // OCR consumer pool — the unchanged ensemble (via extractPdfPageText); the permit
+                    // + Tesseract's own mutex bound memory/native concurrency (mirrors [extract]).
+                    repeat(ocrConcurrency) {
+                        launch {
+                            for (job in jobs) {
+                                val t0 = System.currentTimeMillis()
+                                prof?.beginPageOcr(job.page)
+                                val text = try {
+                                    // OcrPageTag carries this page number into the page-agnostic ladder
+                                    // so its tier outcome attributes to the right page under concurrency.
+                                    OCR_FALLBACK_PERMIT.withPermit {
+                                        withContext(OcrPageTag(job.page)) {
+                                            ocrEngine(context).extractPdfPageText(job.bitmap, job.renderHiRes)
+                                        }
+                                    }
+                                } catch (ce: CancellationException) {
+                                    throw ce
+                                } catch (e: Exception) {
+                                    VaultLog.w(TAG, "Page ${job.page} OCR fallback failed: ${e.message} — keeping stripper text")
+                                    job.strippedFallback
+                                } finally {
+                                    job.bitmap.recycle()
+                                    val ocrMs = System.currentTimeMillis() - t0
+                                    IndexMetrics.recordDuration(IndexMetrics.Timing.PDF_OCR_FALLBACK, ocrMs)
+                                    prof?.pageOcrDone(job.page, ocrMs)
+                                }
+                                pageTexts[job.page] = text
+                                emitReadyPages()
+                            }
+                        }
                     }
+
+                    try {
+                        // A scanned PDF has no usable text layer, so per-page stripping is a wasted
+                        // traversal that only yields blanks. Probe first/middle/last with the trust
+                        // gate; if none is trusted, skip stripping and send every page straight to
+                        // render+OCR. Any trusted probe fails closed to normal per-page stripping,
+                        // preserving mixed/text PDFs (a faithful port of [extract]'s scan-dominant plan).
+                        val scanDominant = if (AdaptivePdfOcrControl.mode == AdaptivePdfOcrControl.Mode.SCAN_OPTIMIZED) {
+                            val probeStripper = PDFTextStripper()
+                            val probeStartedAt = System.nanoTime()
+                            val probes = PdfExecutionPlanner.probePages(pageCount).map { probePage ->
+                                probeStripper.startPage = probePage
+                                probeStripper.endPage = probePage
+                                val sampled = docMutex.withLock { probeStripper.getText(doc) }
+                                TextTrustScorer.score(UnicodeText.nfc(sampled.trim()))
+                            }
+                            stripNs += System.nanoTime() - probeStartedAt
+                            PdfExecutionPlanner.useOcrOnly(probes)
+                        } else false
+                        if (scanDominant) IndexMetrics.increment(IndexMetrics.Event.PDF_SCAN_DOMINANT_PLAN)
+
+                        val stripper = PDFTextStripper()
+                        var renderer: PDFRenderer? = null // built once, only if some page needs OCR
+                        for (page in 1..pageCount) {
+                            // Strip THIS page only (scan-dominant skips stripping) so a text page 1 is
+                            // ready in ms while later pages' strip/render overlaps earlier pages' OCR.
+                            val raw = if (scanDominant) "" else {
+                                stripper.startPage = page
+                                stripper.endPage = page
+                                val tStrip = System.nanoTime()
+                                val text = docMutex.withLock { stripper.getText(doc) }
+                                stripNs += System.nanoTime() - tStrip
+                                text
+                            }
+                            val tNfc = System.nanoTime()
+                            val stripped = UnicodeText.nfc(raw.trim())
+                            val pageNfcNs = System.nanoTime() - tNfc
+                            nfcNs += pageNfcNs
+                            val tTrust = System.nanoTime()
+                            val trust = TextTrustScorer.score(stripped)
+                            val pageTrustNs = System.nanoTime() - tTrust
+                            trustNs += pageTrustNs
+                            IndexMetrics.recordDuration(
+                                IndexMetrics.Timing.PDF_TRUST_SCORE_MILLI, (trust.score * 1000).toLong()
+                            )
+                            prof?.pageScored(page, pageNfcNs, pageTrustNs, trust.score.toDouble(), trust.trusted)
+
+                            if (trust.trusted) {
+                                IndexMetrics.increment(IndexMetrics.Event.PDF_PAGE_TRUSTED)
+                                pageTexts[page] = stripped
+                                emitReadyPages()
+                            } else {
+                                IndexMetrics.increment(IndexMetrics.Event.PDF_PAGE_OCR_FALLBACK)
+                                try {
+                                    val r = renderer ?: PDFRenderer(doc).also { renderer = it }
+                                    val tRender = System.currentTimeMillis()
+                                    val bitmap = docMutex.withLock {
+                                        r.renderImageWithDPI(page - 1, OCR_RENDER_DPI, ImageType.RGB)
+                                    }
+                                    val renderMs = System.currentTimeMillis() - tRender
+                                    IndexMetrics.recordDuration(IndexMetrics.Timing.OCR_RENDER, renderMs)
+                                    prof?.pageRendered(page, renderMs, bitmap.width, bitmap.height, bitmap.byteCount.toLong())
+                                    if (RenderedPdfPageInspector.isExactlyBlank(bitmap)) {
+                                        IndexMetrics.increment(IndexMetrics.Event.PDF_PAGE_BLANK_SKIPPED)
+                                        bitmap.recycle()
+                                        pageTexts[page] = ""
+                                        emitReadyPages()
+                                    } else {
+                                        // Escalation-only 300dpi re-render for ensemble strategy 4;
+                                        // runs on the consumer, so it takes docMutex. Failure → null →
+                                        // the ensemble falls back to its legacy 2× upscale.
+                                        val renderHiRes: suspend () -> Bitmap? = {
+                                            docMutex.withLock {
+                                                val tHi = System.currentTimeMillis()
+                                                try {
+                                                    runCatching {
+                                                        r.renderImageWithDPI(page - 1, ESCALATION_RENDER_DPI, ImageType.RGB)
+                                                            .also { hi ->
+                                                                prof?.pageHiResRendered(page, hi.width, hi.height, hi.byteCount.toLong())
+                                                            }
+                                                    }.getOrNull()
+                                                } finally {
+                                                    val hiMs = System.currentTimeMillis() - tHi
+                                                    IndexMetrics.recordDuration(IndexMetrics.Timing.OCR_RENDER_HIRES, hiMs)
+                                                    prof?.pageHiResMs(page, hiMs)
+                                                }
+                                            }
+                                        }
+                                        // Hand off to the pool; the consumer sets pageTexts[page] and
+                                        // emits. Producer proceeds to strip/render the next page.
+                                        jobs.send(OcrJob(page, bitmap, stripped, renderHiRes))
+                                    }
+                                } catch (ce: CancellationException) {
+                                    throw ce
+                                } catch (e: Exception) {
+                                    // Render failed → keep stripper text (unchanged semantics).
+                                    VaultLog.w(TAG, "Page $page OCR fallback failed: ${e.message} — keeping stripper text")
+                                    pageTexts[page] = stripped
+                                    emitReadyPages()
+                                }
+                            }
+                        }
+                    } finally {
+                        jobs.close() // consumers drain what was sent, then complete
+                    }
+                }
+                // coroutineScope joined: every page's text is final and every ready page has been
+                // emitted in strict order (nextToEmit reached pageCount+1) — see emitReadyPages.
+                } finally {
+                    IndexMetrics.recordDuration(IndexMetrics.Timing.PDF_STRIP, nsToMs(stripNs))
+                    IndexMetrics.recordDuration(IndexMetrics.Timing.PDF_NFC, nsToMs(nfcNs))
+                    IndexMetrics.recordDuration(IndexMetrics.Timing.PDF_TRUST, nsToMs(trustNs))
+                    IndexMetrics.recordDuration(IndexMetrics.Timing.PDF_CHUNK, nsToMs(chunkNs))
+                    prof?.stageNs(ProfilerStage.PDF_STRIP, stripNs)
+                    prof?.stageNs(ProfilerStage.PDF_NFC, nfcNs)
+                    prof?.stageNs(ProfilerStage.PDF_TRUST, trustNs)
+                    prof?.stageNs(ProfilerStage.PDF_CHUNK, chunkNs)
                 }
             }
         }

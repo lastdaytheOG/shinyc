@@ -4,7 +4,9 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
+import com.amar.vault.indexing.DocProfileRecorder
 import com.amar.vault.indexing.IndexingProfiler
+import com.amar.vault.indexing.PagedChunk
 import com.amar.vault.indexing.ProfilerStage
 import com.amar.vault.indexing.timedStage
 import com.amar.vault.planning.PlannerShadowRegistry
@@ -170,7 +172,7 @@ class DocumentIndexer private constructor(private val context: Context) {
                 com.amar.vault.indexing.AdaptivePdfOcrControl.progressivePdfIndexing
             ) {
                 return doIndexStreaming(
-                    uri, mimeType, fileName, uriKey, sourceFingerprint, baseId, progress, startMs,
+                    uri, mimeType, fileName, uriKey, sourceFingerprint, baseId, progress, startMs, prof,
                 )
             }
 
@@ -328,19 +330,25 @@ class DocumentIndexer private constructor(private val context: Context) {
         baseId: String?,
         progress: MutableSharedFlow<IndexProgress>?,
         startMs: Long,
+        prof: DocProfileRecorder?,
     ): IndexResult {
         val descriptor = contentExtractor.descriptorFor(mimeType)
             ?: return IndexResult.Failure(fileName, IndexError.UnsupportedFormat(mimeType))
         val targetId = baseId ?: UUID.randomUUID().toString()
+        prof?.fileType = descriptor.itemType
 
         // Clear any prior (partial) rows for this exact source before streaming fresh.
         persister.deletePartialByContentHash(sourceFingerprint)
 
         progress?.emit(IndexProgress(fileName, IndexProgress.Phase.EXTRACTING))
         var committed = 0
+        val tExtract = System.currentTimeMillis()
         try {
+            // Observation-only: carry the Sprint E3 profiler down into extractStreaming as a
+            // coroutine-context element (exactly as the batch path does), so PdfFormatExtractor
+            // attributes its per-page/sub-stage timings to this document. Null → plain call.
             IndexMetrics.timed(IndexMetrics.Timing.DOC_EXTRACT) {
-                contentExtractor.extractStreaming(context, uri, mimeType) { pageChunks ->
+                val onBatch: suspend (List<PagedChunk>) -> Unit = { pageChunks ->
                     val rows = pageChunks.map { pc ->
                         val tags = TagEngine.generate(pc.text, descriptor.tag)
                         val tagSuffix = if (tags.isNotEmpty()) "\n[${tags.joinToString(" ")}]" else ""
@@ -375,13 +383,20 @@ class DocumentIndexer private constructor(private val context: Context) {
                     committed += rows.size
                     progress?.emit(IndexProgress(fileName, IndexProgress.Phase.STORING, committed, committed))
                 }
+                if (prof == null) contentExtractor.extractStreaming(context, uri, mimeType, onBatch)
+                else withContext(prof) { contentExtractor.extractStreaming(context, uri, mimeType, onBatch) }
             }
         } catch (ce: CancellationException) {
             throw ce
         } catch (e: Exception) {
+            prof?.let { p ->
+                p.stageMs(ProfilerStage.EXTRACT, System.currentTimeMillis() - tExtract)
+                IndexingProfiler.publish(p.build(System.currentTimeMillis() - startMs, "failed:extraction"))
+            }
             Log.e(TAG, "Progressive index failed for $fileName after $committed chunk(s)", e)
             return IndexResult.Failure(fileName, IndexError.ExtractionFailed(e))
         }
+        prof?.stageMs(ProfilerStage.EXTRACT, System.currentTimeMillis() - tExtract)
 
         if (committed == 0) return IndexResult.Failure(fileName, IndexError.EmptyContent)
 
@@ -396,6 +411,7 @@ class DocumentIndexer private constructor(private val context: Context) {
 
         val elapsed = System.currentTimeMillis() - startMs
         IndexMetrics.recordDuration(IndexMetrics.Timing.DOC_INDEX_TOTAL, elapsed)
+        prof?.let { IndexingProfiler.publish(it.build(elapsed, "success")) }
         Log.d(TAG, "Progressively indexed $fileName: $committed chunks in ${elapsed}ms (searchable page-by-page)")
         return IndexResult.Success(fileName, committed, elapsed)
     }

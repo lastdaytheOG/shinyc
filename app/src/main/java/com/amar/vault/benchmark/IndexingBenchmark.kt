@@ -207,9 +207,14 @@ class IndexingBenchmark(
             "strip" to IndexMetrics.Timing.PDF_STRIP,          // page traversal + PDFTextStripper
             "nfc" to IndexMetrics.Timing.PDF_NFC,
             "trustScore" to IndexMetrics.Timing.PDF_TRUST,
+            "render" to IndexMetrics.Timing.OCR_RENDER,        // fallback-page 150dpi raster (disjoint from OCR)
             "ocrFallback" to IndexMetrics.Timing.PDF_OCR_FALLBACK,
             "chunking" to IndexMetrics.Timing.PDF_CHUNK,
         )
+        // NOTE: OCR_RENDER_HIRES is deliberately NOT summed here — the escalation re-render runs
+        // inside extractPdfPageText, so its time is already inside PDF_OCR_FALLBACK (adding it
+        // would double-count). OCR_RENDER (the 150dpi raster) is done before the ensemble and is
+        // disjoint, so it belongs in the attributed sum.
         var attributedMs = 0L
         for ((label, key) in stageKeys) {
             val stageCount = snap["$key.count"] ?: 0
