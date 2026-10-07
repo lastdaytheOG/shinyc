@@ -132,7 +132,7 @@ class ImageContentExtractor(private val context: Context) {
         recorder?.setTotalMs((System.currentTimeMillis() - tOcr).toDouble())
         val qr = qrDeferred.await()
         // Observation only: attribute the (already-final) merged text to its source strategies.
-        val report = recorder?.buildReport(sourceId ?: "img@${System.identityHashCode(bitmap)}", mergedOcr)
+        val report = recorder?.buildReport(sourceId ?: "img@${System.identityHashCode(bitmap)}", mergedOcr, linedUp = true)
         // Sprint 4A: NFC at the OCR ingestion boundary — one site covers screenshots,
         // images AND the PDF trust-gate fallback. ML Kit output is NFC in practice, so
         // this is a no-op for existing behaviour; it guarantees canonical bytes in Room.
@@ -306,15 +306,31 @@ class ImageContentExtractor(private val context: Context) {
         image: InputImage,
         metric: String,
         recorder: OcrStrategyRecorder? = null,
+        inReadingOrder: Boolean = false,
     ): String {
         val t0 = System.currentTimeMillis()
         try {
-            return client.process(image).await().text.trim()
+            val found = client.process(image).await()
+            return (if (inReadingOrder) readingOrder(found) else found.text).trim()
         } finally {
             val elapsed = System.currentTimeMillis() - t0
             com.amar.vault.IndexMetrics.recordDuration(metric, elapsed)
             recorder?.engine("mlkit", elapsed.toDouble())
         }
+    }
+
+    /**
+     * What was found, top to bottom and left to right ([ReadingOrder]) rather than in the
+     * order the reader hands its blocks back. Without a place for every block it is left as
+     * it came.
+     */
+    private fun readingOrder(found: com.google.mlkit.vision.text.Text): String {
+        val blocks = found.textBlocks.map { block ->
+            val box = block.boundingBox ?: return found.text
+            val lineHeight = block.lines.firstOrNull()?.boundingBox?.height() ?: (box.height() / block.lines.size.coerceAtLeast(1))
+            PlacedText(block.text, box.left, box.top, lineHeight.coerceAtLeast(1))
+        }
+        return ReadingOrder.text(blocks)
     }
 
     /** Times one preprocessing bitmap conversion. */
@@ -346,7 +362,7 @@ class ImageContentExtractor(private val context: Context) {
      * We run them all and merge unique lines.
      */
     private suspend fun runAggressiveOcr(bitmap: Bitmap, recorder: OcrStrategyRecorder? = null): String =
-        runEnsemble(bitmap, precomputedRaw = null, renderHiRes = null, recorder = recorder)
+        runEnsemble(bitmap, precomputedRaw = null, renderHiRes = null, recorder = recorder, picture = true)
 
     /**
      * The classic 5-strategy ensemble. [precomputedRaw] (Sprint P4): a caller that has
@@ -363,6 +379,12 @@ class ImageContentExtractor(private val context: Context) {
         precomputedRaw: String?,
         renderHiRes: (suspend () -> Bitmap?)?,
         recorder: OcrStrategyRecorder? = null,
+        /**
+         * A photo or a screenshot, not a rendered PDF page: its readings are taken in reading
+         * order and lined up before they are put together ([ReadingMerge]). A PDF page is
+         * read as it always was until that has been measured on scanned documents too.
+         */
+        picture: Boolean = false,
     ): String {
         // Shared preprocessed input: strategies 2 (ML Kit) and 5 (Tesseract) previously each
         // rendered their own IDENTICAL high-contrast grayscale of the source bitmap. One
@@ -383,9 +405,9 @@ class ImageContentExtractor(private val context: Context) {
                     } else {
                         timedStrategy(recorder, OcrStrategy.RAW) {
                             val image = InputImage.fromBitmap(bitmap, 0)
-                            val en = recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
-                            val hi = recognize(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
-                            mergeTexts(en, hi)
+                            val en = recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, picture)
+                            val hi = recognize(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder, picture)
+                            mergeTexts(en, hi, picture)
                         }
                     }
                 }
@@ -395,9 +417,9 @@ class ImageContentExtractor(private val context: Context) {
                 val grayDeferred = async(Dispatchers.IO) {
                     timedStrategy(recorder, OcrStrategy.GRAYSCALE) {
                         val image = InputImage.fromBitmap(sharedGray, 0)
-                        val en = recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
-                        val hi = recognize(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
-                        mergeTexts(en, hi)
+                        val en = recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, picture)
+                        val hi = recognize(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder, picture)
+                        mergeTexts(en, hi, picture)
                     }
                 }
 
@@ -407,7 +429,7 @@ class ImageContentExtractor(private val context: Context) {
                         val inv = timedPre(recorder, "invert") { preprocess { invertBitmap(bitmap) } }
                         try {
                             val image = InputImage.fromBitmap(inv, 0)
-                            recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
+                            recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, picture)
                         } finally {
                             inv.recycle()
                         }
@@ -433,7 +455,7 @@ class ImageContentExtractor(private val context: Context) {
                         if (hiRes == null && OcrPerfGuards.shouldBypassUpscale(bitmap.width, bitmap.height)) {
                             IndexMetrics.increment(IndexMetrics.Event.OCR_UPSCALE_BYPASSED)
                             val image = InputImage.fromBitmap(sharedGray, 0)
-                            recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
+                            recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, picture)
                         } else {
                             val src = hiRes
                                 ?: timedPre(recorder, "upscale") {
@@ -450,7 +472,7 @@ class ImageContentExtractor(private val context: Context) {
                                 val gray = timedPre(recorder, "grayscale") { preprocess { toHighContrastGrayscale(src) } }
                                 try {
                                     val image = InputImage.fromBitmap(gray, 0)
-                                    recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
+                                    recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, picture)
                                 } finally {
                                     gray.recycle()
                                 }
@@ -477,7 +499,7 @@ class ImageContentExtractor(private val context: Context) {
                 )
 
                 val tMerge = System.nanoTime()
-                val merged = mergeAllOcrResults(results)
+                val merged = if (picture) ReadingMerge.text(results) else mergeAllOcrResults(results)
                 val mergeNs = System.nanoTime() - tMerge
                 IndexMetrics.recordDuration(IndexMetrics.Timing.OCR_MERGE, nsToMs(mergeNs))
                 recorder?.setMergeMs(mergeNs / 1e6)
@@ -516,12 +538,17 @@ class ImageContentExtractor(private val context: Context) {
         return uniqueLines.joinToString("\n")
     }
 
-    /** Merges English and Hindi OCR results, picking the longer one or combining if both substantial */
-    private fun mergeTexts(en: String, hi: String): String {
+    /**
+     * Merges English and Hindi OCR results, picking the longer one or combining if both substantial.
+     * For a picture ([lineUp]) the two are lined up: both readers read Latin text, and a line both
+     * read is one line, not two.
+     */
+    private fun mergeTexts(en: String, hi: String, lineUp: Boolean = false): String {
         if (en.isBlank()) return hi
         if (hi.isBlank()) return en
         if (en.length > hi.length * 2) return en
         if (hi.length > en.length * 2) return hi
+        if (lineUp) return ReadingMerge.text(listOf(en, hi))
         // Both substantial — combine unique lines
         val enLines = en.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
         val hiLines = hi.split("\n").map { it.trim() }.filter { it.isNotEmpty() }

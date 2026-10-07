@@ -84,9 +84,7 @@ class ContentPriorityResolver {
         if (type == "TEXT" && ShareUrlExtractor.containsUrl(attachment.originalUri)) return ItemType.LINK
 
         if (mime.contains("pdf")) return ItemType.PDF
-        if (mime.startsWith("image/")) {
-            return if (attachment.filename?.lowercase()?.contains("screenshot") == true) ItemType.SCREENSHOT else ItemType.PHOTO
-        }
+        if (mime.startsWith("image/")) return PictureKind.of(attachment.filename.orEmpty())
         if (mime.startsWith("video/")) return ItemType.VIDEO
         if (mime.startsWith("audio/")) return ItemType.AUDIO
 

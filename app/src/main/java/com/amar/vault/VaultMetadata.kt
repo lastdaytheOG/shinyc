@@ -74,6 +74,10 @@ interface VaultMetadataDao {
     @Query("DELETE FROM vault_metadata WHERE vaultItemId = :itemId")
     suspend fun deleteByItemId(itemId: String)
 
+    /** A picture's SOURCE_TYPE row repeats its type; it is kept the same when the type changes. */
+    @Query("UPDATE vault_metadata SET value = :value WHERE vaultItemId = :itemId AND type = 'SOURCE_TYPE'")
+    suspend fun setSourceType(itemId: String, value: String)
+
     @Query("SELECT vaultItemId FROM vault_metadata WHERE type = :type AND timestampValue BETWEEN :startValue AND :endValue")
     suspend fun findItemsByTypeAndTimestampRange(type: String, startValue: Long, endValue: Long): List<String>
     

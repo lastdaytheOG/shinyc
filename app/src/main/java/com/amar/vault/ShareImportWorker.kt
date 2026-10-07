@@ -58,7 +58,6 @@ class ShareImportWorker @dagger.assisted.AssistedInject constructor(
                                 indexingPipeline.indexBitmap(
                                     bitmap = bitmap,
                                     uri = uriStr,
-                                    itemType = vaultItem.itemType,
                                     baseId = vaultItem.id
                                 )
                             }

@@ -75,19 +75,22 @@ class AmarApplication : Application(), Configuration.Provider {
                 }
                 IndexMetrics.logSnapshot("AmarApp")
 
-                // 4c. Bring stored tags up to the current rules. Does something once per
-                //     version of the rules; search is already up, and the engine, which indexes
-                //     tags, is given each changed item again as it is written.
-                try {
-                    com.amar.vault.indexing.AutoTagUpkeep(database, applicationContext).retagIfRulesChanged { ids ->
-                        ids.chunked(400).forEach { some ->
-                            database.vaultDao().getByIds(some).forEach { item ->
-                                bm25Index.addDocument(item.id, com.amar.vault.retrieval.KeywordText.of(item))
-                            }
+                // 4c. Bring what is stored up to the current rules: what each picture is
+                //     (screenshot or photo), then each item's tags. Each does something once per
+                //     version of its rule; search is already up, and the engine, which indexes
+                //     an item's type and tags, is given each changed item again as it is written.
+                val reindex: suspend (List<String>) -> Unit = { ids ->
+                    ids.chunked(400).forEach { some ->
+                        database.vaultDao().getByIds(some).forEach { item ->
+                            bm25Index.addDocument(item.id, com.amar.vault.retrieval.KeywordText.of(item))
                         }
                     }
+                }
+                try {
+                    com.amar.vault.indexing.PictureTypeUpkeep(database, applicationContext).retypeIfRuleChanged(reindex)
+                    com.amar.vault.indexing.AutoTagUpkeep(database, applicationContext).retagIfRulesChanged(reindex)
                 } catch (e: Exception) {
-                    VaultLog.e("AmarApp", "Tags were not brought up to date; they stay as they were", e)
+                    VaultLog.e("AmarApp", "Stored items were not brought up to date; they stay as they were", e)
                 }
             }
 

@@ -21,22 +21,12 @@ object SearchFilter {
 
     val CHIPS = listOf(ALL, IMAGES, VIDEOS, ARTICLES, PRODUCTS, MUSIC, DOCUMENTS, FAVORITES, FOLDERS)
 
-    private val IMAGE_EXTENSIONS = listOf(".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".gif", ".bmp")
-
     /**
      * A photo or a screenshot. Its text was read off the picture; that does not make it a note.
-     * Told by its type, and for an item of another type by where it is kept: the gallery, or a
-     * picture file on the phone. A link to a picture on the web is a link.
+     * Its type says so and nothing else is consulted: what is a picture is decided when an
+     * item is stored ([PictureKind]), not guessed again each time one is listed.
      */
-    fun isImage(itemType: ItemType, mimeType: String?, uri: String): Boolean {
-        if (itemType.isImage || mimeType?.startsWith("image/", ignoreCase = true) == true) return true
-        val where = uri.trim()
-        return (where.startsWith("content://media/", ignoreCase = true) && where.contains("/images/")) ||
-            ((where.startsWith("/") || where.startsWith("file://", ignoreCase = true)) &&
-                IMAGE_EXTENSIONS.any { where.endsWith(it, ignoreCase = true) })
-    }
-
-    fun isImage(item: VaultItem): Boolean = isImage(item.itemType, item.mimeType, item.uri)
+    fun isImage(item: VaultItem): Boolean = item.itemType.isImage
 
     /** A PDF, Word, Excel or EPUB file, or a page of one. */
     fun isDocument(item: VaultItem): Boolean =

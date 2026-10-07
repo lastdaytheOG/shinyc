@@ -7,7 +7,6 @@ import com.amar.vault.DocumentIndexer
 import com.amar.vault.IndexError
 import com.amar.vault.IndexResult
 import com.amar.vault.IndexingPipeline
-import com.amar.vault.ItemType
 import com.amar.vault.ScanPreferences
 import com.amar.vault.VaultConfig
 import com.amar.vault.indexing.DiscoveryEngine
@@ -159,7 +158,7 @@ object DeveloperIndexController {
                 app.contentResolver.openInputStream(uri).use { stream ->
                     val bmp = stream?.let { BitmapFactory.decodeStream(it) }
                     if (bmp != null) {
-                        pipeline.indexBitmap(bmp, uri.toString(), ItemType.PHOTO)
+                        pipeline.indexBitmap(bmp, uri.toString())
                         bmp.recycle()
                         bump(indexed = 1)
                     } else bump(skipped = 1)
@@ -182,7 +181,7 @@ object DeveloperIndexController {
                     app.contentResolver.openInputStream(uri).use { stream ->
                         val bmp = stream?.let { BitmapFactory.decodeStream(it) }
                         if (bmp != null) {
-                            pipeline.indexBitmap(bmp, uri.toString(), ItemType.PHOTO)
+                            pipeline.indexBitmap(bmp, uri.toString())
                             bmp.recycle()
                             bump(indexed = 1)
                         } else bump(skipped = 1)

@@ -155,11 +155,31 @@ class OcrStrategyRecorder {
      * equal the production merge — asserted via [actualMerged] and surfaced as
      * [OcrImageReport.attributionConsistent].
      */
-    fun buildReport(imageId: String, actualMerged: String): OcrImageReport {
+    fun buildReport(imageId: String, actualMerged: String, linedUp: Boolean = false): OcrImageReport {
         val ws = Regex("\\s+")
         val seen = HashSet<String>()
         val mergedLines = ArrayList<String>()
         val perStrategy = LinkedHashMap<OcrStrategy, MutableContribution>()
+
+        // A picture's passes are lined up by [ReadingMerge], which says itself whose wording
+        // each stored line is: a pass's surviving lines are those stored in its wording.
+        if (linedUp) {
+            val order = OcrStrategy.MERGE_ORDER
+            val lines = ReadingMerge.lines(order.map { runs[it]?.text.orEmpty() })
+            for ((at, strategy) in order.withIndex()) {
+                val run = runs[strategy] ?: continue
+                val own = run.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+                perStrategy[strategy] = MutableContribution().apply {
+                    elapsedMs = run.elapsedMs
+                    chars = run.text.length
+                    totalLines = own.size
+                    words = own.sumOf { line -> line.split(ws).count { it.isNotEmpty() } }
+                    survivedLines = lines.count { it.from == at }
+                    duplicateLines = totalLines - survivedLines
+                }
+            }
+            mergedLines += lines.map { it.text }
+        } else
 
         for (strategy in OcrStrategy.MERGE_ORDER) {
             val run = runs[strategy] ?: continue

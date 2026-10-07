@@ -112,6 +112,16 @@ data class VaultItemFts(
     val ocrText: String
 )
 
+/** What deciding a stored item's type again reads of it ([com.amar.vault.indexing.PictureTypeUpkeep]). */
+data class StoredAddress(
+    val rowId: Long,
+    val id: String,
+    val uri: String,
+    val sourceFile: String,
+    val mimeType: String?,
+    val itemType: ItemType,
+)
+
 /** What tagging an item again reads of it ([com.amar.vault.indexing.AutoTagUpkeep]). */
 data class TextForTagging(
     val rowId: Long,
@@ -197,6 +207,18 @@ interface VaultDao {
 
     @Query("SELECT * FROM vault_items WHERE pHash = :hash LIMIT 1")
     suspend fun findByPHash(hash: Long): VaultItem?
+
+    // ── Deciding again what a stored picture is (PictureTypeUpkeep) ──
+
+    /** Whole items after [afterRowId], in rowid order, with where each is kept. */
+    @Query("""
+        SELECT rowid AS rowId, id, uri, sourceFile, mimeType, itemType FROM vault_items
+        WHERE parentDocumentId IS NULL AND rowid > :afterRowId ORDER BY rowid LIMIT :limit
+    """)
+    suspend fun wholeItemsForTyping(afterRowId: Long, limit: Int): List<StoredAddress>
+
+    @Query("UPDATE vault_items SET itemType = :type WHERE id = :id")
+    suspend fun setItemType(id: String, type: ItemType)
 
     // ── Tagging what is stored again (AutoTagUpkeep) ──
 
