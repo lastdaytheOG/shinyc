@@ -47,6 +47,9 @@ class VectorIndexUpdater(
 ) : IndexUpdater {
 
     override suspend fun update(entries: List<IndexEntry>, onIndexed: suspend (Int) -> Unit) {
+        // No embedding model on this install: the item is already keyword-searchable (BM25
+        // was updated before this step), so there is simply nothing to add to the vector index.
+        if (!AppEmbeddingEngine.isAvailable(context)) return
         if (!vectorSearch.initialized) {
             VaultLog.w("IndexingPipeline", "VectorSearchManager not ready — initializing now")
             vectorSearch.initialize()

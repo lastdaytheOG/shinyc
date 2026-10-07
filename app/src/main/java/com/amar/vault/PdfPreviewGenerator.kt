@@ -10,21 +10,29 @@ import android.os.ParcelFileDescriptor
 import java.io.File
 
 object PdfPreviewGenerator {
+    /**
+     * Opens a stored PDF for reading. A shared PDF's `uri` is the bare path of the app's own
+     * copy, which ContentResolver cannot open; a picked one is a content uri.
+     */
+    fun open(context: Context, uriString: String): ParcelFileDescriptor? {
+        val uri = Uri.parse(uriString)
+        return when (uri.scheme) {
+            "content", "file" -> {
+                context.contentResolver.openFileDescriptor(uri, "r")
+            }
+            else -> {
+                val file = File(uriString)
+                if (file.exists()) {
+                    ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+                } else null
+            }
+        }
+    }
+
     fun generateFirstPagePreview(context: Context, uriString: String): Bitmap? {
         if (uriString.isBlank()) return null
         return try {
-            val uri = Uri.parse(uriString)
-            val pfd = when (uri.scheme) {
-                "content", "file" -> {
-                    context.contentResolver.openFileDescriptor(uri, "r")
-                }
-                else -> {
-                    val file = File(uriString)
-                    if (file.exists()) {
-                        ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-                    } else null
-                }
-            } ?: return null
+            val pfd = open(context, uriString) ?: return null
 
             pfd.use {
                 val renderer = PdfRenderer(pfd)

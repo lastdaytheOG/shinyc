@@ -1,12 +1,12 @@
 package com.amar.vault
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -26,39 +25,68 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 private val PICKER_MIME_TYPES: Array<String> =
     DocumentIndexer.SUPPORTED_TYPES.toTypedArray()
 
+/**
+ * The import this screen started. It belongs to the process, not to the screen: a long PDF
+ * takes minutes, and an import owned by the screen was cancelled part-way, with nothing said,
+ * the moment the user went back to search for what they had just added.
+ */
+private object DocumentImport {
+    data class State(val running: Boolean = false, val results: List<IndexResult> = emptyList())
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val _state = MutableStateFlow(State())
+    val state: StateFlow<State> = _state.asStateFlow()
+
+    fun start(context: Context, uris: List<Uri>) {
+        if (_state.value.running) return
+        val app = context.applicationContext
+        _state.value = State(running = true)
+        scope.launch {
+            try {
+                // A provider that reports no type is not a reason to drop the file: the
+                // indexer also knows a document by its name.
+                val documents = uris.map { uri -> uri to app.contentResolver.getType(uri).orEmpty() }
+                DocumentIndexer.getInstance(app).indexBatch(documents, concurrency = 2).collect { result ->
+                    _state.update { it.copy(results = it.results + result) }
+                }
+            } finally {
+                _state.update { it.copy(running = false) }
+            }
+        }
+    }
+}
+
 @Composable
 fun DocumentPickerScreen() {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
-    var results by remember { mutableStateOf<List<IndexResult>>(emptyList()) }
-    var isRunning by remember { mutableStateOf(false) }
-    var totalChunks by rememberSaveable { mutableIntStateOf(0) }
+    val import by DocumentImport.state.collectAsState()
+    val results = import.results
+    val totalChunks = results.sumOf { (it as? IndexResult.Success)?.chunkCount ?: 0 }
 
     val picker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -73,27 +101,7 @@ fun DocumentPickerScreen() {
             }
         }
 
-        isRunning = true
-        results = emptyList()
-
-        scope.launch {
-            val indexer = DocumentIndexer.getInstance(context)
-            val docs = uris.mapNotNull { uri ->
-                val mime = context.contentResolver.getType(uri) ?: return@mapNotNull null
-                uri to mime
-            }
-
-            val collected = mutableListOf<IndexResult>()
-            indexer.indexBatch(docs, concurrency = 2).collectLatest { result ->
-                collected.add(result)
-                results = collected.toList()
-                if (result is IndexResult.Success) {
-                    totalChunks += result.chunkCount
-                }
-            }
-
-            isRunning = false
-        }
+        DocumentImport.start(context, uris)
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
@@ -113,6 +121,7 @@ fun DocumentPickerScreen() {
         // Import button
         Button(
             onClick = { picker.launch(PICKER_MIME_TYPES) },
+            enabled = !import.running,
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp)
         ) {
@@ -124,10 +133,13 @@ fun DocumentPickerScreen() {
         Spacer(Modifier.height(16.dp))
 
         // Progress
-        if (isRunning) {
+        if (import.running) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(8.dp))
-            Text("Indexing documents...", style = MaterialTheme.typography.bodySmall)
+            Text(
+                "Indexing documents… it carries on if you leave this screen.",
+                style = MaterialTheme.typography.bodySmall
+            )
             Spacer(Modifier.height(16.dp))
         }
 
@@ -185,10 +197,10 @@ private fun ResultCard(result: IndexResult) {
                         is IndexResult.Success -> "${result.chunkCount} chunks in ${result.durationMs}ms"
                         is IndexResult.Duplicate -> "Already indexed — skipped"
                         is IndexResult.Failure -> when (val e = result.error) {
-                            is IndexError.UnsupportedFormat -> "Unsupported: ${e.mimeType}"
+                            is IndexError.UnsupportedFormat -> "Unsupported: ${e.mimeType.ifBlank { "unknown file type" }}"
                             is IndexError.ExtractionFailed -> "Extraction failed"
                             is IndexError.StorageFailed -> "Storage error"
-                            IndexError.EmptyContent -> "Document is empty"
+                            IndexError.EmptyContent -> "No text could be read from it"
                         }
                     },
                     style = MaterialTheme.typography.bodySmall,

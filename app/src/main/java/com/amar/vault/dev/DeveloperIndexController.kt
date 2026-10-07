@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.BitmapFactory
 import android.net.Uri
 import com.amar.vault.DocumentIndexer
+import com.amar.vault.IndexError
 import com.amar.vault.IndexResult
 import com.amar.vault.IndexingPipeline
 import com.amar.vault.ScanPreferences
@@ -98,7 +99,7 @@ object DeveloperIndexController {
     /** Discover images in [preset] via the shared DiscoveryEngine, then index. */
     fun indexImagePreset(context: Context, preset: ImagePreset, force: Boolean) {
         val app = context.applicationContext
-        launch("Index: ${preset.label}${if (force) " (re-index)" else ""}") {
+        launch("Index images: ${preset.label}${if (force) " (re-index)" else ""}") {
             val engine = DiscoveryEngine(app)
             val spec = DiscoverySpec(
                 mediaScope = DiscoverySpec.MediaScope.ALL_VOLUMES,
@@ -185,14 +186,15 @@ object DeveloperIndexController {
                             bump(indexed = 1)
                         } else bump(skipped = 1)
                     }
-                } else if (mime != null && DocumentIndexer.SUPPORTED_TYPES.contains(mime)) {
-                    when (docIndexer.indexDocument(uri, mime)) {
+                } else {
+                    // The indexer decides what it can read: a provider that reports a PDF as
+                    // "application/octet-stream" (or reports nothing) still gives its name.
+                    when (val result = docIndexer.indexDocument(uri, mime.orEmpty())) {
                         is IndexResult.Success -> bump(indexed = 1)
                         is IndexResult.Duplicate -> bump(skipped = 1)
-                        is IndexResult.Failure -> bump(failed = 1)
+                        is IndexResult.Failure ->
+                            if (result.error is IndexError.UnsupportedFormat) bump(skipped = 1) else bump(failed = 1)
                     }
-                } else {
-                    bump(skipped = 1)
                 }
             } catch (e: Exception) {
                 bump(failed = 1)

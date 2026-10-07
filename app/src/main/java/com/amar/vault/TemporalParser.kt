@@ -31,7 +31,21 @@ object TemporalParser {
         "december" to Calendar.DECEMBER, "दिसंबर" to Calendar.DECEMBER, "dec" to Calendar.DECEMBER
     )
 
-    fun parse(query: String): TemporalParseResult {
+    /**
+     * Ordering words that are as often part of what is being looked for as they are an
+     * instruction: "last working day", "first mid term", "current affairs", "recent posts".
+     */
+    private val ALSO_ORDINARY_WORDS = setOf("last", "first", "recent", "current", "पहला")
+
+    /**
+     * [wordsFirst] is for text typed into the search box, where the words are, first of all,
+     * what the user is looking for. There the words in [ALSO_ORDINARY_WORDS] are never read as
+     * "newest"/"oldest" — typing "last" used to find nothing at all, and "last working days"
+     * came back as "working days" in date order — and a query that is nothing but an ordering
+     * word ("latest") is a search for that word. A question put to the vault ("my last
+     * electricity bill") still reads them as an order.
+     */
+    fun parse(query: String, wordsFirst: Boolean = false): TemporalParseResult {
         var cleanedQuery = query.lowercase().trim()
         var sort: SortOrder? = null
         var limit: Int? = null
@@ -175,20 +189,25 @@ object TemporalParser {
         }
 
         // 2. Evaluate year and month parsing
-        val yearRegex = Regex("\\b(20\\d{2})\\b")
+        // A year counts only as a word of its own. Inside a longer token it is part of a name
+        // ("Aadhaar_Card-2024.pdf", "2024-25"), and cutting it out left a query no file matched.
+        val yearRegex = Regex("(?<!\\S)(20\\d{2})(?=[?.!,;:]?(?:\\s|$))")
         val yearMatch = yearRegex.find(cleanedQuery)
         var parsedYear: Int? = null
+        val calendarTerms = mutableListOf<String>()
         if (yearMatch != null) {
             parsedYear = yearMatch.groupValues[1].toInt()
+            calendarTerms.add(yearMatch.groupValues[1])
             cleanedQuery = cleanedQuery.replaceRange(yearMatch.range, "").trim()
             confidence = maxOf(confidence, 0.9f)
         }
-        
+
         var parsedMonth: Int? = null
         for ((word, calendarMonth) in MONTHS) {
             val regex = termRegex(word)
             if (regex.containsMatchIn(cleanedQuery)) {
                 parsedMonth = calendarMonth
+                calendarTerms.add(word)
                 cleanedQuery = cleanedQuery.replace(regex, "").trim()
                 confidence = maxOf(confidence, 0.7f)
                 break
@@ -228,7 +247,10 @@ object TemporalParser {
         }
         
         // 3. Evaluate ordering (latest / oldest) limits after relative date parsing
+        val beforeOrdering = cleanedQuery
+        val confidenceBeforeOrdering = confidence
         for (word in LATEST_WORDS) {
+            if (wordsFirst && word in ALSO_ORDINARY_WORDS) continue
             val regex = termRegex(word)
             if (regex.containsMatchIn(cleanedQuery)) {
                 sort = SortOrder.DESC
@@ -241,6 +263,7 @@ object TemporalParser {
         }
         
         for (word in OLDEST_WORDS) {
+            if (wordsFirst && word in ALSO_ORDINARY_WORDS) continue
             val regex = Regex("\\b$word\\b")
             if (regex.containsMatchIn(cleanedQuery)) {
                 sort = SortOrder.ASC
@@ -251,7 +274,15 @@ object TemporalParser {
                 confidence = maxOf(confidence, 1.0f)
             }
         }
-        
+
+        // Nothing left to order, and no period asked for: the ordering word was the search.
+        if (wordsFirst && sort != null && timeRange == null && cleanedQuery.isBlank()) {
+            cleanedQuery = beforeOrdering
+            confidence = confidenceBeforeOrdering
+            sort = null
+            limit = null
+        }
+
         cleanedQuery = cleanedQuery
             .replace(Regex("\\s+"), " ")
             .replace(Regex("\\s+([?.!,;:])"), "$1")
@@ -266,7 +297,8 @@ object TemporalParser {
         return TemporalParseResult(
             cleanedQuery = cleanedQuery,
             intent = intent,
-            confidence = confidence
+            confidence = confidence,
+            calendarTerms = calendarTerms
         )
     }
 }

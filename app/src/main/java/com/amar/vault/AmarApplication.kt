@@ -3,8 +3,6 @@ package com.amar.vault
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
-// TODO(Phase4_AgentRuntime): Restore ReducerEngine import when Agent Runtime is reintegrated.
-// import com.amar.vault.agent.runtime.reducer.ReducerEngine
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -25,68 +23,25 @@ class AmarApplication : Application(), Configuration.Provider {
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
 
-    // TODO(Phase4_AgentRuntime): Restore agent runtime injections when Agent Runtime is reintegrated.
-    /*
-    @Inject lateinit var reducerEngine: ReducerEngine
-    @Inject lateinit var accessibilityEventBus: com.amar.vault.agent.runtime.events.AccessibilityEventBus
-    @Inject lateinit var imeCoordinator: com.amar.vault.agent.runtime.ime.ImeCoordinator
-    @Inject lateinit var semanticBridge: com.amar.vault.agent.runtime.semantic.SemanticBridge
-    @Inject lateinit var injectionMetrics: com.amar.vault.agent.runtime.metrics.InjectionMetrics
-    @Inject lateinit var overlayDetector: com.amar.vault.agent.runtime.recovery.OverlayDetector
-    @Inject lateinit var recoveryEngine: com.amar.vault.agent.runtime.recovery.RecoveryEngine
-    @Inject lateinit var phaseOrchestrator: com.amar.vault.agent.runtime.orchestrator.PhaseOrchestrator
-    @Inject lateinit var eventHistoryRecorder: com.amar.vault.agent.runtime.replay.EventHistoryRecorder
-    @Inject lateinit var adapterManifestLoader: com.amar.vault.agent.runtime.adapters.AdapterManifestLoader
-    @Inject lateinit var frameworkAdapterRegistry: com.amar.vault.agent.runtime.adapters.FrameworkAdapterRegistry
-    @Inject lateinit var telemetryExporter: com.amar.vault.agent.runtime.telemetry.TelemetryExporter
-    @Inject lateinit var worldStateStore: com.amar.vault.agent.runtime.state.WorldStateStore
-    */
-
     override fun onCreate() {
         super.onCreate()
-        // TODO(Phase4_AgentRuntime): Restore agent runtime initializations when Agent Runtime is reintegrated.
-        /*
-        android.util.Log.e("AmarApp", "ONCREATE_ENTERED reducerEngine=${if (::reducerEngine.isInitialized) "injected" else "NOT_INJECTED"}")
-
-        // Step 3: start the WorldState reducer FIRST. It must be live before
-        // any other initialization could publish events to the bus. The engine
-        // launches its own collector scope; this call returns immediately.
-        reducerEngine.start()
-
-        // Step 6: start the IME coordinator and wire it into PerceptionService.
-        imeCoordinator.start()
-        com.amar.vault.agent.perception.PerceptionService.get()?.bindRuntime(
-            bus = accessibilityEventBus,
-            imeCoordinator = imeCoordinator,
-            worldStateStore = worldStateStore
-        )
-
-        // Step 7: start semantic identity resolver bridge.
-        semanticBridge.start()
-        injectionMetrics.start()
-        overlayDetector.start()
-        recoveryEngine.start()
-        phaseOrchestrator.start()
-        eventHistoryRecorder.start()
-
-        // Step 16: discover and register declarative adapters.
-        val discovered = adapterManifestLoader.discover()
-        discovered.forEach { frameworkAdapterRegistry.registerRuntimeAdapter(it) }
-        android.util.Log.i("AmarApp", "STEP16 declarative_adapters=${discovered.size}")
-        telemetryExporter.start()
-        */
-
-        // If the service isn't connected yet (user enables a11y later), bind
-        // again when it connects. For now this no-ops gracefully.
 
         scope.launch {
-            // 1. Copy ONNX model to storage
-            withContext(Dispatchers.IO) {
-                EmbeddingEngine.warmUp(applicationContext)
+            // 1–2. Copy the ONNX embedding model to storage and load it. The model is
+            //      optional: a build can ship without it, and a failed load must not stop the
+            //      steps below — keyword search (BM25) has to come up either way.
+            if (AppEmbeddingEngine.isAvailable(applicationContext)) {
+                try {
+                    withContext(Dispatchers.IO) {
+                        EmbeddingEngine.warmUp(applicationContext)
+                    }
+                    AppEmbeddingEngine.initialize(applicationContext)
+                } catch (e: Exception) {
+                    VaultLog.e("AmarApp", "Embedding model failed to load — semantic lanes disabled", e)
+                }
+            } else {
+                VaultLog.i("AmarApp", "No embedding model installed — keyword search only")
             }
-
-            // 2. Load ONNX model into memory
-            AppEmbeddingEngine.initialize(applicationContext)
 
             // 3. Initialize native C++ HNSW vector engine
             VectorSearchManager.getInstance(applicationContext).initialize()
@@ -100,7 +55,10 @@ class AmarApplication : Application(), Configuration.Provider {
                     .getAllSearchableData()
 
                 items.forEach { item ->
-                    val text = "${item.ocrText} ${item.tags} ${item.itemType}"
+                    // The name (a document's file name, any item's title) is indexed too, so
+                    // every PDF already in the vault becomes findable by name on this rebuild.
+                    val name = com.amar.vault.retrieval.SearchableName.of(item.itemType, item.sourceFile, item.title)
+                    val text = "${item.ocrText} ${item.tags} ${item.itemType} $name"
                     bm25Index.addDocument(item.id, text)
                 }
 
@@ -122,6 +80,9 @@ class AmarApplication : Application(), Configuration.Provider {
                 }
                 IndexMetrics.logSnapshot("AmarApp")
             }
+
+            // 4c. Read the text of documents that were shared in before sharing indexed them.
+            SavedDocumentRepairWorker.enqueue(applicationContext)
 
             // 5. Schedule nightly job
             NightlyIndexWorker.schedule(applicationContext)

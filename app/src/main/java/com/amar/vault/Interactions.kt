@@ -21,6 +21,10 @@ fun Modifier.bounceClick(
     onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ) = composed {
+    // The gesture detector below is started once and kept; without these it would go on calling
+    // the callbacks it was first given — in a list, the ones made for an earlier query's row.
+    val currentOnClick by rememberUpdatedState(onClick)
+    val currentOnLongClick by rememberUpdatedState(onLongClick)
     var isPressed by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
         targetValue = if (isPressed) 0.96f else 1f,
@@ -56,8 +60,8 @@ fun Modifier.bounceClick(
                         isPressed = false
                     }
                 },
-                onTap = { onClick() },
-                onLongPress = { onLongClick?.invoke() }
+                onTap = { currentOnClick() },
+                onLongPress = { currentOnLongClick?.invoke() }
             )
         }
 }

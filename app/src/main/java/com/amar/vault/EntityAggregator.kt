@@ -2,6 +2,7 @@ package com.amar.vault
 
 import com.amar.vault.retrieval.RetrievalRequest
 import com.amar.vault.retrieval.RetrievalService
+import com.amar.vault.retrieval.RetrievalTuning
 
 /**
  * Read-only projection of everything Amar Vault already knows about one entity/topic.
@@ -34,7 +35,10 @@ class EntityAggregator(private val retrievalService: RetrievalService) {
 
         // Same query pipeline the app already uses for search (QueryPlanner → RetrievalService).
         val plan = QueryPlanner.parse(trimmed)
-        val items = retrievalService.retrieve(RetrievalRequest(plan.cleanedQuery, plan)).items
+        // Page-level hits: each matching page of a document is one reference to the entity.
+        val items = retrievalService.retrieve(
+            RetrievalRequest(plan.cleanedQuery, plan, tuning = RetrievalTuning(onePerDocument = false))
+        ).items
 
         // Entity type, only when the existing canonical registry recognizes the name.
         val resolution = CanonicalEntityRegistry.resolve(trimmed)

@@ -86,6 +86,6 @@ class IndexPersister(private val db: VaultDatabase) {
 
     /** Document partial-repair: drop the incomplete rows before re-indexing (non-atomic, by design). */
     suspend fun deletePartialByContentHash(contentHash: String) {
-        vaultDao.deleteByContentHash(contentHash)
+        vaultDao.deleteChunksByContentHash(contentHash)
     }
 }

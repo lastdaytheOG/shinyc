@@ -14,6 +14,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
+/** One ANN hit: the explicit ownership record of the chunk and its cosine similarity to the query. */
+data class VectorHit(val record: ChunkRecord, val similarity: Float)
+
 class VectorSearchManager(private val context: Context) {
 
     companion object {
@@ -107,6 +110,25 @@ class VectorSearchManager(private val context: Context) {
         val numericIds = engine.search(queryEmbedding, k)
         android.util.Log.d("VectorSearch", "Native search returned ${numericIds.size} results")
         return numericIds.toList().mapNotNull { idMapper.getStringId(it) }
+    }
+
+    /**
+     * ANN search that keeps what [search] throws away: which item each chunk belongs to
+     * ([ChunkRecord.parentId]) and how similar it is. Most similar first. Hits whose mapping
+     * was detached (deleted items) are dropped, exactly as in [search].
+     */
+    fun searchHits(queryEmbedding: FloatArray, k: Int = DEFAULT_K): List<VectorHit> {
+        if (!initialized || queryEmbedding.size != VECTOR_DIM) return emptyList()
+        // Interleaved [id0, similarity0, id1, similarity1, ...]; ids are far below 2^24, so
+        // the float carries them exactly.
+        val flat = engine.searchWithScores(queryEmbedding, k)
+        val hits = ArrayList<VectorHit>(flat.size / 2)
+        var i = 0
+        while (i + 1 < flat.size) {
+            idMapper.getRecord(flat[i].toInt())?.let { hits.add(VectorHit(it, flat[i + 1])) }
+            i += 2
+        }
+        return hits
     }
 
     suspend fun saveState() = withContext(Dispatchers.IO) {

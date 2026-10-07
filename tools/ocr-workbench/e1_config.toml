@@ -1,0 +1,257 @@
+# E1 evaluation dataset configuration.
+#
+# Relative paths resolve against THIS FILE's directory, so the checkout can live anywhere and be
+# cloned onto any machine without editing a single path.
+#
+# E1 is an evaluation set, never a training set. No setting here enables OCR, text generation or
+# transcription pre-filling, because no such capability exists in this pipeline by design.
+
+[paths]
+staging = "data/val/_staging"
+out     = "data/val"
+
+[segmentation]
+target_height       = 48      # recognizer input height; aspect ratio always preserved
+min_line_height     = 12      # px; smaller bands are speckle, not text
+max_line_height_frac = 0.40   # a "line" taller than 40% of the page is a figure or a merge failure
+max_lines_per_page  = 200
+row_ink_frac        = 0.012   # a row counts as ink above this fraction of the peak row
+
+# Column gutter width, as a fraction of page width. 0.030 demanded a 36px gutter and so missed
+# the 12-17px gutter of a tightly-set two-column journal page: it projected as ONE column, which
+# put ink from both columns on every row, merged every band, and got the whole page discarded by
+# max_line_height_frac. A narrow gutter is still a strong signal, because it has to be clear over
+# the full page height — ordinary word spacing never is.
+#
+# Measured over the corpus at the tolerance below: 0.030 -> 15 pages losing most of their ink,
+# 0.012 -> 3, 0.008 -> 2. 0.012 is not enough, because it demands 14.5px on the 1211px-wide
+# Nature page whose narrower gutter measures 12px. Widening gutter_ink_tolerance to 0.03 instead
+# reaches the same 2, but buys it by letting two full text lines cross a "gutter" — that erodes
+# the full-height invariant which is the only thing separating a gutter from a word gap, so the
+# narrower minimum is the safer of the two.
+min_gutter_frac     = 0.008
+min_col_frac        = 0.12    # narrower bands are not real columns
+
+# Fraction of rows a gutter may still contain ink in. At zero, one spanning element — a masthead,
+# a centred headline, a full-width rule — vetoes the column split for the entire page. Keep this
+# small: the full-height requirement, not this tolerance, is what stops word spacing being read
+# as a gutter.
+gutter_ink_tolerance = 0.01
+
+pad                 = 3       # px of context kept around each crop
+
+# Binarization is paper-relative, NOT Otsu. Otsu assumes two comparably-sized pixel classes, but a
+# text page is 98-99% paper. Measured on a 150 dpi Devanagari page Otsu chose 135, which kept only
+# the shirorekha and collapsed every line to a 1px band; the same page at 160+ segmented correctly.
+paper_percentile    = 90.0
+paper_factor        = 0.85
+retry_bias          = 20      # looser second attempt for faint or low-contrast scans
+
+# Devanagari matras sit above and below the main body, often separated by a row or two of white.
+# Gaps under this fraction of a typical line height are intra-line, not line breaks. Setting this
+# to 0 will slice matras off their own words.
+merge_gap_factor    = 0.35
+
+# Ceiling on a merged band, as a multiple of the median band height. Merging is transitive, so
+# without a ceiling each merge extends the band and swallows the next: on tightly-leaded text that
+# chained until one band covered 80% of the page, which max_line_height_frac then discarded — the
+# lines were found, fused, and thrown away. Measured over this corpus the cap took pages losing
+# most of their ink rows from 15 to 4, and is the single highest-value segmentation change here.
+# 0 disables the ceiling and restores the old behaviour.
+merge_cap_factor    = 3.0
+
+[fallback]
+enable_connected_components = true
+cc_min_area                 = 12
+cc_vertical_overlap         = 0.30   # components overlapping this much vertically share a line
+projection_merged_frac      = 0.80   # one band covering this much of the page = projection failed
+
+[dedup]
+# Max Hamming distance for a near-duplicate claim, over the 256-bit line-shaped dHash.
+#
+# The hash grid is 32x8, not the conventional 8x8. Line crops here run 20:1 to 58:1, so a square
+# grid squashes a 700x28 line to 9x8 and averages every glyph away — measured, ordinary body text
+# collapsed onto a handful of hashes and 31 of 99 groups spanned multiple books, which is provably
+# wrong because two books cannot share a rendered line. Note the direction: it is WIDE crops that
+# lose their signal to a square grid, so a minimum-crop-size floor does nothing (the crops
+# involved were aspect 21-58). Widening the grid is what fixed it.
+#
+# 8 of 256 bits is the loosest threshold at which no cross-book group is reported at all, while
+# 38 within-book groups still are. Past 12 they come back.
+near_dup_distance = 8
+
+# Byte-identical crops are pure redundancy — repeated table header rows and running headers,
+# measured 48 times in this corpus. Each extra copy weights that one line's score again in the
+# aggregate CER while adding no new information, so only the first in reading order is written.
+# Near-duplicates are deliberately NOT dropped: a column of Gazette codes reading 115BBG /
+# 115BBH / 115BBI is visually near-identical and textually distinct, which is exactly what a CER
+# gate should be measuring.
+drop_exact_duplicates = true
+
+[defaults]
+# Pre-filled into every TSV row; correct them per row afterwards. Never inferred from pixels.
+# script  : hi | en | mixed
+# stratum : clean | scanned | tables | smalltext | mixed
+script  = ""
+stratum = ""
+
+# Per-book overrides of [defaults], keyed by the staging subdirectory name.
+#
+# One run of 08_make_lines.py consumes the WHOLE staging tree and writes a single
+# ground_truth.tsv, so --script/--stratum can only ever be right for a corpus that is
+# entirely one script and one stratum. Re-running with different flags does not add a
+# group: it reprocesses every book and relabels the entire TSV. Map each book here
+# instead and the mixed corpus comes out correct in one pass.
+#
+# An empty or omitted field inherits [defaults], so a book can override stratum alone.
+# Unknown keys and invalid label values are rejected at load time — a typo fails loudly
+# rather than becoming a TSV column the CER splits are keyed on.
+#
+# COVERAGE IS MANDATORY. Because this section is non-empty, every staging subdirectory must
+# appear below. A staged book with no entry aborts 08_make_lines.py instead of inheriting the
+# blank [defaults]: an unmapped book still yields images and a full-looking TSV, but its rows
+# carry no script/stratum, so it vanishes from the per-script and per-stratum CER splits the
+# gates are stated in — a silent under-count, which is worse than a crash.
+#
+# Keys are staging subdirectory names, verbatim and case-sensitive.
+#
+# ── [books.<name>.pages] ────────────────────────────────────────────────────────────────
+# Per-page overrides, keyed by the page number parsed from the filename (page_0007.png -> 7).
+# Empty fields inherit the book, then [defaults], so a page can be retagged without restating
+# the script its book already gets right.
+#
+# These exist because stratum is not a book-level property. Ruled tables are scattered through
+# otherwise-prose books — 18 pages across 5 books here — and no whole-book label can describe
+# them. Without page overrides the `tables` split would be unmeasurable and those 18 pages would
+# be scored as prose, which is the one stratum whose failure mode (column/cell structure, not
+# glyph shape) the aggregate CER is least able to surface.
+#
+# The rule applied: a page is `tables` when MORE THAN HALF its text lines sit inside a ruled
+# grid. Every page below was classified by looking at it, not by a pixel score — two rule
+# detectors were tried and both misfire on this corpus. Measuring ink between the topmost and
+# bottommost horizontal rule scores prose bracketed by a masthead rule and a footer rule at 0.98.
+# Measuring against vertical walls scores the Watson-Crick Nature page at 0.64, because a scan's
+# dark page edge reads as a wall, and misses hindi/8 (four ruled grids) entirely. Pages left
+# unlisted are prose-majority with a table on part of them: eng_column 7/9/10, Gazette 2/3,
+# Eng_hin 9/17 all carry a real table over roughly a third of the page and stay on their book's
+# label deliberately.
+#
+# ── exclude ─────────────────────────────────────────────────────────────────────────────
+# Pages dropped from the dataset entirely. Excluded and overridden are mutually exclusive and
+# the loader rejects a page that is both — an excluded page produces no rows, so a label
+# override on it is dead config that reads as if it were in effect.
+
+[books.dig_hindi]
+script  = "hi"
+stratum = "clean"
+# 6, 10 are blank leaves: a single grey level (242), zero standard deviation, no ink at any
+# threshold. Segmentation cannot fail more cleanly than this and there is nothing to transcribe,
+# but kept in they reach the whole-page fallback and enter the TSV as one "line" that is really
+# a page — a huge outlier contributed to every metric under a stratum it does not belong to.
+#
+# 18, 19 are light text on a dark green ground. ink_mask thresholds BELOW the paper white point,
+# which is correct by construction for every other page in this corpus and exactly inverted here:
+# it selects the background and treats the glyphs as paper. Excluded rather than special-cased,
+# because inverting per page is a segmentation feature to design, not a label to set.
+exclude = [6, 10, 18, 19]
+
+[books.digital_hindi]
+script  = "hi"
+stratum = "clean"
+
+[books.digital_hindi.pages]
+3  = { stratum = "tables" }   # CONTENTS, fully ruled
+9  = { stratum = "tables" }   # assessment grid, ruled, short prose intro only
+12 = { stratum = "tables" }   # trade-parameter table
+13 = { stratum = "tables" }   # two-column ruled table, full page
+
+[books.eng]
+script  = "en"
+stratum = "clean"
+
+[books.eng_column]
+script  = "en"
+stratum = "clean"
+
+[books.eng_column.pages]
+5 = { stratum = "tables" }   # Contents, fully ruled
+8 = { stratum = "tables" }   # three stacked tables; the prose between them is a minority
+
+[books.Eng_hin]
+script  = "mixed"
+stratum = "mixed"
+
+[books.Gazette]
+script  = "mixed"
+stratum = "mixed"
+
+# The surcharge schedule: pages 4-8 are one continuous four-column ruled table (A/B/C/D) running
+# across page breaks. Pages 2 and 3 introduce it in prose and carry only its first rows.
+[books.Gazette.pages]
+4 = { stratum = "tables" }
+5 = { stratum = "tables" }
+6 = { stratum = "tables" }
+7 = { stratum = "tables" }
+8 = { stratum = "tables" }
+
+[books.heavy_scan_eng]
+script  = "en"
+stratum = "scanned"
+
+[books.hindi]
+script  = "hi"
+# Scanned, not clean. Every page carries photocopy artifacts: the blue-grey CamScanner tint,
+# visible skew, and speckle along the margins. Labelling it `clean` put a scanned book on the
+# wrong side of the clean/scanned CER split, which is the one split that decides whether a
+# recognizer's weakness is in glyph shape or in image degradation — a mislabel there does not
+# just add noise, it moves the evidence to the stratum that cannot explain it.
+stratum = "scanned"
+
+# Quarterly official-language return: bilingual ruled forms, mostly empty cells to be filled by
+# hand. 3/7/8 are majority grid; 9 carries two grids plus numbered prose and is the closest call
+# in the corpus — it stays `tables` because both its grids are the substance of the page and the
+# prose is their captions. Stratum is single-valued, so these four keep `tables` and their
+# scanned-ness is not separately recorded.
+[books.hindi.pages]
+3 = { stratum = "tables" }
+7 = { stratum = "tables" }
+8 = { stratum = "tables" }
+9 = { stratum = "tables" }
+
+[books.light_scan_eng]
+script  = "en"
+stratum = "scanned"
+
+[books.light_scanned_eng]
+script  = "en"
+stratum = "scanned"
+
+[books.scan_hind]
+script  = "hi"
+stratum = "scanned"
+
+[books.scan_list]
+script  = "hi"
+stratum = "smalltext"
+
+# Pay-fixation register: 12 is a certificate whose ruled verification table is the bulk of it,
+# 13 and 14 are the register proper — dense ruled grids, and the reason the book is `smalltext`
+# in the first place. Only page 11, a title leaf, is not a table. The book label is left alone
+# rather than flipped to `tables`, so `smalltext` keeps describing what makes these pages hard.
+[books.scan_list.pages]
+12 = { stratum = "tables" }
+13 = { stratum = "tables" }
+14 = { stratum = "tables" }
+
+[books.small_scan-eng]
+script  = "en"
+stratum = "smalltext"
+
+[books.veryhea_scanned_english]
+script  = "en"
+stratum = "scanned"
+
+[dataset]
+image_prefix      = "line_"
+image_digits      = 6
+write_label_files = true   # labels/<id>.txt sidecars; ground_truth.tsv stays canonical

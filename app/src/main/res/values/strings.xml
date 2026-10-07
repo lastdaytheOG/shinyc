@@ -1,9 +1,3 @@
 <resources>
     <string name="app_name">Amar</string>
-    <string name="perception_service_label">Amar Vault Agent</string>
-
-    <string name="perception_service_summary">Lets Amar Vault read what\'s on screen so the on-device agent can execute tasks you request (like sending a message in WhatsApp).</string>
-
-    <string name="perception_service_description">Amar Vault uses this service to see the contents of apps you choose to automate, and to perform taps and text entry on your behalf.\n\nAll processing stays on your device. Amar Vault never sees screens from apps you haven\'t explicitly asked it to automate, and no screen content is sent to any server.\n\nYou can disable this service at any time from Settings → Accessibility.</string>
-
 </resources>

@@ -1001,7 +1001,13 @@ private fun GenericDocumentCardContent(
     secondaryText: Color
 ) {
     val sourceName = remember(item.sourceApp, item.uri) { SourceResolver.getReadableAppName(item.sourceApp, item.uri) }
-    val cleanTitle = remember(item.title, item.uri) { cleanDisplayTitle(item.title, item.uri, sourceName) }
+    // A page of a Word/Excel/EPUB file has no title of its own; it is known by its file's name.
+    val cleanTitle = remember(item.title, item.sourceFile, item.uri) {
+        val fileName = item.sourceFile.substringAfterLast('/').takeIf {
+            it.isNotBlank() && ContentSpecies.isOfficeDocument(item.itemType, item.mimeType, item.uri)
+        }
+        cleanDisplayTitle(item.title ?: fileName, item.uri, sourceName)
+    }
     val cleanSummary = remember(item.ocrText) {
         val clean = item.ocrText.substringBefore("\n[").trim()
         if (clean.length > 80) clean.take(80) + "..." else clean

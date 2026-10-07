@@ -1,0 +1,33 @@
+# NPU OCR conversion workbench — desktop/GPU tooling ONLY.
+# This is NOT part of the Gradle build and never ships in the APK.
+#
+#   python -m venv .venv
+#   .venv\Scripts\activate        (Windows)
+#   pip install -r requirements.txt
+#
+# Pins are deliberately loose here because the paddle2onnx / onnx opset compatibility
+# matrix moves; lock them with `pip freeze > requirements.lock.txt` once a conversion
+# actually succeeds end-to-end, so the artifact is reproducible.
+
+# --- Core conversion path -------------------------------------------------
+paddlepaddle>=2.6.0          # CPU wheel is enough for export; GPU wheel only for fine-tuning
+paddleocr>=2.7.0
+paddle2onnx>=1.2.0
+onnx>=1.16.0
+onnxruntime>=1.20.0          # must match the Android AAR major/minor: 1.20.0
+onnxsim>=0.4.36              # graph simplification before shape fixing
+
+# --- TFLite / LiteRT alternative path (only if framework decision goes LiteRT) ---
+# onnx2tf>=1.22.0
+# tensorflow>=2.16.0
+
+# --- Image + data handling ------------------------------------------------
+opencv-python>=4.9.0
+numpy>=1.26.0
+pillow>=10.2.0
+
+# --- Evaluation -----------------------------------------------------------
+python-Levenshtein>=0.25.0   # CER/WER scoring against the E1 golden set
+
+# --- Synthetic data (F2), only if fine-tuning is entered ------------------
+# trdg>=1.8.0

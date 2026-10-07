@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.Flow
 @Entity(
     tableName = "vault_items",
     // Sprint P1 — contentHash backs the per-document duplicate check
-    // (countByContentHash / deleteByContentHash); without the index each PDF
+    // (countChunksByContentHash / deleteChunksByContentHash); without the index each PDF
     // index pays a full table scan that grows with the vault.
     indices = [Index("contentHash")]
 )
@@ -52,7 +52,9 @@ data class VaultItemSearchData(
     val id: String,
     val ocrText: String,
     val tags: String,
-    val itemType: String
+    val itemType: String,
+    val sourceFile: String,
+    val title: String?
 )
 
 @Dao
@@ -64,14 +66,29 @@ interface VaultDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(items: List<VaultItem>)
     
-    @Query("SELECT * FROM vault_items WHERE contentHash = :hash LIMIT 1")
+    // A shared PDF is one standalone row (the saved item) plus one row per chunk, and both
+    // kinds carry the file's hash. The three lookups below each mean one kind only: the saved
+    // item must never be counted as a chunk or deleted as one (its Stash entry would go with
+    // it), and a chunk must never be handed back as "the item with this hash".
+
+    /** The standalone item with this hash — never one of a document's chunk rows. */
+    @Query("SELECT * FROM vault_items WHERE contentHash = :hash AND parentDocumentId IS NULL LIMIT 1")
     suspend fun findByContentHash(hash: String): VaultItem?
 
-    @Query("SELECT COUNT(*) FROM vault_items WHERE contentHash = :hash")
-    suspend fun countByContentHash(hash: String): Int
+    /** How many chunk rows are stored for the document with this hash. */
+    @Query("SELECT COUNT(*) FROM vault_items WHERE contentHash = :hash AND parentDocumentId IS NOT NULL")
+    suspend fun countChunksByContentHash(hash: String): Int
 
-    @Query("DELETE FROM vault_items WHERE contentHash = :hash")
-    suspend fun deleteByContentHash(hash: String)
+    /** Removes the chunk rows of the document with this hash, leaving any standalone item. */
+    @Query("DELETE FROM vault_items WHERE contentHash = :hash AND parentDocumentId IS NOT NULL")
+    suspend fun deleteChunksByContentHash(hash: String)
+
+    /**
+     * Standalone items whose file is the app's own private copy, stored as a bare absolute
+     * path — what Share saves.
+     */
+    @Query("SELECT * FROM vault_items WHERE parentDocumentId IS NULL AND uri LIKE '/%'")
+    suspend fun getStandaloneLocalFiles(): List<VaultItem>
 
     @Query("""
         SELECT vault_items.* FROM vault_items
@@ -86,7 +103,7 @@ interface VaultDao {
     @Query("DELETE FROM vault_items")
     suspend fun deleteAll()
 
-    @Query("SELECT id, ocrText, tags, itemType FROM vault_items")
+    @Query("SELECT id, ocrText, tags, itemType, sourceFile, title FROM vault_items")
     suspend fun getAllSearchableData(): List<VaultItemSearchData>
 
     @Query("SELECT * FROM vault_items ORDER BY timestamp DESC")

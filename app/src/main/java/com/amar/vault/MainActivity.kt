@@ -8,9 +8,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
-// TODO(Phase4_AgentRuntime): Restore imports when Agent Runtime is reintegrated.
-// import com.amar.vault.agent.CurrentActivityHolder
-// import com.amar.vault.agent.intent.AppIndex
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,32 +36,7 @@ class MainActivity : ComponentActivity() {
 
         setContent { VaultApp() }
 
-        // TODO(Phase4_AgentRuntime): Restore AppIndex attach when Agent Runtime is reintegrated.
-        // AppIndex.attach(applicationContext)
-
         requestPermissions()
-    }
-
-    // ---- Activity-context tracking for agent executors ----
-    //
-    // OpenAppExecutor (and future UI executors) need a live Activity context
-    // to launch third-party apps on Android 10+ without hitting Background
-    // Activity Launch restrictions. ApplicationContext.startActivity() with
-    // FLAG_ACTIVITY_NEW_TASK silently fails on modern Android for non-system
-    // targets. By publishing this Activity to CurrentActivityHolder while
-    // resumed, executors can route launches through the real foreground
-    // window, which Android recognizes as user-initiated.
-
-    override fun onResume() {
-        super.onResume()
-        // TODO(Phase4_AgentRuntime): Restore CurrentActivityHolder publish when Agent Runtime is reintegrated.
-        // CurrentActivityHolder.set(this)
-    }
-
-    override fun onPause() {
-        super.onPause()
-        // TODO(Phase4_AgentRuntime): Restore CurrentActivityHolder clear when Agent Runtime is reintegrated.
-        // CurrentActivityHolder.clear(this)
     }
 
     private fun requestPermissions() {

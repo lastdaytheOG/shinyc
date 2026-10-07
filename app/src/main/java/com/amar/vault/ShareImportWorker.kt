@@ -2,7 +2,6 @@ package com.amar.vault
 
 import android.content.Context
 import android.graphics.BitmapFactory
-import android.net.Uri
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
@@ -48,7 +47,9 @@ class ShareImportWorker @dagger.assisted.AssistedInject constructor(
                 if (vaultItem != null) {
                     val mime = attachment.mimeType.lowercase()
                     val uriStr = attachment.localPath ?: attachment.originalUri ?: ""
-                    
+                    val localPath = attachment.localPath
+                    var documentFailure: IndexResult.Failure? = null
+
                     if (mime.startsWith("image/")) {
                         val file = File(attachment.localPath ?: "")
                         if (file.exists()) {
@@ -62,16 +63,12 @@ class ShareImportWorker @dagger.assisted.AssistedInject constructor(
                                 )
                             }
                         }
-                    } else if (mime.contains("pdf") || mime.contains("document")) {
-                        val uri = Uri.parse(uriStr)
-                        documentIndexer.indexDocument(
-                            uri = uri,
-                            mimeType = mime,
-                            baseId = vaultItem.id
-                        )
                     } else if (attachment.attachmentType == "TEXT") {
                         val docText = "${vaultItem.title ?: ""} ${vaultItem.ocrText} ${vaultItem.sourceFile} ${vaultItem.itemType}"
                         bm25.addDocument(vaultItem.id, docText)
+                    } else if (localPath != null) {
+                        // Null for a file that is not a document the indexer reads (video, audio, …).
+                        documentFailure = documentIndexer.indexSavedDocument(vaultItem, localPath) as? IndexResult.Failure
                     }
                     // Videos, audio, general files skip heavy OCR/indexing for now, but are "COMPLETE"
 
@@ -83,6 +80,9 @@ class ShareImportWorker @dagger.assisted.AssistedInject constructor(
                             db.stashItemDao().updateThumbnailPath(stashItem.id, thumbPath)
                         }
                     }
+
+                    // Raised only now, so a document whose text could not be read keeps its thumbnail.
+                    documentFailure?.let { error("Text of ${it.fileName} was not indexed: ${it.error}") }
                 }
 
                 attachmentDao.updateStatus(attachment.id, AttachmentStatus.COMPLETE)

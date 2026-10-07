@@ -7,7 +7,9 @@ data class MetadataConstraint(
     val value: String = "",
     val numericValue: Double? = null,
     val timestampValue: LongArray? = null,
-    val operator: ConstraintOperator = ConstraintOperator.EQUALS
+    val operator: ConstraintOperator = ConstraintOperator.EQUALS,
+    /** DATE only: the year and month words the range was read from ("2024", "march"). */
+    val typedTerms: List<String> = emptyList()
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -23,6 +25,7 @@ data class MetadataConstraint(
             if (!timestampValue.contentEquals(other.timestampValue)) return false
         } else if (other.timestampValue != null) return false
         if (operator != other.operator) return false
+        if (typedTerms != other.typedTerms) return false
 
         return true
     }
@@ -33,6 +36,7 @@ data class MetadataConstraint(
         result = 31 * result + (numericValue?.hashCode() ?: 0)
         result = 31 * result + (timestampValue?.contentHashCode() ?: 0)
         result = 31 * result + operator.hashCode()
+        result = 31 * result + typedTerms.hashCode()
         return result
     }
 }
@@ -49,14 +53,17 @@ object QueryPlanner {
 
     /**
      * Parses the raw query into a structured QueryPlan containing STRICT and PREFERRED constraints.
+     *
+     * [forResultList]: the text was typed into the search box, not asked as a question — see
+     * [TemporalParser.parse] for what that changes.
      */
-    fun parse(query: String): QueryPlan {
+    fun parse(query: String, forResultList: Boolean = false): QueryPlan {
         var q = query.trim()
         val strict = mutableListOf<MetadataConstraint>()
         val preferred = mutableListOf<MetadataConstraint>()
 
         // 1. Temporal Parsing (STRICT)
-        val temporalResult = TemporalParser.parse(q)
+        val temporalResult = TemporalParser.parse(q, wordsFirst = forResultList)
         if (temporalResult.confidence >= 0.5f) {
             q = temporalResult.cleanedQuery
             val intent = temporalResult.intent
@@ -69,7 +76,8 @@ object QueryPlanner {
                             timeRange.startTimeMs,
                             timeRange.endTimeMs
                         ),
-                        operator = ConstraintOperator.BETWEEN
+                        operator = ConstraintOperator.BETWEEN,
+                        typedTerms = temporalResult.calendarTerms
                     )
                 )
             }
@@ -109,34 +117,37 @@ object QueryPlanner {
             }
         }
 
-        // 4. Source Type Parsing (STRICT)
+        // 4. Source Type Parsing (PREFERRED)
+        // The word stays in the query as an ordinary word, so it matches a document's file name
+        // ("notes.pdf") and hides nothing. `type:pdf` (SearchOperators) asks for one kind only.
         val sourceTypes = listOf("pdf", "screenshot", "image", "docx", "xlsx", "epub", "text")
         val qLower = q.lowercase()
         sourceTypes.forEach { type ->
-            if (qLower.contains(type)) {
-                strict.add(MetadataConstraint(type = "SOURCE_TYPE", value = type.uppercase(), operator = ConstraintOperator.EQUALS))
-                q = q.replace(Regex("\\b$type\\b", RegexOption.IGNORE_CASE), "").trim()
+            if (Regex("\\b$type\\b").containsMatchIn(qLower)) {
+                preferred.add(MetadataConstraint(type = "SOURCE_TYPE", value = type.uppercase(), operator = ConstraintOperator.EQUALS))
             }
         }
 
-        // 5. Document Type & Class Intent Parsing (STRICT)
+        // 5. Document Type & Class Intent Parsing (PREFERRED)
+        // Only an image the classifier has labelled carries this metadata; a PDF never does. As a
+        // filter these words hid every document that says or is named "aadhaar", "invoice", ….
         if (qLower.contains("aadhaar")) {
-            strict.add(MetadataConstraint(type = "DOCUMENT_TYPE", value = "AADHAAR", operator = ConstraintOperator.EQUALS))
-            strict.add(MetadataConstraint(type = "DOCUMENT_CLASS", value = "IDENTITY", operator = ConstraintOperator.EQUALS))
+            preferred.add(MetadataConstraint(type = "DOCUMENT_TYPE", value = "AADHAAR", operator = ConstraintOperator.EQUALS))
+            preferred.add(MetadataConstraint(type = "DOCUMENT_CLASS", value = "IDENTITY", operator = ConstraintOperator.EQUALS))
         } else if (qLower.contains("train ticket")) {
-            strict.add(MetadataConstraint(type = "DOCUMENT_TYPE", value = "TRAIN_TICKET", operator = ConstraintOperator.EQUALS))
+            preferred.add(MetadataConstraint(type = "DOCUMENT_TYPE", value = "TRAIN_TICKET", operator = ConstraintOperator.EQUALS))
         } else if (qLower.contains("bank statement")) {
-            strict.add(MetadataConstraint(type = "DOCUMENT_TYPE", value = "BANK_STATEMENT", operator = ConstraintOperator.EQUALS))
+            preferred.add(MetadataConstraint(type = "DOCUMENT_TYPE", value = "BANK_STATEMENT", operator = ConstraintOperator.EQUALS))
         } else if (qLower.contains("invoice")) {
-            strict.add(MetadataConstraint(type = "DOCUMENT_TYPE", value = "INVOICE", operator = ConstraintOperator.EQUALS))
+            preferred.add(MetadataConstraint(type = "DOCUMENT_TYPE", value = "INVOICE", operator = ConstraintOperator.EQUALS))
         } else if (qLower.contains("receipt")) {
-            strict.add(MetadataConstraint(type = "DOCUMENT_TYPE", value = "PAYMENT_RECEIPT", operator = ConstraintOperator.EQUALS))
+            preferred.add(MetadataConstraint(type = "DOCUMENT_TYPE", value = "PAYMENT_RECEIPT", operator = ConstraintOperator.EQUALS))
         } else if (qLower.contains("ticket")) {
-            strict.add(MetadataConstraint(type = "DOCUMENT_CLASS", value = "TICKET", operator = ConstraintOperator.EQUALS))
+            preferred.add(MetadataConstraint(type = "DOCUMENT_CLASS", value = "TICKET", operator = ConstraintOperator.EQUALS))
         } else if (qLower.contains("identity") || qLower.contains("id card")) {
-            strict.add(MetadataConstraint(type = "DOCUMENT_CLASS", value = "IDENTITY", operator = ConstraintOperator.EQUALS))
+            preferred.add(MetadataConstraint(type = "DOCUMENT_CLASS", value = "IDENTITY", operator = ConstraintOperator.EQUALS))
         } else if (qLower.contains("payment") || qLower.contains("paid") || qLower.contains("spent")) {
-            strict.add(MetadataConstraint(type = "DOCUMENT_CLASS", value = "PAYMENT", operator = ConstraintOperator.EQUALS))
+            preferred.add(MetadataConstraint(type = "DOCUMENT_CLASS", value = "PAYMENT", operator = ConstraintOperator.EQUALS))
         }
 
         return QueryPlan(

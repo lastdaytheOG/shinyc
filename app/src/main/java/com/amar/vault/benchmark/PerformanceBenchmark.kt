@@ -58,6 +58,22 @@ class PerformanceBenchmark(
         }
         val sortedTotal = total.sorted()
 
+        // ── Time to first results (what the search box paints first) ──────────
+        // Same queries through the progressive form of the same call. The first emission is
+        // the earliest moment the UI has a ranked list; caches are warm from the rounds above.
+        val first = mutableListOf<Long>()
+        repeat(ROUNDS) {
+            for (q in queries) {
+                val t0 = System.nanoTime()
+                var firstAt: Long? = null
+                retrieval.retrieveProgressive(RetrievalRequest(q)).collect {
+                    if (firstAt == null) firstAt = (System.nanoTime() - t0) / 1_000_000
+                }
+                firstAt?.let(first::add)
+            }
+        }
+        val sortedFirst = first.sorted()
+
         // ── Component seams (same public capabilities the service composes) ──
         val parse = timeEach(queries) { QueryPlanner.parse(it) }
         val bm25 = timeEach(queries) { lexical.bm25(it, 50) }
@@ -80,6 +96,10 @@ class PerformanceBenchmark(
                 MetricValue("total.p95", BenchmarkMath.percentile(sortedTotal, 0.95), "ms", false),
                 MetricValue("total.p99", BenchmarkMath.percentile(sortedTotal, 0.99), "ms", false),
                 MetricValue("total.samples", total.size.toDouble(), "count", true),
+                MetricValue("firstResults.avg", BenchmarkMath.mean(first), "ms", false,
+                    "time to the first progressive emission (keyword stage when BM25 has hits)"),
+                MetricValue("firstResults.median", BenchmarkMath.median(sortedFirst), "ms", false),
+                MetricValue("firstResults.p95", BenchmarkMath.percentile(sortedFirst, 0.95), "ms", false),
                 MetricValue("queryParsing.avg", parse, "ms", false, "QueryPlanner.parse"),
                 MetricValue("bm25.avg", bm25, "ms", false, "LexicalRetriever.bm25 (native engine + cap)"),
                 MetricValue("embedQuery.avg", embed, "ms", false, semNote.ifBlank { "first-call cost amortized by LRU in production" }),

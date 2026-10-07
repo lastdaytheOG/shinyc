@@ -52,8 +52,18 @@ fun VaultApp() {
     val prefsState by ScanPreferences.prefsFlow(context).collectAsState(initial = null)
     val prefs = prefsState ?: return
 
+    // Set by onboarding when its Documents switch was left on. Android gives an app no way to
+    // find other apps' PDFs by itself, so that choice can only be honoured by taking the user
+    // to the screen where they pick them — before this, the switch did nothing at all.
+    var importDocumentsAfterOnboarding by remember { mutableStateOf(false) }
     var currentScreen by remember(prefs.onboardingDone) {
-        mutableStateOf(if (prefs.onboardingDone) Screen.HOME else Screen.ONBOARDING)
+        mutableStateOf(
+            when {
+                !prefs.onboardingDone -> Screen.ONBOARDING
+                importDocumentsAfterOnboarding -> Screen.DOCUMENTS
+                else -> Screen.HOME
+            }
+        )
     }
 
     val searchViewModel: SearchViewModel = androidx.hilt.navigation.compose.hiltViewModel()
@@ -71,7 +81,10 @@ fun VaultApp() {
     ) { screen ->
         when (screen) {
             Screen.ONBOARDING -> {
-                OnboardingScreen(onComplete = { currentScreen = Screen.HOME })
+                OnboardingScreen(
+                    onDocumentsChosen = { importDocumentsAfterOnboarding = true },
+                    onComplete = { currentScreen = Screen.HOME }
+                )
             }
 
             Screen.HOME -> {

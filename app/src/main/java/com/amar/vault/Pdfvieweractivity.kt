@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -23,14 +24,28 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.amar.vault.ui.components.search.withQueryWordsMarked
+import com.amar.vault.ui.theme.CharcoalSoft
+import com.amar.vault.ui.theme.Cream
+import com.amar.vault.ui.theme.CreamDark
+import com.amar.vault.ui.theme.CreamLight
+import com.amar.vault.ui.theme.PdfColor
+import com.amar.vault.ui.theme.PdfWash
+import com.amar.vault.ui.theme.WarmBrown
+import com.amar.vault.ui.theme.WarmBrownDark
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -38,7 +53,7 @@ import kotlinx.coroutines.withContext
  *
  * Supports:
  * - Opening at a specific page via [EXTRA_PAGE]
- * - Search term display via [EXTRA_SEARCH_QUERY]
+ * - Search term display via [EXTRA_SEARCH_QUERY], with the words it was found in via [EXTRA_MATCH_TEXT]
  * - Pinch-to-zoom
  * - Lazy page-by-page rendering (only renders visible pages)
  *
@@ -62,6 +77,7 @@ class PdfViewerActivity : ComponentActivity() {
         const val EXTRA_URI = "pdf_uri"
         const val EXTRA_PAGE = "pdf_page"           // 1-indexed; 0 means restore saved page
         const val EXTRA_SEARCH_QUERY = "pdf_search"
+        const val EXTRA_MATCH_TEXT = "pdf_match_text" // the words around the match on EXTRA_PAGE
         const val EXTRA_FILE_NAME = "pdf_file_name"
 
         /** Convenience launcher. */
@@ -71,11 +87,13 @@ class PdfViewerActivity : ComponentActivity() {
             page: Int = 0,
             searchQuery: String = "",
             fileName: String = "",
+            matchText: String = "",
         ) {
             val intent = Intent(context, PdfViewerActivity::class.java).apply {
                 putExtra(EXTRA_URI, uri.toString())
                 putExtra(EXTRA_PAGE, page)
                 putExtra(EXTRA_SEARCH_QUERY, searchQuery)
+                putExtra(EXTRA_MATCH_TEXT, matchText)
                 putExtra(EXTRA_FILE_NAME, fileName)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
@@ -90,6 +108,7 @@ class PdfViewerActivity : ComponentActivity() {
         val uri = Uri.parse(uriString)
         val requestedPage = intent.getIntExtra(EXTRA_PAGE, 0)
         val searchQuery = intent.getStringExtra(EXTRA_SEARCH_QUERY) ?: ""
+        val matchText = intent.getStringExtra(EXTRA_MATCH_TEXT) ?: ""
         val fileName = intent.getStringExtra(EXTRA_FILE_NAME) ?: ""
         val targetPage = if (requestedPage > 0) {
             requestedPage
@@ -104,6 +123,7 @@ class PdfViewerActivity : ComponentActivity() {
                     uri = uri,
                     targetPage = targetPage,
                     searchQuery = searchQuery,
+                    matchText = matchText,
                     fileName = fileName,
                     onBack = { finish() },
                 )
@@ -124,6 +144,7 @@ private fun PdfViewerScreen(
     uri: Uri,
     targetPage: Int,
     searchQuery: String,
+    matchText: String,
     fileName: String,
     onBack: () -> Unit,
 ) {
@@ -135,7 +156,13 @@ private fun PdfViewerScreen(
     var pageCount by remember { mutableIntStateOf(0) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    val listState = rememberLazyListState()
+    // The list starts ON the requested page (targetPage is 1-indexed, the list 0-indexed):
+    // arriving from a search result must show that page at once, not page 1 and then a scroll
+    // through every page before it.
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = (targetPage - 1).coerceAtLeast(0))
+    // PdfRenderer allows one open page at a time. Pages that come on screen together used to
+    // render at once, and the one that lost was left as a spinner for good.
+    val renderLock = remember { Mutex() }
 
     // Open the PDF
     LaunchedEffect(uri) {
@@ -144,19 +171,27 @@ private fun PdfViewerScreen(
                 val fd = context.contentResolver.openFileDescriptor(uri, "r")
                     ?: throw IllegalStateException("Cannot open PDF")
                 val pdfRenderer = PdfRenderer(fd)
-                renderer = pdfRenderer
+                // The count first: the list is built the moment the renderer is set, and a list
+                // built with no pages yet would drop the starting page above.
                 pageCount = pdfRenderer.pageCount
+                renderer = pdfRenderer
             } catch (e: Exception) {
-                errorMessage = "Failed to open PDF: ${e.message}"
+                errorMessage = when (e) {
+                    // A document added with the picker stays where it was; the vault holds its
+                    // text and a link to it, and the link breaks if the file goes away.
+                    is SecurityException, is java.io.FileNotFoundException ->
+                        "This file can no longer be opened from where it was added. It may have " +
+                            "been moved or deleted. Add it again from Import documents."
+                    else -> "Failed to open PDF: ${e.message}"
+                }
             }
         }
     }
 
-    // Scroll to target page once loaded
+    // Belt and braces for the starting page, without animation.
     LaunchedEffect(pageCount, targetPage) {
-        if (pageCount > 0 && targetPage in 1..pageCount) {
-            // targetPage is 1-indexed, list is 0-indexed
-            listState.animateScrollToItem(targetPage - 1)
+        if (pageCount > 0 && targetPage in 1..pageCount && listState.firstVisibleItemIndex != targetPage - 1) {
+            listState.scrollToItem(targetPage - 1)
         }
     }
 
@@ -168,42 +203,53 @@ private fun PdfViewerScreen(
     }
 
     Scaffold(
+        containerColor = Cream,
         topBar = {
             TopAppBar(
                 title = {
                     Column {
                         Text(
                             text = fileName.ifBlank { "PDF Viewer" },
+                            color = CharcoalSoft,
+                            fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                         if (searchQuery.isNotBlank()) {
                             Text(
-                                text = "Searching: \"$searchQuery\" • Page $targetPage",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                text = "\"$searchQuery\" found on page $targetPage",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = WarmBrownDark,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
                 },
                 navigationIcon = {
                     TextButton(onClick = onBack) {
-                        Text("Close")
+                        Text("Close", color = WarmBrown)
                     }
                 },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Cream),
             )
         }
     ) { padding ->
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            // Room below the last page, so that it too can be brought to the top of the screen:
+            // without it a match on a document's final page landed part-way down, under the
+            // end of the page before it.
+            val spaceAfterLastPage = maxHeight * 0.4f
             when {
                 errorMessage != null -> {
                     Text(
                         text = errorMessage!!,
-                        color = MaterialTheme.colorScheme.error,
+                        color = PdfColor,
                         modifier = Modifier
                             .align(Alignment.Center)
                             .padding(32.dp),
@@ -212,6 +258,7 @@ private fun PdfViewerScreen(
 
                 renderer == null -> {
                     CircularProgressIndicator(
+                        color = WarmBrown,
                         modifier = Modifier.align(Alignment.Center)
                     )
                 }
@@ -220,24 +267,30 @@ private fun PdfViewerScreen(
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(8.dp),
+                        contentPadding = PaddingValues(start = 8.dp, top = 8.dp, end = 8.dp, bottom = spaceAfterLastPage),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         items(pageCount) { pageIndex ->
                             PdfPageCard(
                                 renderer = renderer!!,
+                                renderLock = renderLock,
                                 pageIndex = pageIndex,
                                 isTargetPage = pageIndex == targetPage - 1,
                                 searchQuery = searchQuery,
+                                matchText = matchText,
                             )
                         }
                     }
 
-                    // Page indicator
+                    // Page indicator: the page under the middle of the screen. The first visible
+                    // row is the page BEFORE the one being read whenever its last lines still show.
                     val currentPage = remember {
                         derivedStateOf {
-                            val first = listState.firstVisibleItemIndex + 1
-                            first
+                            val layout = listState.layoutInfo
+                            val middle = (layout.viewportStartOffset + layout.viewportEndOffset) / 2
+                            val reading = layout.visibleItemsInfo
+                                .firstOrNull { it.offset <= middle && it.offset + it.size > middle }
+                            (reading?.index ?: listState.firstVisibleItemIndex) + 1
                         }
                     }
 
@@ -250,7 +303,7 @@ private fun PdfViewerScreen(
 
                     Surface(
                         shape = RoundedCornerShape(20.dp),
-                        color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.85f),
+                        color = CharcoalSoft.copy(alpha = 0.85f),
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
                             .padding(16.dp),
@@ -258,7 +311,7 @@ private fun PdfViewerScreen(
                         Text(
                             text = "Page ${currentPage.value} of $pageCount",
                             style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.inverseOnSurface,
+                            color = Cream,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                         )
                     }
@@ -275,10 +328,14 @@ private fun PdfViewerScreen(
 @Composable
 private fun PdfPageCard(
     renderer: PdfRenderer,
+    renderLock: Mutex,
     pageIndex: Int,
     isTargetPage: Boolean,
     searchQuery: String,
+    matchText: String,
 ) {
+    // The page a search opened on is marked only when the search found words on it.
+    val isMatch = isTargetPage && searchQuery.isNotBlank()
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
@@ -288,19 +345,24 @@ private fun PdfPageCard(
     LaunchedEffect(pageIndex) {
         withContext(Dispatchers.IO) {
             try {
-                val page = renderer.openPage(pageIndex)
-                // Render at 2x for clarity on high-DPI screens
-                val scaleFactor = 2
-                val bmp = Bitmap.createBitmap(
-                    page.width * scaleFactor,
-                    page.height * scaleFactor,
-                    Bitmap.Config.ARGB_8888
-                )
-                val canvas = Canvas(bmp)
-                canvas.drawColor(android.graphics.Color.WHITE)
-                page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                page.close()
-                bitmap = bmp
+                bitmap = renderLock.withLock {
+                    val page = renderer.openPage(pageIndex)
+                    try {
+                        // Render at 2x for clarity on high-DPI screens
+                        val scaleFactor = 2
+                        val bmp = Bitmap.createBitmap(
+                            page.width * scaleFactor,
+                            page.height * scaleFactor,
+                            Bitmap.Config.ARGB_8888
+                        )
+                        val canvas = Canvas(bmp)
+                        canvas.drawColor(android.graphics.Color.WHITE)
+                        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                        bmp
+                    } finally {
+                        page.close()
+                    }
+                }
             } catch (e: Exception) {
                 // Page render failed — leave bitmap null
             }
@@ -309,47 +371,48 @@ private fun PdfPageCard(
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(4.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isTargetPage)
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
-            else
-                MaterialTheme.colorScheme.surface
-        ),
-        border = if (isTargetPage)
-            CardDefaults.outlinedCardBorder().copy(
-                brush = androidx.compose.ui.graphics.SolidColor(
-                    MaterialTheme.colorScheme.primary
-                )
-            )
-        else null,
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        border = BorderStroke(if (isMatch) 1.5.dp else 1.dp, if (isMatch) PdfColor else CreamDark),
     ) {
         Column {
             // Page number header
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .background(if (isMatch) PdfWash else CreamLight)
                     .padding(horizontal = 12.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
                     text = "Page ${pageIndex + 1}",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = if (isTargetPage) FontWeight.Bold else FontWeight.Normal,
-                    color = if (isTargetPage)
-                        MaterialTheme.colorScheme.primary
-                    else
-                        MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (isMatch) FontWeight.Bold else FontWeight.Normal,
+                    color = if (isMatch) PdfColor else WarmBrownDark,
                 )
-                if (isTargetPage && searchQuery.isNotBlank()) {
+                if (isMatch) {
                     Text(
-                        text = "Match found",
-                        style = MaterialTheme.typography.labelSmall,
+                        text = "Match on this page",
+                        style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = PdfColor,
                     )
                 }
+            }
+            // The words the search found, so the eye knows what to look for on the page.
+            if (isMatch && matchText.isNotBlank()) {
+                Text(
+                    text = remember(matchText, searchQuery) { withQueryWordsMarked(matchText, searchQuery) },
+                    color = WarmBrownDark,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(PdfWash)
+                        .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
+                )
             }
 
             // Page content
@@ -388,7 +451,7 @@ private fun PdfPageCard(
                             ),
                     )
                 } else {
-                    CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                    CircularProgressIndicator(color = WarmBrown, modifier = Modifier.size(32.dp))
                 }
             }
         }

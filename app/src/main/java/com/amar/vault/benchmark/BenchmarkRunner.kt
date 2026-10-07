@@ -123,6 +123,11 @@ class BenchmarkRunner private constructor(
         runModule("Retrieval quality", full || suite == BenchmarkSuite.RETRIEVAL) {
             RetrievalEvaluator(retrieval, repository).evaluate(cases)
         }
+        // The same golden queries under each behaviour-sensitive retrieval switch — measurement
+        // only (per-request tuning; no production default changes).
+        runModule("Retrieval ablation", full || suite == BenchmarkSuite.RETRIEVAL) {
+            RetrievalAblationBenchmark(RetrievalEvaluator(retrieval, repository), semantic).run(cases)
+        }
         // Sprint 4B: acronym equivalence rides the retrieval suite (self-contained pairs,
         // no golden dataset dependency).
         runModule("Acronym equivalence", full || suite == BenchmarkSuite.RETRIEVAL) {

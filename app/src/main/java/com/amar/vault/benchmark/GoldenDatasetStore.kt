@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import com.amar.vault.VaultLog
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
@@ -37,6 +38,9 @@ class GoldenDatasetStore(private val context: Context) {
     companion object {
         const val ASSET_DIR = "benchmark/GoldenDataset"
         const val DEVICE_DIR = "benchmark/GoldenDataset"
+
+        /** Device-side dataset written by Dev Tools → Golden Queries. */
+        const val CAPTURED_DATASET = "captured"
     }
 
     private val deviceDir: File get() = File(context.filesDir, DEVICE_DIR)
@@ -115,6 +119,79 @@ class GoldenDatasetStore(private val context: Context) {
             }.onFailure {
                 VaultLog.w("GoldenDataset", "Skipping asset dataset $name: ${it.message}")
             }.getOrNull()
+        }
+    }
+
+    // ── Captured dataset (Dev Tools → Golden Queries) ────────────────────────────────────
+
+    private val capturedFile: File get() = File(deviceDir, "$CAPTURED_DATASET.json")
+
+    /** Cases written by the in-app capture screen, oldest first. Empty when none exist yet. */
+    fun capturedCases(): List<BenchmarkCase> =
+        if (!capturedFile.exists()) emptyList()
+        else runCatching { parseDataset(CAPTURED_DATASET, capturedFile.readText()).cases }.getOrDefault(emptyList())
+
+    /**
+     * Append one retrieval case to the device-side `captured` dataset: a query a person typed
+     * and the documents that person marked as the right answers ([expectedDocumentIds], most
+     * relevant first). Ids are `parentDocumentId ?: id` — the same collapse
+     * [RetrievalEvaluator] scores on. The expected set is a human choice; it must never be
+     * filled in from the ranking that is being evaluated.
+     *
+     * @throws org.json.JSONException if an existing captured file is not valid JSON — it is
+     *         left untouched rather than overwritten, so hand edits are never silently lost.
+     */
+    fun appendCapturedCase(
+        query: String,
+        expectedDocumentIds: List<String>,
+        contentType: BenchmarkContentType,
+        notes: String = "",
+    ): BenchmarkCase {
+        require(query.isNotBlank()) { "query is blank" }
+        require(expectedDocumentIds.isNotEmpty()) { "no expected documents" }
+        val root = readCaptured()
+        val cases = root.getJSONArray("cases")
+        val case = JSONObject()
+            .put("id", "captured-${System.currentTimeMillis()}-${cases.length() + 1}")
+            .put("contentType", contentType.name)
+            .put("documentId", expectedDocumentIds.first())
+            .put("queries", JSONArray(listOf(query.trim())))
+            .put("expectedResults", JSONArray(expectedDocumentIds))
+            .put("expectedRank", JSONArray(expectedDocumentIds))
+            .put("notes", notes)
+        cases.put(case)
+        writeCaptured(root)
+        return BenchmarkCase.fromJson(case)
+    }
+
+    /** Remove one captured case by id. Returns false when no such case exists. */
+    fun removeCapturedCase(caseId: String): Boolean {
+        if (!capturedFile.exists()) return false
+        val root = readCaptured()
+        val cases = root.getJSONArray("cases")
+        val kept = JSONArray()
+        var removed = false
+        for (i in 0 until cases.length()) {
+            val case = cases.getJSONObject(i)
+            if (case.optString("id") == caseId) removed = true else kept.put(case)
+        }
+        if (removed) writeCaptured(root.put("cases", kept))
+        return removed
+    }
+
+    private fun readCaptured(): JSONObject =
+        if (!capturedFile.exists()) JSONObject().put("name", CAPTURED_DATASET).put("cases", JSONArray())
+        else JSONObject(capturedFile.readText()).also { it.getJSONArray("cases") }
+
+    private fun writeCaptured(root: JSONObject) {
+        deviceDir.mkdirs()
+        val temp = File(deviceDir, "$CAPTURED_DATASET.json.tmp")
+        temp.writeText(root.toString(2))
+        val target = capturedFile
+        if (target.exists()) target.delete()
+        if (!temp.renameTo(target)) {
+            temp.delete()
+            throw java.io.IOException("could not write ${target.absolutePath}")
         }
     }
 
