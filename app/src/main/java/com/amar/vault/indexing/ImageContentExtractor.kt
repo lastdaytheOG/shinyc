@@ -195,6 +195,14 @@ class ImageContentExtractor(private val context: Context) {
         val recorder = OcrInstrumentation.recorderOrNull()
         // Sprint E4 — input geometry + whole-ladder wall time (observation only).
         recorder?.setInput(bitmap.width, bitmap.height)
+
+        // NPU-OCR step 4 — dev-only C1 calibration capture. No-op unless the capture toggle is on.
+        // Deliberately BEFORE tLadder: writing a PNG costs real milliseconds, and folding that into
+        // the ladder's measured time would corrupt every OCR latency metric during a capture run.
+        // Captures the bitmap exactly as received, before any preprocessing — that is the tensor a
+        // future NPU detector would be fed, and calibration is only valid on the real distribution.
+        OcrPageCapture.capture(context, bitmap, sourceId)
+
         val tLadder = System.currentTimeMillis()
 
         if (AdaptivePdfOcrControl.mode == AdaptivePdfOcrControl.Mode.LEGACY_ENSEMBLE) {

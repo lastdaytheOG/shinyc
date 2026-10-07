@@ -36,6 +36,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.amar.vault.ui.theme.Cream
 import com.amar.vault.ui.theme.CreamLight
 import com.amar.vault.ui.theme.CharcoalSoft
@@ -45,16 +48,27 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * [onDocumentsChosen] is called, before the choices are saved, when the Documents switch is on:
+ * documents cannot be found automatically the way photos are, so the caller opens the import
+ * screen once onboarding is done.
+ */
 @Composable
-fun OnboardingScreen(onComplete: () -> Unit) {
+fun OnboardingScreen(onComplete: () -> Unit, onDocumentsChosen: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Load photo counts off the main thread to avoid frame skipping
+    // Load photo counts off the main thread to avoid frame skipping. Counted again each time
+    // the screen resumes: on a first launch the first count runs behind the system's photo
+    // permission dialog, before access is granted, and reads zero — which left "0 photos" on
+    // screen and the scan below never started.
     var photoCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
-    LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) {
-            photoCounts = countPhotosPerFolder(context)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            withContext(Dispatchers.IO) {
+                photoCounts = countPhotosPerFolder(context)
+            }
         }
     }
 
@@ -179,7 +193,7 @@ fun OnboardingScreen(onComplete: () -> Unit) {
         ToggleCard(
             emoji = "📄",
             title = "Documents",
-            subtitle = "PDFs, DOCX, XLSX, EPUB",
+            subtitle = "PDFs, DOCX, XLSX, EPUB — you pick them next",
             checked = scanDocuments,
             onCheckedChange = { scanDocuments = it },
         )
@@ -230,6 +244,7 @@ fun OnboardingScreen(onComplete: () -> Unit) {
                         scanDownloads = scanDownloads,
                         scanDocuments = scanDocuments,
                     )
+                    if (scanDocuments) onDocumentsChosen()
                     ScanPreferences.save(context, prefs)
                     ScanPreferences.markOnboardingDone(context)
 
@@ -249,7 +264,7 @@ fun OnboardingScreen(onComplete: () -> Unit) {
                 containerColor = CharcoalSoft,
                 contentColor = Color.White,
             ),
-            enabled = scanAll || scanScreenshots || scanCamera || scanWhatsApp || scanDownloads,
+            enabled = scanAll || scanScreenshots || scanCamera || scanWhatsApp || scanDownloads || scanDocuments,
         ) {
             Text(
                 if (totalPhotos > 0) "Start Scanning ($totalPhotos photos)"

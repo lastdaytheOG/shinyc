@@ -264,8 +264,7 @@ private fun DetailPdfMedia(item: StashItemWithVaultItem) {
     
     val pageCount = remember(item.uri) {
         runCatching {
-            val uri = Uri.parse(item.uri)
-            val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return@runCatching 0
+            val pfd = PdfPreviewGenerator.open(context, item.uri) ?: return@runCatching 0
             val renderer = PdfRenderer(pfd)
             val count = renderer.pageCount
             renderer.close()
@@ -335,8 +334,7 @@ private fun PdfDetailViewer(context: Context, uriString: String, pageIndex: Int)
 private fun renderPdfPage(context: Context, uriString: String, pageIndex: Int): Bitmap? {
     if (uriString.isBlank()) return null
     return try {
-        val uri = Uri.parse(uriString)
-        val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return null
+        val pfd = PdfPreviewGenerator.open(context, uriString) ?: return null
         pfd.use {
             val renderer = PdfRenderer(pfd)
             if (pageIndex < renderer.pageCount) {

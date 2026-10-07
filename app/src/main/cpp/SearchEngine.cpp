@@ -221,7 +221,11 @@ std::vector<std::string> SearchEngine::search(const std::string& query) {
         ranked.begin(),
         ranked.begin() + topN,
         ranked.end(),
-        [](const auto& a, const auto& b) { return a.second > b.second; }
+        // Equal scores fall back to insertion order, so the first N of a deeper read are
+        // exactly what a shallower read returns.
+        [](const auto& a, const auto& b) {
+            return a.second != b.second ? a.second > b.second : a.first < b.first;
+        }
     );
 
     std::vector<std::string> results;

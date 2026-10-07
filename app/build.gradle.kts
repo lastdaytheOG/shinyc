@@ -9,6 +9,16 @@ plugins {
     id("com.google.dagger.hilt.android")
 }
 
+// Size switches. The default build is unchanged (both ABIs, embedding model bundled).
+//   -PnoEmbeddingModel  leave the ~570 MB embedding model out of the APK; the app then runs
+//                       keyword-only until a model is installed (AppEmbeddingEngine.isAvailable).
+//   -PabiOnly=<abi>     package one ABI only: arm64-v8a (phones) or x86_64 (emulator).
+//   -PphoneApk          no model + arm64-v8a only — the APK to hand to someone with a real
+//                       phone. Measured 2026-10-04: 775 MB → 126 MB.
+val phoneApk: Boolean = providers.gradleProperty("phoneApk").isPresent
+val noEmbeddingModel: Boolean = phoneApk || providers.gradleProperty("noEmbeddingModel").isPresent
+val abiOnly: String? = if (phoneApk) "arm64-v8a" else providers.gradleProperty("abiOnly").orNull
+
 android {
     namespace = "com.amar.vault"
     compileSdk = 35
@@ -33,7 +43,7 @@ android {
         }
 
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters += abiOnly?.let { listOf(it) } ?: listOf("arm64-v8a", "x86_64")
         }
     }
 
@@ -59,6 +69,11 @@ android {
 
     androidResources {
         noCompress += listOf("onnx", "tflite", "bin", "litertlm", "task", "gguf")
+        if (noEmbeddingModel) {
+            // AAPT's default ignore list plus the embedding model.
+            ignoreAssetsPattern =
+                "!.svn:!.git:!.ds_store:!*.scc:.*:<dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~:!bge-m3-ocr-int4.onnx"
+        }
     }
 
     lint {
@@ -241,69 +256,4 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
-}
-
-// Phase 1 Step 1.5: offline replay analyzer task.
-// Usage: gradlew analyzeReplay -PreplayFile=path/to/replay.json
-tasks.register<JavaExec>("analyzeReplay") {
-    description = "Analyze a replay JSON file and print timeline."
-    group = "verification"
-    dependsOn("compileDebugKotlin")
-    mainClass.set("com.amar.vault.agent.replay.ReplayAnalyzerKt")
-    classpath = files(
-        layout.buildDirectory.dir("tmp/kotlin-classes/debug"),
-        layout.buildDirectory.dir("intermediates/javac/debug/classes"),
-        configurations.named("debugRuntimeClasspath")
-    )
-    val replayFile: String? = if (project.hasProperty("replayFile")) {
-        project.property("replayFile") as String
-    } else null
-    if (replayFile != null) {
-        args = listOf(replayFile)
-    }
-    standardOutput = System.out
-}
-
-// Phase 2 Step 2.3: telemetry aggregator task.
-// Usage: gradlew aggregateTelemetry -PreplayDir=... -PoutputCsv=...
-tasks.register<JavaExec>("aggregateTelemetry") {
-    description = "Aggregate replay files into a telemetry CSV."
-    group = "verification"
-    dependsOn("compileDebugKotlin")
-    mainClass.set("com.amar.vault.agent.telemetry.TelemetryAggregatorKt")
-    classpath = files(
-        layout.buildDirectory.dir("tmp/kotlin-classes/debug"),
-        layout.buildDirectory.dir("intermediates/javac/debug/classes"),
-        configurations.named("debugRuntimeClasspath")
-    )
-    val replayDir: String = if (project.hasProperty("replayDir")) {
-        project.property("replayDir") as String
-    } else "replays"
-    val outputCsv: String = if (project.hasProperty("outputCsv")) {
-        project.property("outputCsv") as String
-    } else "telemetry.csv"
-    args = listOf(replayDir, outputCsv)
-    standardOutput = System.out
-}
-
-// Phase 3: regression harness.
-// Usage: gradlew regression -Pmanifest=canonical_workflows.json -PreplayDir=replays
-tasks.register<JavaExec>("regression") {
-    description = "Run regression harness against canonical workflow manifest."
-    group = "verification"
-    dependsOn("compileDebugKotlin")
-    mainClass.set("com.amar.vault.agent.regression.RegressionHarnessKt")
-    classpath = files(
-        layout.buildDirectory.dir("tmp/kotlin-classes/debug"),
-        layout.buildDirectory.dir("intermediates/javac/debug/classes"),
-        configurations.named("debugRuntimeClasspath")
-    )
-    val manifest: String = if (project.hasProperty("manifest")) {
-        project.property("manifest") as String
-    } else "${project.rootDir}/regression/canonical_workflows.json"
-    val replayDir: String = if (project.hasProperty("replayDir")) {
-        project.property("replayDir") as String
-    } else "${project.rootDir}/replays"
-    args = listOf(manifest, replayDir)
-    standardOutput = System.out
 }

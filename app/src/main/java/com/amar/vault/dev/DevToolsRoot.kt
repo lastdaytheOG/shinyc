@@ -13,12 +13,13 @@ import androidx.compose.ui.unit.dp
 /**
  * Self-contained navigation host for the (minimal) Developer Tools.
  *
- * Three utilities exist by design — Index Files, AI Models, and Benchmarks (Sprint 3C) — to
- * support the adb-push → select-in-app testing workflow. Kept isolated in [com.amar.vault.dev] so the production
+ * Four utilities exist by design — Index Files, AI Models, Benchmarks (Sprint 3C), and Golden
+ * Queries (the in-app way to write retrieval test cases) — to support the adb-push →
+ * select-in-app testing workflow. Kept isolated in [com.amar.vault.dev] so the production
  * [com.amar.vault.Screen] graph has exactly ONE entry (DEV_TOOLS). Reachable only when
  * [DeveloperMode.isEnabled].
  */
-enum class DevRoute { HUB, INDEX_FILES, AI_MODELS, BENCHMARKS }
+enum class DevRoute { HUB, INDEX_FILES, AI_MODELS, BENCHMARKS, GOLDEN_QUERIES }
 
 @Composable
 fun DevToolsRoot(onExit: () -> Unit) {
@@ -30,6 +31,7 @@ fun DevToolsRoot(onExit: () -> Unit) {
         DevRoute.INDEX_FILES -> ManualIndexingScreen(onBack = back)
         DevRoute.AI_MODELS -> ModelDataManagerScreen(onBack = back)
         DevRoute.BENCHMARKS -> BenchmarkDashboardScreen(onBack = back)
+        DevRoute.GOLDEN_QUERIES -> GoldenCaptureScreen(onBack = back)
     }
 }
 
@@ -43,6 +45,7 @@ private fun DevToolsHub(onExit: () -> Unit, onNavigate: (DevRoute) -> Unit) {
         DevNavCard("Index Files", "Pick files/folders or quick-scan, with pause/resume", "🗂️") { onNavigate(DevRoute.INDEX_FILES) }
         DevNavCard("AI Models", "Scan/import GGUF · load · test Summary/Chat/RAG", "🧠") { onNavigate(DevRoute.AI_MODELS) }
         DevNavCard("Benchmarks", "Run evaluation suites · regression vs baseline · reports", "📊") { onNavigate(DevRoute.BENCHMARKS) }
+        DevNavCard("Golden Queries", "Type a real query · mark the right answers · scored by Benchmarks", "🎯") { onNavigate(DevRoute.GOLDEN_QUERIES) }
         Spacer(Modifier.height(8.dp))
     }
 }

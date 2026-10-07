@@ -20,24 +20,36 @@ object AppEmbeddingEngine {
 
     val readyState = MutableStateFlow(false)
 
+    // Set when a load attempt failed (corrupt or incompatible model file): stops every later
+    // query and indexed image from retrying a load that costs seconds and fails again.
+    @Volatile
+    private var loadFailed = false
+
+    /**
+     * Whether embeddings can be produced on this install. False when the build ships no
+     * model and none has been installed, or when loading it failed. Callers check this
+     * BEFORE [get]/[embedPassage]/[embedQuery]; search and indexing then run keyword-only.
+     */
+    fun isAvailable(context: Context): Boolean =
+        !loadFailed && (instance != null || EmbeddingEngine.isModelPresent(context))
+
     private const val QUERY_PREFIX   = "query: "
     private const val PASSAGE_PREFIX = ""
 
     fun initialize(context: Context) {
-        if (instance != null) return
-        synchronized(this) {
-            if (instance == null) {
-                instance = EmbeddingEngine(context.applicationContext)
-                readyState.value = true
-            }
-        }
+        get(context)
     }
 
     fun get(context: Context): EmbeddingEngine {
         return instance ?: synchronized(this) {
-            instance ?: EmbeddingEngine(context.applicationContext).also {
-                instance = it
-                readyState.value = true
+            instance ?: try {
+                EmbeddingEngine(context.applicationContext).also {
+                    instance = it
+                    readyState.value = true
+                }
+            } catch (e: Exception) {
+                loadFailed = true
+                throw e
             }
         }
     }

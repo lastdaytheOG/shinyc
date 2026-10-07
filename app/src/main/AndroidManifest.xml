@@ -30,8 +30,6 @@
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="33" />
-    <uses-permission android:name="android.permission.SEND_SMS"/>
-    <uses-permission android:name="android.permission.CALL_PHONE"/>
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
@@ -129,20 +127,6 @@
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
 
-        <!-- TODO(Phase4_AgentRuntime): Restore PerceptionService when Agent Runtime is reintegrated.
-        <service
-            android:name=".agent.perception.PerceptionService"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/perception_service_config" />
-        </service>
-        -->
-
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.provider"
@@ -176,24 +160,6 @@
                 android:name="androidx.work.WorkManagerInitializer"
                 tools:node="remove" />
         </provider>
-
-        <!-- TODO(Phase4_AgentRuntime): Restore receivers when Agent Runtime is reintegrated.
-        <receiver
-            android:name=".agent.runtime.replay.EventHistoryDebugReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.amar.vault.DEBUG_EVENT_HISTORY" />
-            </intent-filter>
-        </receiver>
-
-        <receiver
-            android:name=".agent.runtime.telemetry.TelemetryDebugReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.amar.vault.DEBUG_TELEMETRY" />
-            </intent-filter>
-        </receiver>
-        -->
 
     </application>
 

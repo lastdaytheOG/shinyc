@@ -29,6 +29,10 @@ class DocumentContentExtractor(
 
     fun isSupported(mimeType: String): Boolean = registry.isSupported(mimeType)
 
+    /** See [DocumentFormatRegistry.resolveMimeType]. */
+    fun resolveMimeType(declared: String?, fileName: String?): String? =
+        registry.resolveMimeType(declared, fileName)
+
     /** Extracted, paged-and-chunked document content plus the format's tag/itemType descriptors. */
     data class Content(
         val pagedChunks: List<PagedChunk>,

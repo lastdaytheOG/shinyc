@@ -36,6 +36,11 @@ data class PagedChunk(val text: String, val pdfPage: Int?, val chunkIndex: Int)
  */
 interface FormatExtractor {
     val mimeTypes: Set<String>
+    /**
+     * File-name extensions of this format, lowercase and without the dot. They identify a file
+     * whose provider gave no usable type ("application/octet-stream", or none at all).
+     */
+    val extensions: Set<String>
     /** Family tag prepended to generated tags (was DocFamily.tag). */
     val tag: String
     /** VaultItem.itemType for chunks of this family (was DocFamily.itemType). */
@@ -85,6 +90,7 @@ internal fun openDocStream(context: Context, uri: Uri): InputStream =
  */
 class PdfFormatExtractor : FormatExtractor {
     override val mimeTypes = setOf("application/pdf")
+    override val extensions = setOf("pdf")
     override val tag = "pdf document"
     override val itemType = "pdf"
 
@@ -646,6 +652,7 @@ class PdfFormatExtractor : FormatExtractor {
 /** DOCX — whole-document text, then chunked. */
 class WordFormatExtractor : FormatExtractor {
     override val mimeTypes = setOf("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    override val extensions = setOf("docx")
     override val tag = "word document"
     override val itemType = "word"
 
@@ -662,6 +669,7 @@ class WordFormatExtractor : FormatExtractor {
 /** XLSX — flattened sheet text, then chunked. */
 class ExcelFormatExtractor : FormatExtractor {
     override val mimeTypes = setOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    override val extensions = setOf("xlsx")
     override val tag = "spreadsheet excel"
     override val itemType = "excel"
 
@@ -684,6 +692,7 @@ class ExcelFormatExtractor : FormatExtractor {
 /** EPUB — spine-ordered HTML text, then chunked. */
 class EpubFormatExtractor : FormatExtractor {
     override val mimeTypes = setOf("application/epub+zip")
+    override val extensions = setOf("epub")
     override val tag = "ebook epub"
     override val itemType = "epub"
 
@@ -731,9 +740,20 @@ class DocumentFormatRegistry(extractors: List<FormatExtractor> = DEFAULT) {
     private val byMime: Map<String, FormatExtractor> =
         extractors.flatMap { e -> e.mimeTypes.map { it to e } }.toMap()
 
+    private val mimeByExtension: Map<String, String> =
+        extractors.flatMap { e -> e.extensions.map { it to e.mimeTypes.first() } }.toMap()
+
     fun extractorFor(mimeType: String): FormatExtractor? = byMime[mimeType]
     fun isSupported(mimeType: String): Boolean = byMime.containsKey(mimeType)
     val supportedMimeTypes: Set<String> get() = byMime.keys
+
+    /**
+     * The supported type to index a file as: the declared type when it is one, else the type
+     * its file name says. Null when neither names a supported format.
+     */
+    fun resolveMimeType(declared: String?, fileName: String?): String? =
+        declared?.trim()?.lowercase()?.takeIf(::isSupported)
+            ?: mimeByExtension[fileName?.substringAfterLast('.', "")?.trim()?.lowercase()]
 
     companion object {
         /** Register a new format here — nothing else changes. */

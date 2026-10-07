@@ -7,10 +7,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -33,7 +35,29 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.ExperimentalFoundationApi
+import android.content.Context
+import com.amar.vault.share.open.ShareContentUri
 import com.amar.vault.ui.theme.*
+
+/**
+ * Opens a stored PDF in the in-app viewer on the page the query was found on. False for
+ * anything that is not one (a Word file, a link to a PDF); the caller opens those its own way.
+ */
+private fun openAtMatch(context: Context, hit: SearchHit, query: String): Boolean {
+    val item = hit.row
+    if (ContentSpecies.classify(item) != ContentSpecies.PDF || item.uri.startsWith("http", ignoreCase = true)) return false
+    val uri = ShareContentUri.resolve(context, item.uri) ?: return false
+    PdfViewerActivity.open(
+        context = context,
+        uri = uri,
+        // Found by its name only: no page to go to, so the viewer returns to where it was left.
+        page = hit.page ?: 0,
+        searchQuery = if (hit.page != null) hit.similarWord ?: query.trim() else "",
+        fileName = item.title ?: item.sourceFile,
+        matchText = hit.excerpt.orEmpty(),
+    )
+    return true
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -47,17 +71,36 @@ fun SearchOverlayScreen(
     val haptic = LocalHapticFeedback.current
     val queryText by viewModel.query.collectAsState()
     val isSearchLoading by viewModel.isSearchLoading.collectAsState()
-    val resultsList by viewModel.results.collectAsState()
+    val resultsList by viewModel.searchHits.collectAsState()
     val activeFilter by viewModel.activeFilter.collectAsState()
     val quickFilters = viewModel.quickFilters
     val recentSearches by viewModel.recentSearches.collectAsState()
     val searchSuggestions by viewModel.searchSuggestions.collectAsState()
+    val similarSpellingsOnly by viewModel.similarSpellingsOnly.collectAsState()
 
     // Detailed overlay for search results spatial continuity
     var activeDetailItem by remember { mutableStateOf<StashItemWithVaultItem?>(null) }
     
-    // Results come directly as StashItemWithVaultItem from updated ViewModel
+    // Each result is the card to show plus, for a document, the page and words that matched.
     val mappedResults = resultsList
+
+    // The box keeps its text between visits, so search again for what is in the vault now.
+    LaunchedEffect(Unit) { viewModel.refreshSearch() }
+
+    // Every new result list is shown from its first, best row. A LazyColumn with keys keeps the
+    // row that was on top where it is; when a later search stage (or the next keystroke) ranked
+    // better matches above that row, they were laid out off-screen above it and the best result
+    // looked missing. Once the user has dragged this query's list it is left where they put it.
+    val listState = rememberLazyListState()
+    var draggedByUser by remember(queryText, activeFilter) { mutableStateOf(false) }
+    LaunchedEffect(listState, queryText, activeFilter) {
+        listState.interactionSource.interactions.collect {
+            if (it is DragInteraction.Start) draggedByUser = true
+        }
+    }
+    LaunchedEffect(mappedResults) {
+        if (!draggedByUser) listState.scrollToItem(0)
+    }
 
     Box(
         modifier = Modifier
@@ -166,6 +209,13 @@ fun SearchOverlayScreen(
                     onDeleteSearch = { viewModel.deleteRecentSearch(it) },
                     onClearAll = { viewModel.clearHistory() }
                 )
+            } else if (mappedResults.isEmpty() && activeFilter != SearchFilter.ALL) {
+                // Nothing under this chip: say that it is the chip, and offer the way out of it.
+                com.amar.vault.ui.components.search.EmptyStateView(
+                    query = queryText,
+                    filter = activeFilter,
+                    onSearchEverything = { viewModel.updateFilter(SearchFilter.ALL) }
+                )
             } else if (mappedResults.isEmpty() && searchSuggestions.isNotEmpty()) {
                 com.amar.vault.ui.components.search.SearchSuggestionsView(
                     suggestions = searchSuggestions,
@@ -180,34 +230,84 @@ fun SearchOverlayScreen(
                     onClick = { onEntityClick(queryText) },
                     modifier = Modifier.padding(horizontal = 20.dp)
                 ) {
-                    Text("See everything about \"$queryText\"", color = WarmBrown, fontSize = 14.sp)
+                    Text("See everything about \"${queryText.trim()}\"", color = WarmBrown, fontSize = 14.sp)
                 }
-                // To keep it simple and abide by "Do not modify the rendering layer",
-                // we pass the exact original items to CollectibleVaultCard, avoiding complex highlighted text injections.
+                // Look-alikes are said to be look-alikes, not passed off as matches.
+                if (similarSpellingsOnly) {
+                    Text(
+                        text = "Nothing has \"${queryText.trim()}\" as typed. These have a word spelt nearly the same.",
+                        color = WarmBrownDark,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                        modifier = Modifier.padding(horizontal = 32.dp)
+                    )
+                }
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
                     contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    items(mappedResults, key = { it.stashId }) { item ->
-                        CollectibleVaultCard(
-                            item = item,
-                            onClick = {
-                                viewModel.recordSearch(queryText)
-                                activeDetailItem = item
-                            },
-                            onLongClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            },
-                            screenBg = Cream,
-                            cardBg = CreamLight,
-                            primaryText = CharcoalSoft,
-                            secondaryText = WarmBrownDark,
-                            borderColor = CreamDark,
-                            modifier = Modifier.animateItemPlacement()
-                        )
+                    items(mappedResults, key = { it.row.stashId }) { hit ->
+                        val item = hit.row
+                        val isImage = remember(item) { SearchFilter.isImage(item.itemType, item.mimeType, item.uri) }
+                        val isDocument = remember(item) {
+                            !isImage && (ContentSpecies.classify(item) == ContentSpecies.PDF ||
+                                ContentSpecies.isOfficeDocument(item.itemType, item.mimeType, item.uri))
+                        }
+                        if (isImage) {
+                            // A picture is shown as the picture, with the words read off it that
+                            // matched, and opens full screen. Its details are a long press away.
+                            com.amar.vault.ui.components.search.ImageHitCard(
+                                hit = hit,
+                                query = queryText,
+                                onClick = {
+                                    viewModel.recordSearch(queryText)
+                                    AmarImageViewerActivity.open(context, item.toVaultItem())
+                                },
+                                onLongClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    activeDetailItem = item
+                                },
+                                modifier = Modifier.animateItemPlacement()
+                            )
+                        } else if (isDocument) {
+                            // A document shows the words that matched and opens on their page.
+                            // What the card used to open — folder, note, delete — is a long press away.
+                            com.amar.vault.ui.components.search.DocumentHitCard(
+                                hit = hit,
+                                query = queryText,
+                                onClick = {
+                                    viewModel.recordSearch(queryText)
+                                    if (!openAtMatch(context, hit, queryText)) activeDetailItem = item
+                                },
+                                onLongClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    activeDetailItem = item
+                                },
+                                modifier = Modifier.animateItemPlacement()
+                            )
+                        } else {
+                            // Every other kind keeps the shared card, drawn from the item as stored.
+                            CollectibleVaultCard(
+                                item = item,
+                                onClick = {
+                                    viewModel.recordSearch(queryText)
+                                    activeDetailItem = item
+                                },
+                                onLongClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                },
+                                screenBg = Cream,
+                                cardBg = CreamLight,
+                                primaryText = CharcoalSoft,
+                                secondaryText = WarmBrownDark,
+                                borderColor = CreamDark,
+                                modifier = Modifier.animateItemPlacement()
+                            )
+                        }
                     }
                 }
             }

@@ -100,4 +100,23 @@ regress.bat
 # ==============================
 .DS_Store
 Thumbs.db
-desktop.inidocs/
+desktop.ini
+
+# ==============================
+# Local-only folders
+# ==============================
+# docs/ was removed from the repository on purpose (commit 17c64dc); the rule had been
+# glued onto the line above ("desktop.inidocs/") and never matched.
+docs/
+# Built APKs handed to the phone (126 MB to 775 MB each).
+apk/
+# Phone report screenshots dropped in the project root (1.jpg, 2.jpg, ...).
+/*.jpg
+/*.jpeg
+/*.png
+
+# ==============================
+# Python caches (tools/)
+# ==============================
+__pycache__/
+*.pyc

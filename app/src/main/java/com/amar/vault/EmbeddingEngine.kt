@@ -27,13 +27,35 @@ class EmbeddingEngine(context: Context) {
             copyModelToStorage(context)
         }
 
+        /**
+         * Whether a model can be loaded at all: already in app storage, or bundled in the
+         * APK's assets. A build may ship without the model (it is ~570 MB); every caller
+         * must treat the embedder as optional and leave keyword search working.
+         */
+        fun isModelPresent(context: Context): Boolean {
+            if (File(context.filesDir, MODEL_CACHE).exists()) return true
+            // Assets cannot change while the app runs, so the listing is read once.
+            return bundledInAssets
+                ?: (context.assets.list("")?.contains(MODEL_FILE) == true).also { bundledInAssets = it }
+        }
+
+        @Volatile
+        private var bundledInAssets: Boolean? = null
+
         private fun copyModelToStorage(context: Context): File {
             val cacheFile = File(context.filesDir, MODEL_CACHE)
             if (!cacheFile.exists()) {
+                // Copy to a temp name and rename: a process killed mid-copy must not leave a
+                // truncated file that "exists" and then fails to load on every later launch.
+                val partial = File(context.filesDir, "$MODEL_CACHE.part")
                 context.assets.open(MODEL_FILE).use { input ->
-                    cacheFile.outputStream().use { output ->
+                    partial.outputStream().use { output ->
                         input.copyTo(output, bufferSize = 8 * 1024 * 1024)
                     }
+                }
+                if (!partial.renameTo(cacheFile)) {
+                    partial.delete()
+                    throw java.io.IOException("could not move embedding model into place")
                 }
             }
             return cacheFile
@@ -43,6 +65,9 @@ class EmbeddingEngine(context: Context) {
     private val ortEnv: OrtEnvironment = OrtEnvironment.getEnvironment()
     private val session: OrtSession
     private val tokenizer: SimpleTokenizer
+
+    // Whether the exported graph declares a token_type_ids input — decided once at load.
+    private val feedsTokenTypeIds: Boolean
 
     // ELITE FIX: Protects native zero-copy memory from concurrent Search vs Indexing writes
     private val embedMutex = Mutex()
@@ -94,19 +119,28 @@ class EmbeddingEngine(context: Context) {
 
         session   = ortEnv.createSession(modelFile.absolutePath, opts)
         tokenizer = SimpleTokenizer(context)
+        feedsTokenTypeIds = "token_type_ids" in session.inputNames
     }
 
-    suspend fun embed(text: String, isQuery: Boolean = false): FloatArray {
+    /**
+     * @param trueLength run the model at the text's real token count instead of padding to
+     *        [MAX_SEQ_LEN]. The graph's sequence axis is dynamic, so a short query costs a
+     *        fraction of a padded one; see [VaultConfig.Embedding.QUERY_TRUE_LENGTH] for the
+     *        measured speed-up and the (small) effect on the vector.
+     */
+    suspend fun embed(text: String, isQuery: Boolean = false, trueLength: Boolean = false): FloatArray {
         // Locks the native memory buffers so only one thread can write at a time
         return embedMutex.withLock {
             val encoded = tokenizer.encode(text, MAX_SEQ_LEN)
+            // The tokenizer lays out <s> tokens </s> then padding, so the mask's 1s are a prefix.
+            val seqLen = if (trueLength) encoded.attentionMask.count { it == 1 }.coerceAtLeast(1) else MAX_SEQ_LEN
 
             // ── Zero-copy: write directly into pre-allocated native memory ────────
             directInputBuffer.clear()
             directMaskBuffer.clear()
             directTokenTypeBuffer.clear()
 
-            for (i in 0 until MAX_SEQ_LEN) {
+            for (i in 0 until seqLen) {
                 directInputBuffer.put(encoded.inputIds[i].toLong())
                 directMaskBuffer.put(encoded.attentionMask[i].toLong())
                 directTokenTypeBuffer.put(0L)  // token_type_ids always 0
@@ -116,7 +150,7 @@ class EmbeddingEngine(context: Context) {
             directMaskBuffer.flip()
             directTokenTypeBuffer.flip()
 
-            val shape = longArrayOf(1, MAX_SEQ_LEN.toLong())
+            val shape = longArrayOf(1, seqLen.toLong())
 
             // Tensors wrap native memory directly — no data copied
             var inputIdsTensor:    OnnxTensor? = null
@@ -127,20 +161,16 @@ class EmbeddingEngine(context: Context) {
             try {
                 inputIdsTensor      = OnnxTensor.createTensor(ortEnv, directInputBuffer,     shape)
                 attentionMaskTensor = OnnxTensor.createTensor(ortEnv, directMaskBuffer,      shape)
-                tokenTypeIdsTensor  = OnnxTensor.createTensor(ortEnv, directTokenTypeBuffer, shape)
 
-                output = try {
-                    session.run(mapOf(
-                        "input_ids"      to inputIdsTensor,
-                        "attention_mask" to attentionMaskTensor,
-                        "token_type_ids" to tokenTypeIdsTensor
-                    ))
-                } catch (e: Exception) {
-                    session.run(mapOf(
-                        "input_ids"      to inputIdsTensor,
-                        "attention_mask" to attentionMaskTensor
-                    ))
+                val inputs = mutableMapOf(
+                    "input_ids"      to inputIdsTensor,
+                    "attention_mask" to attentionMaskTensor
+                )
+                if (feedsTokenTypeIds) {
+                    tokenTypeIdsTensor = OnnxTensor.createTensor(ortEnv, directTokenTypeBuffer, shape)
+                    inputs["token_type_ids"] = tokenTypeIdsTensor
                 }
+                output = session.run(inputs)
 
                 val rawOutput = output[0].value
                 val embedding = FloatArray(EMBEDDING_DIM)
@@ -151,7 +181,7 @@ class EmbeddingEngine(context: Context) {
                 } else if (rawOutput is Array<*> && rawOutput[0] is Array<*>) {
                     val hiddenState = rawOutput[0] as Array<FloatArray>
                     var validTokens = 0
-                    for (i in 0 until MAX_SEQ_LEN) {
+                    for (i in 0 until minOf(seqLen, hiddenState.size)) {
                         if (encoded.attentionMask[i] == 1) {
                             for (j in 0 until EMBEDDING_DIM) {
                                 embedding[j] += hiddenState[i][j]

@@ -2,6 +2,7 @@ package com.amar.vault.benchmark
 
 import com.amar.vault.retrieval.RetrievalRequest
 import com.amar.vault.retrieval.RetrievalService
+import com.amar.vault.retrieval.RetrievalTuning
 import com.amar.vault.retrieval.SearchRepository
 import kotlin.math.ln
 
@@ -35,10 +36,23 @@ class RetrievalEvaluator(
         val mrr: Double, val ndcg10: Double,
     )
 
-    suspend fun evaluate(cases: List<BenchmarkCase>): BenchmarkSection {
+    /** Every scorable query's score under one tuning, and how long each retrieval took. */
+    class Scored(
+        val scores: List<QueryScore>,
+        val rows: List<Map<String, String>>,
+        val skipped: Int,
+        val latenciesMs: List<Long>,
+    )
+
+    /**
+     * Score every scorable golden query under [tuning] (the production defaults unless a
+     * benchmark asks otherwise — see [RetrievalAblationBenchmark]).
+     */
+    suspend fun scoreAll(cases: List<BenchmarkCase>, tuning: RetrievalTuning = RetrievalTuning()): Scored {
         val retrievalCases = cases.filter { it.supportsRetrieval }
         val scores = mutableListOf<QueryScore>()
         val rows = mutableListOf<Map<String, String>>()
+        val latencies = mutableListOf<Long>()
         var skipped = 0
 
         for (case in retrievalCases) {
@@ -58,7 +72,9 @@ class RetrievalEvaluator(
             }
 
             for (query in case.queries) {
-                val result = retrieval.retrieve(RetrievalRequest(query))
+                val t0 = System.nanoTime()
+                val result = retrieval.retrieve(RetrievalRequest(query, tuning = tuning))
+                latencies.add((System.nanoTime() - t0) / 1_000_000)
                 // Collapse chunk hits to unique parent documents, preserving rank order.
                 val ranked = result.items.map { it.parentDocumentId ?: it.id }.distinct()
                 val score = score(case, query, ranked, relevant)
@@ -71,6 +87,15 @@ class RetrievalEvaluator(
                 ))
             }
         }
+
+        return Scored(scores, rows, skipped, latencies)
+    }
+
+    suspend fun evaluate(cases: List<BenchmarkCase>): BenchmarkSection {
+        val scored = scoreAll(cases)
+        val scores = scored.scores
+        val rows = scored.rows
+        val skipped = scored.skipped
 
         val none = scores.isEmpty()
         val noneNote = if (none) "no scorable cases (dataset empty or documents not indexed)" else ""

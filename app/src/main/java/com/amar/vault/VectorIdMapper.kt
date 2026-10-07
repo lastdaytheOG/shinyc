@@ -65,6 +65,9 @@ class VectorIdMapper {
         return numericToRecord[numericId]?.chunkId
     }
 
+    /** The explicit ownership record for a C++ numeric ID, or null if it is unmapped. */
+    fun getRecord(numericId: Int): ChunkRecord? = numericToRecord[numericId]
+
     /**
      * Look up the numeric ID for a chunk id string.
      * Returns null if the chunk id has never been mapped.

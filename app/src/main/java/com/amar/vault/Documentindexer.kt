@@ -69,6 +69,13 @@ class DocumentIndexer private constructor(private val context: Context) {
          */
         val SUPPORTED_TYPES: Set<String> =
             com.amar.vault.indexing.DocumentContentExtractor().supportedMimeTypes
+
+        /**
+         * The supported type a file would be indexed as — its declared type, or else the one
+         * its name says — or null when it is not a document this indexer reads.
+         */
+        fun resolveMimeType(declared: String?, fileName: String?): String? =
+            com.amar.vault.indexing.DocumentContentExtractor().resolveMimeType(declared, fileName)
     }
 
     private val db by lazy { VaultDatabase.get(context) }
@@ -95,15 +102,34 @@ class DocumentIndexer private constructor(private val context: Context) {
     // Public API
     // ════════════════════════════════════════════════════════════════════════
 
-    suspend fun indexDocument(uri: Uri, mimeType: String, baseId: String? = null): IndexResult =
-        indexDocumentWithProgress(uri, mimeType, baseId).first
+    /**
+     * [displayName] is what the document is called, for a caller that knows better than the uri
+     * does: a shared file is read from a private copy whose own name is a random id.
+     */
+    suspend fun indexDocument(
+        uri: Uri, mimeType: String, baseId: String? = null, displayName: String? = null,
+    ): IndexResult = indexDocumentWithProgress(uri, mimeType, baseId, displayName).first
 
     suspend fun indexDocumentWithProgress(
-        uri: Uri, mimeType: String, baseId: String? = null
+        uri: Uri, mimeType: String, baseId: String? = null, displayName: String? = null,
     ): Pair<IndexResult, Flow<IndexProgress>> {
         val flow = MutableSharedFlow<IndexProgress>(replay = 1, extraBufferCapacity = 64)
-        val result = withContext(Dispatchers.IO) { doIndex(uri, mimeType, flow, baseId) }
+        val result = withContext(Dispatchers.IO) { doIndex(uri, mimeType, flow, baseId, displayName) }
         return result to flow.asSharedFlow()
+    }
+
+    /**
+     * Indexes the text of a saved item's own file copy, as chunk rows that belong to that item.
+     * Returns null when the file is not a document this indexer reads.
+     *
+     * Capture stores that copy as a bare path, and this indexer opens its source through
+     * ContentResolver, which cannot open a path that carries no scheme. Handed the bare path,
+     * every shared document was marked complete with none of its text read.
+     */
+    suspend fun indexSavedDocument(item: VaultItem, localPath: String = item.uri): IndexResult? {
+        val name = item.sourceFile.ifBlank { item.title.orEmpty() }
+        val mimeType = resolveMimeType(item.mimeType, name) ?: return null
+        return indexDocument(Uri.fromFile(java.io.File(localPath)), mimeType, baseId = item.id, displayName = name)
     }
 
     fun indexBatch(
@@ -121,15 +147,18 @@ class DocumentIndexer private constructor(private val context: Context) {
     // ════════════════════════════════════════════════════════════════════════
 
     private suspend fun doIndex(
-        uri: Uri, mimeType: String,
+        uri: Uri, declaredMimeType: String,
         progress: MutableSharedFlow<IndexProgress>? = null,
-        baseId: String? = null
+        baseId: String? = null,
+        displayName: String? = null,
     ): IndexResult {
-        val fileName = resolveFileName(uri)
+        val fileName = displayName?.takeIf { it.isNotBlank() } ?: resolveFileName(uri)
         val startMs = System.currentTimeMillis()
 
-        if (!contentExtractor.isSupported(mimeType))
-            return IndexResult.Failure(fileName, IndexError.UnsupportedFormat(mimeType))
+        // A provider that does not know the type hands a PDF over as "application/octet-stream";
+        // the file's name still says what it is.
+        val mimeType = contentExtractor.resolveMimeType(declaredMimeType, fileName)
+            ?: return IndexResult.Failure(fileName, IndexError.UnsupportedFormat(declaredMimeType))
 
         val uriKey = uri.toString()
         if (!inFlight.add(uriKey)) return IndexResult.Duplicate(fileName, "in-flight")
@@ -155,7 +184,7 @@ class DocumentIndexer private constructor(private val context: Context) {
             } else null
             if (sourceFingerprint != null) {
                 val cached = com.amar.vault.indexing.PdfSourceReuseCache.lookup(context, sourceFingerprint)
-                if (cached != null && dao.countByContentHash(cached.textHash) == cached.chunkCount) {
+                if (cached != null && dao.countChunksByContentHash(cached.textHash) == cached.chunkCount) {
                     IndexMetrics.increment(IndexMetrics.Event.INDEX_SKIPPED_DUP)
                     IndexMetrics.increment(IndexMetrics.Event.PDF_SOURCE_REUSE_HIT)
                     return IndexResult.Duplicate(fileName, cached.textHash)
@@ -190,6 +219,7 @@ class DocumentIndexer private constructor(private val context: Context) {
                     p.stageMs(ProfilerStage.EXTRACT, System.currentTimeMillis() - tExtract)
                     IndexingProfiler.publish(p.build(System.currentTimeMillis() - startMs, "failed:extraction"))
                 }
+                Log.e(TAG, "Could not read $fileName", it)
                 return IndexResult.Failure(fileName, IndexError.ExtractionFailed(it))
             }
             prof?.stageMs(ProfilerStage.EXTRACT, System.currentTimeMillis() - tExtract)
@@ -271,7 +301,7 @@ class DocumentIndexer private constructor(private val context: Context) {
             // No embedding — documents use BM25 + substring search (embedding is query-time only).
             val entries = chunkItems.map { (item, text) ->
                 com.amar.vault.indexing.IndexEntry(
-                    id = item.id, text = text,
+                    id = item.id, text = bm25Text(item, text),
                     parentId = targetId, chunkIndex = item.chunkIndex, totalChunks = item.totalChunks,
                 )
             }
@@ -342,47 +372,51 @@ class DocumentIndexer private constructor(private val context: Context) {
 
         progress?.emit(IndexProgress(fileName, IndexProgress.Phase.EXTRACTING))
         var committed = 0
+        val onBatch: suspend (List<PagedChunk>) -> Unit = { pageChunks ->
+            val rows = pageChunks.map { pc ->
+                val tags = TagEngine.generate(pc.text, descriptor.tag)
+                val tagSuffix = if (tags.isNotEmpty()) "\n[${tags.joinToString(" ")}]" else ""
+                val finalText = pc.text + tagSuffix
+                val item = VaultItem(
+                    id          = "${targetId}_chunk${pc.chunkIndex}",
+                    uri         = uriKey,
+                    ocrText     = finalText,
+                    lang        = LanguageDetector.detect(pc.text),
+                    itemType    = descriptor.itemType,
+                    pageNum     = pc.pdfPage ?: pc.chunkIndex,
+                    sourceFile  = fileName,
+                    timestamp   = System.currentTimeMillis(),
+                    pHash       = 0L,
+                    contentHash = sourceFingerprint,
+                    parentDocumentId = targetId,
+                    chunkIndex       = pc.chunkIndex,
+                    totalChunks      = 0, // unknown while streaming; informational only for docs
+                )
+                item to finalText
+            }
+            // Commit this page: Room rows (→ FTS searchable) then BM25 (→ lexical searchable).
+            persister.persistDocumentChunks(rows.map { it.first })
+            bm25Updater.update(
+                rows.map { (item, text) ->
+                    com.amar.vault.indexing.IndexEntry(
+                        id = item.id, text = bm25Text(item, text),
+                        parentId = targetId, chunkIndex = item.chunkIndex, totalChunks = 0,
+                    )
+                }
+            )
+            committed += rows.size
+            progress?.emit(IndexProgress(fileName, IndexProgress.Phase.STORING, committed, committed))
+        }
+        // Stored when no text could be read at all — a scan the OCR found nothing in, or a file
+        // that would not open. With no row the document could not be found even by its name.
+        // Such a file is not recorded as complete, so importing it again reads it again.
+        val nameOnly = listOf(PagedChunk(text = "", pdfPage = 1, chunkIndex = 0))
         val tExtract = System.currentTimeMillis()
         try {
             // Observation-only: carry the Sprint E3 profiler down into extractStreaming as a
             // coroutine-context element (exactly as the batch path does), so PdfFormatExtractor
             // attributes its per-page/sub-stage timings to this document. Null → plain call.
             IndexMetrics.timed(IndexMetrics.Timing.DOC_EXTRACT) {
-                val onBatch: suspend (List<PagedChunk>) -> Unit = { pageChunks ->
-                    val rows = pageChunks.map { pc ->
-                        val tags = TagEngine.generate(pc.text, descriptor.tag)
-                        val tagSuffix = if (tags.isNotEmpty()) "\n[${tags.joinToString(" ")}]" else ""
-                        val finalText = pc.text + tagSuffix
-                        val item = VaultItem(
-                            id          = "${targetId}_chunk${pc.chunkIndex}",
-                            uri         = uriKey,
-                            ocrText     = finalText,
-                            lang        = LanguageDetector.detect(pc.text),
-                            itemType    = descriptor.itemType,
-                            pageNum     = pc.pdfPage ?: pc.chunkIndex,
-                            sourceFile  = fileName,
-                            timestamp   = System.currentTimeMillis(),
-                            pHash       = 0L,
-                            contentHash = sourceFingerprint,
-                            parentDocumentId = targetId,
-                            chunkIndex       = pc.chunkIndex,
-                            totalChunks      = 0, // unknown while streaming; informational only for docs
-                        )
-                        item to finalText
-                    }
-                    // Commit this page: Room rows (→ FTS searchable) then BM25 (→ lexical searchable).
-                    persister.persistDocumentChunks(rows.map { it.first })
-                    bm25Updater.update(
-                        rows.map { (item, text) ->
-                            com.amar.vault.indexing.IndexEntry(
-                                id = item.id, text = text,
-                                parentId = targetId, chunkIndex = item.chunkIndex, totalChunks = 0,
-                            )
-                        }
-                    )
-                    committed += rows.size
-                    progress?.emit(IndexProgress(fileName, IndexProgress.Phase.STORING, committed, committed))
-                }
                 if (prof == null) contentExtractor.extractStreaming(context, uri, mimeType, onBatch)
                 else withContext(prof) { contentExtractor.extractStreaming(context, uri, mimeType, onBatch) }
             }
@@ -394,11 +428,15 @@ class DocumentIndexer private constructor(private val context: Context) {
                 IndexingProfiler.publish(p.build(System.currentTimeMillis() - startMs, "failed:extraction"))
             }
             Log.e(TAG, "Progressive index failed for $fileName after $committed chunk(s)", e)
+            if (committed == 0) onBatch(nameOnly)
             return IndexResult.Failure(fileName, IndexError.ExtractionFailed(e))
         }
         prof?.stageMs(ProfilerStage.EXTRACT, System.currentTimeMillis() - tExtract)
 
-        if (committed == 0) return IndexResult.Failure(fileName, IndexError.EmptyContent)
+        if (committed == 0) {
+            onBatch(nameOnly)
+            return IndexResult.Failure(fileName, IndexError.EmptyContent)
+        }
 
         // Mark complete for exact-source reuse (every row's contentHash == this fingerprint).
         com.amar.vault.indexing.PdfSourceReuseCache.remember(
@@ -453,6 +491,13 @@ class DocumentIndexer private constructor(private val context: Context) {
             return if (dom.value >= text.length * 0.15) dom.key else "en"
         }
     }
+
+    /**
+     * What BM25 indexes for a chunk: its text, then the document's name, so the file is
+     * findable by what it is called. Same name text as the startup rebuild in AmarApplication.
+     */
+    private fun bm25Text(item: VaultItem, text: String): String =
+        "$text ${com.amar.vault.retrieval.SearchableName.of(item)}"
 
     private fun resolveFileName(uri: Uri) = runCatching {
         context.contentResolver.query(uri, null, null, null, null)?.use { c ->

@@ -1,0 +1,24 @@
+# Workbench data + model binaries are LOCAL ONLY. They are large, and data/ holds your real
+# documents. Never commit them. The folder STRUCTURE and the docs DO get committed, so a fresh
+# clone shows every drop point.
+
+# Ignore the contents...
+models/**
+data/**
+reports/**
+
+# ...but keep descending into subdirectories. Without these, git never walks into an excluded
+# directory, and the !README.md rule below would silently never match.
+!models/**/
+!data/**/
+!reports/**/
+
+# Structure + docs survive.
+!**/README.md
+!**/.gitkeep
+
+# The repo-root .gitignore has a global `*.txt` rule (for the scratch logs littering the root).
+# These workbench text files are real source and must survive it.
+!requirements.txt
+!**/CHECKSUMS.txt
+!**/LICENSES.md

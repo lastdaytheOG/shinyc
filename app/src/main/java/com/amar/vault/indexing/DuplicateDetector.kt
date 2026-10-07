@@ -55,7 +55,7 @@ class DuplicateDetector(private val dao: VaultDao) {
         val fullText = pagedChunks.joinToString("\n") { it.text }
         val contentHash = fullText.sha256()
         val expectedCount = pagedChunks.size
-        val existingCount = dao.countByContentHash(contentHash)
+        val existingCount = dao.countChunksByContentHash(contentHash)
         return when {
             // Fully indexed already → genuine duplicate (unchanged behaviour).
             existingCount == expectedCount -> DocVerdict.Duplicate(contentHash)

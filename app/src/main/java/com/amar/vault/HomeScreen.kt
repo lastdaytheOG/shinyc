@@ -59,6 +59,42 @@ private val BookmarkIcon = ImageVector.Builder(
     close()
 }.build()
 
+/** A page with a folded corner and two lines of text. */
+private val DocumentIcon = ImageVector.Builder(
+    name = "Document",
+    defaultWidth = 24.dp,
+    defaultHeight = 24.dp,
+    viewportWidth = 24f,
+    viewportHeight = 24f
+).path(
+    fill = SolidColor(Color.Black)
+) {
+    moveTo(14f, 2f)
+    lineTo(6f, 2f)
+    curveTo(4.9f, 2f, 4f, 2.9f, 4f, 4f)
+    lineTo(4f, 20f)
+    curveTo(4f, 21.1f, 4.9f, 22f, 6f, 22f)
+    lineTo(18f, 22f)
+    curveTo(19.1f, 22f, 20f, 21.1f, 20f, 20f)
+    lineTo(20f, 8f)
+    close()
+    // Cut-outs, wound the other way: the two text lines and the corner fold.
+    moveTo(16f, 18f)
+    lineTo(8f, 18f)
+    lineTo(8f, 16f)
+    lineTo(16f, 16f)
+    close()
+    moveTo(16f, 14f)
+    lineTo(8f, 14f)
+    lineTo(8f, 12f)
+    lineTo(16f, 12f)
+    close()
+    moveTo(13f, 9f)
+    lineTo(13f, 3.5f)
+    lineTo(18.5f, 9f)
+    close()
+}.build()
+
 @Composable
 fun HomeScreen(
     stashItems: List<StashItemWithVaultItem>,
@@ -95,6 +131,16 @@ fun HomeScreen(
             )
 
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // The one place a PDF, Word, Excel or EPUB file is added from inside the app.
+                IconButton(onClick = onDocumentsClick) {
+                    Icon(
+                        imageVector = DocumentIcon,
+                        contentDescription = "Import documents",
+                        tint = CharcoalSoft,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
                 IconButton(onClick = onAgenticClick) {
                     Icon(
                         imageVector = Icons.Default.Send,

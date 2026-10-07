@@ -50,6 +50,10 @@ fun BenchmarkDashboardScreen(onBack: () -> Unit) {
     var prodSamples by remember { mutableStateOf(0) }
     var prodSection by remember { mutableStateOf<BenchmarkSection?>(null) }
 
+    // ── NPU-OCR step 4: C1 page-bitmap capture (independent of the toggle above) ──
+    var pageCapture by remember { mutableStateOf(com.amar.vault.indexing.OcrPageCapture.enabled) }
+    var captureStats by remember { mutableStateOf(com.amar.vault.indexing.OcrPageCapture.stats()) }
+
     fun refreshProduction() {
         val reports = OcrInstrumentation.snapshot()
         prodSamples = reports.size
@@ -65,7 +69,13 @@ fun BenchmarkDashboardScreen(onBack: () -> Unit) {
         report = runner.reports.readLatest()
         baselineId = runner.reports.readBaseline()?.runId
     }
-    LaunchedEffect(Unit) { refresh(); refreshProduction() }
+    LaunchedEffect(Unit) {
+        refresh()
+        refreshProduction()
+        // Disk-backed: in-memory counters are zero after a process restart even when the
+        // previous session's captures are still there.
+        captureStats = com.amar.vault.indexing.OcrPageCapture.refreshFromDisk(context)
+    }
 
     fun launchSuite(suite: BenchmarkSuite) {
         if (running) return
@@ -150,6 +160,55 @@ fun BenchmarkDashboardScreen(onBack: () -> Unit) {
                 Spacer(Modifier.height(6.dp))
                 DevMono("No production samples yet. Turn capture ON, index some images/screenshots/PDFs, then Refresh stats.")
             }
+        }
+
+        // ── NPU-OCR step 4: C1 calibration capture ──────────────────────────────────
+        // Separate toggle from Production Evaluation Mode above: that one buffers reports in
+        // memory, this one writes hundreds of MB of page PNGs to disk.
+        DevSectionLabel("OCR page capture (C1 calibration corpus — NPU OCR)")
+        DevCard {
+            DevButton(
+                if (pageCapture) "● Capturing pages — tap to stop" else "○ Page capture OFF — tap to start",
+                {
+                    pageCapture = !pageCapture
+                    com.amar.vault.indexing.OcrPageCapture.enabled = pageCapture
+                    captureStats = com.amar.vault.indexing.OcrPageCapture.stats()
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+            val cs = captureStats
+            DevKeyValue(
+                "Capture",
+                if (pageCapture) "ON — every PDF fallback page is written as lossless PNG to filesDir/ocr-capture/"
+                else "OFF (indexing behaves normally)",
+            )
+            DevKeyValue("Pages captured", "${cs.captured} / ${cs.maxPages}")
+            DevKeyValue("On disk", "%.1f MB".format(cs.megabytes))
+            if (cs.skippedAtCap > 0) DevKeyValue("Skipped (cap reached)", cs.skippedAtCap.toString())
+            if (cs.failed > 0) DevKeyValue("Failed writes", cs.failed.toString())
+            if (cs.atCap) {
+                Spacer(Modifier.height(6.dp))
+                DevMono("Page cap reached — pull the corpus, then Clear to capture more.")
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                DevOutlineButton("Refresh stats", {
+                    captureStats = com.amar.vault.indexing.OcrPageCapture.refreshFromDisk(context)
+                }, modifier = Modifier.weight(1f))
+                DevOutlineButton("Clear captures", {
+                    com.amar.vault.indexing.OcrPageCapture.clear(context)
+                    captureStats = com.amar.vault.indexing.OcrPageCapture.stats()
+                }, modifier = Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(10.dp))
+            DevMono(
+                "Target: 200–500 pages of YOUR real books, both scripts, including a few bad scans.\n" +
+                    "Pull:  adb shell run-as com.amar.vault tar c files/ocr-capture | tar x\n" +
+                    "Then:  move the PNGs into tools/ocr-workbench/data/calib/pages/\n" +
+                    "Note:  capture adds write time per page — do NOT run latency benchmarks with it ON.\n" +
+                    "Split: keep these documents DISJOINT from your E1 golden set (no leakage)."
+            )
         }
 
         DevSectionLabel("Baseline (regression 'before' snapshot)")

@@ -93,11 +93,17 @@ fun ManualIndexingScreen(onBack: () -> Unit) {
             )
         }
 
-        DevSectionLabel("Index by source")
+        DevSectionLabel("Index images by folder")
+        // These scan MediaStore, which shows an app other apps' images but not their documents:
+        // "Index Downloads" used to finish with 0 / 0 beside a folder full of PDFs.
+        Text(
+            "Images only. PDF, DOCX, XLSX and EPUB files are added with the pickers below.",
+            fontSize = 11.sp, color = WarmBrown, modifier = Modifier.padding(bottom = 8.dp)
+        )
         val busy = DeveloperIndexController.isBusy
         DeveloperIndexController.ImagePreset.values().forEach { preset ->
             DevButton(
-                "Index ${preset.label}",
+                "Index images in ${preset.label}",
                 { DeveloperIndexController.indexImagePreset(context, preset, force) },
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)

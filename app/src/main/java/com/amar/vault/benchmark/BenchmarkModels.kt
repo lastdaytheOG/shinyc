@@ -41,6 +41,7 @@ enum class BenchmarkContentType {
  *   "expectedRank": ["<most relevant documentId first>"],
  *   "groundTruthText": "<exact text for OCR accuracy scoring>",
  *   "mediaFile": "media/receipt_swiggy_001.png",
+ *   "script": "en | hi | mixed   (optional; derived from groundTruthText when omitted)",
  *   "notes": "why this case exists"
  * }
  * ```
@@ -54,6 +55,28 @@ data class BenchmarkCase(
     val expectedRank: List<String> = emptyList(),
     val groundTruthText: String = "",
     val mediaFile: String = "",
+    /**
+     * Script this case's text is in: `en`, `hi`, or `mixed`. Optional — when blank,
+     * [OcrScript.resolve] derives it from [groundTruthText] by Unicode block.
+     *
+     * Exists because the NPU-OCR acceptance gates are stated per script (Latin recognition
+     * at INT8 is a solved problem; Devanagari is the risk model), and an aggregate CER
+     * averaged across both scripts hides exactly the regression those gates exist to catch.
+     */
+    val script: String = "",
+    /**
+     * Image/layout condition this case represents: `clean`, `scanned`, `smalltext`, `tables`,
+     * `multicolumn` (or any custom label). Optional.
+     *
+     * Unlike [script] this **cannot be derived** — it is a property of how the page was produced
+     * and laid out, not of the characters in it, so an untagged case stays untagged and is counted
+     * as such rather than guessed into a bucket.
+     *
+     * Exists so one E1 set answers "where does OCR break?" without transcribing a separate corpus
+     * per condition. Transcription is the one resource in this project that cannot be scaled or
+     * automated, so conditions are tags over shared ground truth, never separate datasets.
+     */
+    val stratum: String = "",
     val notes: String = "",
 ) {
     val supportsRetrieval: Boolean get() = queries.isNotEmpty() && expectedResults.isNotEmpty()
@@ -69,8 +92,108 @@ data class BenchmarkCase(
             expectedRank = json.optJSONArray("expectedRank").toStringList(),
             groundTruthText = json.optString("groundTruthText"),
             mediaFile = json.optString("mediaFile"),
+            script = json.optString("script"),
+            stratum = json.optString("stratum"),
             notes = json.optString("notes"),
         )
+    }
+}
+
+/**
+ * Script classification for OCR scoring.
+ *
+ * Resolution order is explicit-then-derived: a case's `script` field wins, and only when it is
+ * blank is the script derived from the ground-truth text. Derivation is a deterministic function
+ * of characters actually present — not a guess about the metric — and every row records which
+ * path was taken (`scriptSource`) so a mislabelled dataset is visible rather than silent.
+ */
+object OcrScript {
+    const val EN = "en"
+    const val HI = "hi"
+    const val MIXED = "mixed"
+    const val UNKNOWN = "unknown"
+
+    /** Minority-script share above which a line counts as genuinely mixed rather than noise. */
+    private const val MIXED_THRESHOLD = 0.10
+
+    fun resolve(case: BenchmarkCase): Pair<String, String> {
+        val explicit = case.script.trim().lowercase()
+        if (explicit.isNotEmpty()) {
+            val known = when (explicit) {
+                EN, "latin", "english" -> EN
+                HI, "devanagari", "hindi" -> HI
+                MIXED -> MIXED
+                else -> explicit
+            }
+            return known to "declared"
+        }
+        return derive(case.groundTruthText) to "derived"
+    }
+
+    /**
+     * Devanagari block is U+0900–U+097F. Latin letters are counted via [Char.isLetter] restricted
+     * to ASCII/Latin-1 ranges, so digits and punctuation — which are script-neutral and appear in
+     * both — never decide the classification on their own.
+     */
+    fun derive(text: String): String {
+        var devanagari = 0
+        var latin = 0
+        for (ch in text) {
+            val cp = ch.code
+            when {
+                cp in 0x0900..0x097F && ch.isLetter() -> devanagari++
+                cp < 0x0250 && ch.isLetter() -> latin++
+            }
+        }
+        val total = devanagari + latin
+        if (total == 0) return UNKNOWN
+        val minorityShare = minOf(devanagari, latin).toDouble() / total
+        if (devanagari > 0 && latin > 0 && minorityShare >= MIXED_THRESHOLD) return MIXED
+        return if (devanagari >= latin) HI else EN
+    }
+}
+
+/**
+ * Image/layout condition buckets for OCR scoring — "where does OCR break?", answered from one
+ * golden set instead of one corpus per condition.
+ *
+ * The alternative (separate E-sets per condition) multiplies the only cost that cannot be
+ * automated: human transcription. Six conditions × two scripts × 100 lines is ~1,200 transcribed
+ * lines for the same decision ~200 tagged lines can make.
+ *
+ * [CANONICAL] is always reported — as null + note when a bucket is empty — because an *absent*
+ * condition is the finding. "We never measured a scanned page" must be visible in the report, not
+ * inferred from a missing row.
+ *
+ * Camera / perspective / low-light are deliberately absent: those belong to the image path, which
+ * ADR-0001 keeps on ML Kit. Add them when roadmap §9 decision 5 moves that path.
+ */
+object OcrStratum {
+    const val CLEAN = "clean"
+    const val SCANNED = "scanned"
+    const val SMALLTEXT = "smalltext"
+    const val TABLES = "tables"
+    const val MULTICOLUMN = "multicolumn"
+    const val UNTAGGED = "untagged"
+
+    val CANONICAL: List<String> = listOf(CLEAN, SCANNED, SMALLTEXT, TABLES, MULTICOLUMN)
+
+    /**
+     * Normalizes a declared stratum. Returns [UNTAGGED] when blank — never guessed, because a
+     * stratum is a property of the page's origin and layout, not of its text. Custom labels are
+     * passed through so a dataset can add its own bucket without a code change.
+     */
+    fun resolve(case: BenchmarkCase): String {
+        val raw = case.stratum.trim().lowercase().replace('-', '_').replace(" ", "")
+        if (raw.isEmpty()) return UNTAGGED
+        return when (raw) {
+            "clean", "digital", "cleandigital" -> CLEAN
+            "scanned", "scan", "noisy", "scannednoisy" -> SCANNED
+            "smalltext", "small", "footnote", "footnotes" -> SMALLTEXT
+            "tables", "table", "form", "forms" -> TABLES
+            "multicolumn", "multi_column", "columns", "twocolumn" -> MULTICOLUMN
+            else -> raw
+        }
     }
 }
 

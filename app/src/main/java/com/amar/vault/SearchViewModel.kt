@@ -19,6 +19,138 @@ import com.amar.vault.pipeline.stages.RepositoryMapper
 import com.amar.vault.ui.renderengine.core.RichSavedItemBuilder
 import com.amar.vault.ui.renderengine.models.RichSavedItem
 
+/**
+ * One row of the search result list: the card to show and, when a document was found by the
+ * words on one of its pages, where in it — so the card can say so and a tap can open that page.
+ */
+data class SearchHit(
+    val row: StashItemWithVaultItem,
+    /**
+     * The PDF page (1-based) the query was found on. Null when no page's text matched (the
+     * document was found by its name) and for anything that is not a PDF.
+     */
+    val page: Int? = null,
+    /** The words around the match, cut from that page's text. */
+    val excerpt: String? = null,
+    /**
+     * Set when the item has none of the typed words and is listed for a word that is spelt
+     * nearly the same: that word, as it stands in [excerpt]. The card marks it, so that it is
+     * plain why the item is in the list.
+     */
+    val similarWord: String? = null,
+    /**
+     * Set when the item says neither the typed word nor anything like it, and is listed for a
+     * tag the indexer gave it ("receipt" on a page that has "rs" on it): that tag. The card
+     * says so, where the excerpt would have been.
+     */
+    val filedUnder: String? = null,
+)
+
+/**
+ * The words of a typed query, as they are looked for in stored text: in the same canonical form
+ * the text was stored in. A keyboard may send ज़ as one code point where the stored page has ज
+ * followed by a nukta; compared raw, the word is on the page and is not found on it.
+ */
+internal fun queryWordsOf(query: String): List<String> =
+    com.amar.vault.retrieval.QueryWord.of(UnicodeText.nfc(query).lowercase())
+        // A word typed with punctuation on it ("claude?") is also the word without it.
+        .flatMap { listOf(it.typed, it.bare) }
+        .filter { it.length >= 2 }
+        .distinct()
+
+/** The few words around the place a query word appears in a stored page's text. */
+internal object MatchExcerpt {
+    private const val BEFORE = 40
+    private const val AFTER = 110
+    private val WHITESPACE = Regex("\\s+")
+
+    /** Null when none of [queryWords] is in [storedText]. */
+    fun of(storedText: String, queryWords: List<String>): String? {
+        // The stored text ends with a "\n[tags]" line that is not part of the page.
+        val text = com.amar.vault.retrieval.StoredText.page(storedText).replace(WHITESPACE, " ").trim()
+        // Anchor on the longest word found: in "ministry of law" that is "ministry", not the
+        // "of" that stands near the top of every page.
+        val at = queryWords.sortedByDescending { it.length }
+            .firstNotNullOfOrNull { word -> text.indexOf(word, ignoreCase = true).takeIf { it >= 0 && word.isNotBlank() } }
+            ?: return null
+        var start = (at - BEFORE).coerceAtLeast(0)
+        var end = (at + AFTER).coerceAtMost(text.length)
+        // Cut between words, not through one.
+        if (start > 0) start = text.indexOf(' ', start).takeIf { it in 0 until at }?.plus(1) ?: start
+        if (end < text.length) end = text.lastIndexOf(' ', end).takeIf { it > at } ?: end
+        return (if (start > 0) "…" else "") + text.substring(start, end).trim() + (if (end < text.length) "…" else "")
+    }
+
+    /**
+     * The first word of [storedText] that is spelt nearly like one of [queryWords] — what the
+     * typo lanes matched it by. Null when there is none.
+     */
+    fun similarWord(storedText: String, queryWords: List<String>): String? {
+        val words = queryWords.filter { it.length >= 3 }
+        if (words.isEmpty()) return null
+        val text = com.amar.vault.retrieval.StoredText.page(storedText).lowercase()
+        return com.amar.vault.retrieval.FuzzyMatcher(words, roots = true).firstMatch(text)
+            // As it stands on the page it may have a comma or a bracket on it.
+            ?.let { com.amar.vault.retrieval.QueryWord(it).bare }?.takeIf { it.length >= 3 }
+    }
+
+    /**
+     * The tag of [storedText] that one of [queryWords] is found by — the word itself, or else
+     * one spelt nearly like it. Null when it has no such tag.
+     */
+    fun tag(storedText: String, queryWords: List<String>): String? {
+        val tags = com.amar.vault.retrieval.StoredText.tags(storedText).lowercase()
+            .split(' ').filter { it.isNotBlank() && !it.startsWith("qr_data:") }
+        if (tags.isEmpty()) return null
+        tags.firstOrNull { tag -> queryWords.any { tag.contains(it) } }?.let { return it }
+        val words = queryWords.filter { it.length >= 3 }
+        if (words.isEmpty()) return null
+        return com.amar.vault.retrieval.FuzzyMatcher(words, roots = true).firstMatch(tags.joinToString(" "))
+    }
+}
+
+/**
+ * Turns matched rows into result cards, one per document: the first of a document's pages in
+ * [rows]' order stands for it, shown as the Saved item the document belongs to when it has one.
+ * A shared PDF found by the words on one of its pages is then the PDF the user saved, with its
+ * folder, note and favourite — not a separate, nameless page.
+ *
+ * [matched] are the items [rows] were built from; they carry each row's owning document, and
+ * the page and text that [queryWords] are looked for in.
+ */
+internal fun oneCardPerDocument(
+    rows: List<StashItemWithVaultItem>,
+    matched: List<VaultItem>,
+    savedByVaultId: Map<String, StashItemWithVaultItem>,
+    queryWords: List<String> = emptyList(),
+): List<SearchHit> {
+    val matchedById = matched.associateBy { it.id }
+    val shown = HashSet<String>()
+    return rows.mapNotNull { row ->
+        val found = matchedById[row.vaultItemId]
+        val document = found?.parentDocumentId
+        if (!shown.add(document ?: row.vaultItemId)) return@mapNotNull null
+        val exact = found?.let { MatchExcerpt.of(it.ocrText, queryWords) }
+        // No typed word on the page, and none in the name either: it is here for a word spelt
+        // nearly the same, or else for a tag.
+        val unexplained = found?.takeIf { exact == null }?.takeIf { item ->
+            val name = com.amar.vault.retrieval.SearchableName.of(item).lowercase()
+            queryWords.none { name.contains(it) }
+        }
+        val similar = unexplained?.let { MatchExcerpt.similarWord(it.ocrText, queryWords) }
+        val excerpt = exact ?: if (found != null && similar != null) MatchExcerpt.of(found.ocrText, listOf(similar)) else null
+        SearchHit(
+            row = document?.let(savedByVaultId::get) ?: row,
+            page = found?.pageNum?.takeIf {
+                excerpt != null && document != null && it > 0 && found.itemType.equals("pdf", ignoreCase = true)
+            },
+            excerpt = excerpt,
+            similarWord = similar,
+            filedUnder = unexplained?.takeIf { similar == null }?.let { MatchExcerpt.tag(it.ocrText, queryWords) },
+        )
+    }
+}
+
 @HiltViewModel
 class SearchViewModel @Inject constructor(
     private val db: VaultDatabase,
@@ -263,10 +395,16 @@ class SearchViewModel @Inject constructor(
         }
     }
 
-    val activeFilter = MutableStateFlow("All")
+    val activeFilter = MutableStateFlow(SearchFilter.ALL)
     val recentSearches = MutableStateFlow<List<String>>(emptyList())
     val searchSuggestions = MutableStateFlow<List<String>>(emptyList())
-    val quickFilters = listOf("All", "Images", "Videos", "Articles", "Products", "Music", "Documents", "Favorites", "Folders")
+    val quickFilters = SearchFilter.CHIPS
+
+    /**
+     * True while every result is in the list for a word spelt nearly like what was typed, and
+     * none for the typed words themselves — the screen says so above the list.
+     */
+    val similarSpellingsOnly = MutableStateFlow(false)
     
     fun updateFilter(filter: String) {
         activeFilter.value = filter
@@ -289,13 +427,23 @@ class SearchViewModel @Inject constructor(
         recentSearches.value = emptyList()
     }
 
+    private val refreshRequests = MutableStateFlow(0)
+
+    /**
+     * Runs the query in the box again. The search screen calls this when it opens: the box keeps
+     * its text between visits, and without this the list stayed as it was before whatever was
+     * imported in between — "I indexed it, searched again, and it still isn't there".
+     */
+    fun refreshSearch() = refreshRequests.update { it + 1 }
+
+    /** The result list with, for each document, the page and words the query was found on. */
     @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
-    val results: StateFlow<List<StashItemWithVaultItem>> = combine(query, activeFilter) { q, filter ->
-        Pair(q, filter)
+    val searchHits: StateFlow<List<SearchHit>> = combine(query, activeFilter, refreshRequests) { q, filter, refresh ->
+        Triple(q, filter, refresh)
     }
         .debounce(250)
         .distinctUntilChanged()
-        .transformLatest { (q, _) ->
+        .transformLatest { (q, chip, _) ->
             // Update suggestions whenever query changes (if we wanted to do it instantly, we could put this in an onEach before debounce, but this is fine)
             if (q.isBlank()) {
                 recentSearches.value = com.amar.vault.search.core.HistoryManager.getRecentSearches()
@@ -314,6 +462,9 @@ class SearchViewModel @Inject constructor(
                 return@transformLatest
             }
             isSearchLoading.value = true
+            // True once any result list for this query is on screen — a later-stage failure must
+            // not wipe results the user is already looking at.
+            var painted = false
             try {
                 yield()
                 // SINGLE retrieval pipeline: RetrievalService → HybridSearchService (BM25 + OCR/substring +
@@ -329,26 +480,57 @@ class SearchViewModel @Inject constructor(
                 // returned nothing and saved-row reuse silently degraded to synthetic wrappers.
                 val savedByVaultId = db.stashItemDao().getStashItemsByType("SAVED").first()
                     .associateBy { it.vaultItemId }
-                val base: List<StashItemWithVaultItem> = if (effectiveQuery.isBlank()) {
+                val queryWords = queryWordsOf(effectiveQuery)
+                // The chip is asked inside the engine, before its caps: filtered afterwards, a
+                // vault with more documents than the list is long would show no images at all.
+                val only: ((VaultItem) -> Boolean)? = if (chip == SearchFilter.ALL) null else { item ->
+                    SearchFilter.accepts(chip, item, savedByVaultId[item.id] ?: item.parentDocumentId?.let(savedByVaultId::get))
+                }
+                // Operators refine (narrow) the ranked results — never re-rank or bypass.
+                suspend fun toRows(items: List<VaultItem>): List<SearchHit> {
+                    val base = items.map { vi -> savedByVaultId[vi.id] ?: vi.toStashWrapper() }
+                    val kept = if (ops.hasAny) applyOperators(base, ops) else base
+                    return oneCardPerDocument(kept, items, savedByVaultId, queryWords)
+                }
+                if (effectiveQuery.isBlank()) {
                     // Operator-only query (e.g. "type:pdf"): no free-text to rank — nothing for the
                     // retrieval engine to score, so browse the SAME Room source of truth the engine
                     // hydrates from (timestamp DESC) and let the operators narrow it. Not a second
-                    // ranking path: any free text routes through retrievalService above.
-                    db.vaultDao().getAll().map { vi -> savedByVaultId[vi.id] ?: vi.toStashWrapper() }
+                    // ranking path: any free text routes through retrievalService below.
+                    similarSpellingsOnly.value = false
+                    emit(toRows(db.vaultDao().getAll().let { all -> if (only != null) all.filter(only) else all }))
+                    painted = true
                 } else {
-                    val plan = QueryPlanner.parse(effectiveQuery)
-                    retrievalService.retrieve(
-                        com.amar.vault.retrieval.RetrievalRequest(plan.cleanedQuery, plan)
-                    ).items.map { vi -> savedByVaultId[vi.id] ?: vi.toStashWrapper() }
+                    // Progressive retrieval: keyword hits paint as soon as the native BM25 lane
+                    // returns; the substring/fuzzy and semantic stages then replace the list in
+                    // place. The FINAL stage is the same ranking retrieve() returns.
+                    retrievalService.retrieveProgressive(
+                        com.amar.vault.retrieval.RetrievalRequest.forResultList(effectiveQuery, only)
+                    ).collect { update ->
+                        val rows = toRows(update.result.items)
+                        val isFinal = update.stage == com.amar.vault.retrieval.RetrievalStage.FINAL
+                        // An early stage that the operators narrow to nothing is not "no results"
+                        // yet — keep the skeleton until a later stage or FINAL decides.
+                        if (rows.isEmpty() && !isFinal) return@collect
+                        similarSpellingsOnly.value = update.result.similarSpellingsOnly
+                        emit(rows)
+                        painted = true
+                        isSearchLoading.value = false
+                    }
                 }
-                // Operators refine (narrow) the ranked results — never re-rank or bypass.
-                val out = if (ops.hasAny) applyOperators(base, ops) else base
-                emit(out)
             }
             catch (e: CancellationException) { throw e }
-            catch (e: Exception) { android.util.Log.e("SearchVM", "Search failed", e); emit(emptyList()) }
+            catch (e: Exception) {
+                android.util.Log.e("SearchVM", "Search failed", e)
+                if (!painted) emit(emptyList())
+            }
             finally { isSearchLoading.value = false }
         }
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    /** The same list as plain rows, for the screens that only draw the cards. */
+    val results: StateFlow<List<StashItemWithVaultItem>> = searchHits
+        .map { hits -> hits.map(SearchHit::row) }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     /**
@@ -415,7 +597,8 @@ class SearchViewModel @Inject constructor(
 
         val a = allow
         items.filter { item ->
-            (ops.itemTypes.isEmpty() || item.itemType in ops.itemTypes) &&
+            // Shared items store their type in capitals ("PDF"), indexed ones in lower case.
+            (ops.itemTypes.isEmpty() || item.itemType.lowercase() in ops.itemTypes) &&
                 (ops.after == null || item.timestamp >= ops.after) &&
                 (ops.before == null || item.timestamp < ops.before) &&
                 (!ops.requireOcr || item.ocrText.substringBefore("\n[").trim().isNotBlank()) &&
@@ -636,8 +819,13 @@ class SearchViewModel @Inject constructor(
                 // 2. Classify and route query, then retrieve context
                 val routed = QueryRouter.route(q)
                 val plan = QueryPlanner.parse(routed.cleanedQuery)
+                // Page-level hits: the answer's source passages are the best pages, which may
+                // well be several pages of one document.
                 val searchResults = retrievalService.retrieve(
-                    com.amar.vault.retrieval.RetrievalRequest(plan.cleanedQuery, plan)
+                    com.amar.vault.retrieval.RetrievalRequest(
+                        plan.cleanedQuery, plan,
+                        tuning = com.amar.vault.retrieval.RetrievalTuning(onePerDocument = false),
+                    )
                 ).items
                 val sources = searchResults.take(3)
 
@@ -651,7 +839,7 @@ class SearchViewModel @Inject constructor(
                     kCard = aggregator.buildCard(resolution.canonicalId!!)
                 }
 
-                val classConstraint = plan.strict.find { it.type == "DOCUMENT_CLASS" }
+                val classConstraint = plan.preferred.find { it.type == "DOCUMENT_CLASS" }
                 if (classConstraint != null) {
                     try {
                         val docClass = DocumentClass.valueOf(classConstraint.value)

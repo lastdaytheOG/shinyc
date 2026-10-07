@@ -3,7 +3,9 @@ package com.amar.vault
 data class TemporalParseResult(
     val cleanedQuery: String,
     val intent: TemporalIntent?,
-    val confidence: Float
+    val confidence: Float,
+    /** The year and month words the range was read from ("2024", "march"), as typed. */
+    val calendarTerms: List<String> = emptyList()
 )
 
 data class TemporalIntent(

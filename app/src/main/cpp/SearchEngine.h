@@ -40,7 +40,10 @@ public:
 private:
     static constexpr double K1 = 1.2;
     static constexpr double B  = 0.75;
-    static constexpr size_t MAX_RESULTS = 50;
+    // Chunk hits returned per query. The Kotlin caller trims to its own budget; it reads this
+    // deep only to collapse a document's many chunks to one result
+    // (VaultConfig.Retrieval.BM25_BUDGET × BM25_DOC_OVERFETCH must stay within it).
+    static constexpr size_t MAX_RESULTS = 300;
     static constexpr double TRIGRAM_BOOST = 0.3;
 
     struct DocInfo {
