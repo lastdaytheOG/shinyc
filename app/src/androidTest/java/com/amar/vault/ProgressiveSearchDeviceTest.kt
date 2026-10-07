@@ -62,7 +62,7 @@ class ProgressiveSearchDeviceTest {
                 uri = "content://devtest/book.pdf",
                 ocrText = words.joinToString(" "),
                 lang = "en",
-                itemType = "pdf",
+                itemType = ItemType.PDF,
                 pageNum = i / 3,
                 sourceFile = "devtest-book.pdf",
                 timestamp = 1_700_000_000_000L + i,

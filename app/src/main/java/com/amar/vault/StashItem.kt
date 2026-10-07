@@ -57,11 +57,15 @@ data class StashItemWithVaultItem(
     // VaultItem fields needed for UI
     val uri: String,
     val ocrText: String,
-    val itemType: String,
+    val itemType: ItemType,
     val sourceFile: String,
     val timestamp: Long,
     val title: String?,
-    val mimeType: String?
+    val mimeType: String?,
+    /** The item's tags ([VaultItem.tags]). */
+    val tags: String = "",
+    /** Set when this row stands for one piece of a document rather than for a saved item. */
+    val parentDocumentId: String? = null,
 ) {
     /** Reconstructs the persisted [StashItem] row (used for in-memory undo re-insert). */
     fun toStashItem(): StashItem = StashItem(
@@ -89,13 +93,14 @@ data class StashItemWithVaultItem(
             sourceFile = this.sourceFile,
             timestamp = this.timestamp,
             pHash = 0L,
-            tags = this.category,
+            tags = this.tags,
             contentHash = "",
             sourceApp = this.sourceApp,
             sharedAt = this.savedAt,
             originalUri = null,
             title = this.title,
-            mimeType = this.mimeType
+            mimeType = this.mimeType,
+            parentDocumentId = this.parentDocumentId,
         )
     }
 }
@@ -140,7 +145,9 @@ interface StashItemDao {
             v.sourceFile,
             v.timestamp,
             v.title,
-            v.mimeType
+            v.mimeType,
+            v.tags,
+            v.parentDocumentId
         FROM stash_items s
         INNER JOIN vault_items v ON s.vaultItemId = v.id
         WHERE s.vaultType = :vaultType
@@ -167,7 +174,9 @@ interface StashItemDao {
             v.sourceFile,
             v.timestamp,
             v.title,
-            v.mimeType
+            v.mimeType,
+            v.tags,
+            v.parentDocumentId
         FROM stash_items s
         INNER JOIN vault_items v ON s.vaultItemId = v.id
         WHERE s.vaultType = :vaultType AND s.category = :category
@@ -205,7 +214,8 @@ interface StashItemDao {
         SELECT
             s.id AS stashId, s.sessionId, s.vaultItemId, s.vaultType, s.category,
             s.savedAt, s.sourceApp, s.isFavorite, s.createdAt, s.userNote, s.thumbnailPath,
-            v.uri, v.ocrText, v.itemType, v.sourceFile, v.timestamp, v.title, v.mimeType
+            v.uri, v.ocrText, v.itemType, v.sourceFile, v.timestamp, v.title, v.mimeType,
+            v.tags, v.parentDocumentId
         FROM stash_items s
         INNER JOIN vault_items v ON s.vaultItemId = v.id
         WHERE s.sessionId = :sessionId AND s.id != :excludeStashId

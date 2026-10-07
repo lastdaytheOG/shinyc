@@ -21,22 +21,15 @@ object SearchFilter {
 
     val CHIPS = listOf(ALL, IMAGES, VIDEOS, ARTICLES, PRODUCTS, MUSIC, DOCUMENTS, FAVORITES, FOLDERS)
 
-    /**
-     * What the indexers call a picture. The gallery scan names it after the folder it was
-     * found in (screenshot, camera, whatsapp, photo); a shared picture is a PHOTO or a
-     * SCREENSHOT; the developer screen's is dev_manual.
-     */
-    private val IMAGE_TYPES = setOf("photo", "screenshot", "camera", "whatsapp", "image", "dev_manual")
-
     private val IMAGE_EXTENSIONS = listOf(".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".gif", ".bmp")
 
     /**
      * A photo or a screenshot. Its text was read off the picture; that does not make it a note.
-     * Told by its type, and for a type not listed above by where it is kept: the gallery, or a
+     * Told by its type, and for an item of another type by where it is kept: the gallery, or a
      * picture file on the phone. A link to a picture on the web is a link.
      */
-    fun isImage(itemType: String, mimeType: String?, uri: String): Boolean {
-        if (itemType.lowercase() in IMAGE_TYPES || mimeType?.startsWith("image/", ignoreCase = true) == true) return true
+    fun isImage(itemType: ItemType, mimeType: String?, uri: String): Boolean {
+        if (itemType.isImage || mimeType?.startsWith("image/", ignoreCase = true) == true) return true
         val where = uri.trim()
         return (where.startsWith("content://media/", ignoreCase = true) && where.contains("/images/")) ||
             ((where.startsWith("/") || where.startsWith("file://", ignoreCase = true)) &&
@@ -71,7 +64,7 @@ object SearchFilter {
                 ContentSpecies.PRODUCT -> chip == PRODUCTS
                 ContentSpecies.AUDIO -> chip == MUSIC
                 // A video file that was shared, as opposed to a link to one.
-                else -> chip == VIDEOS && (item.itemType.equals("VIDEO", ignoreCase = true) ||
+                else -> chip == VIDEOS && (item.itemType == ItemType.VIDEO ||
                     item.mimeType?.startsWith("video/", ignoreCase = true) == true)
             }
     }

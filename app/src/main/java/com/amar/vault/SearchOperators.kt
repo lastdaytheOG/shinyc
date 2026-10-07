@@ -13,7 +13,7 @@ import java.util.Calendar
  */
 data class ParsedOperators(
     val cleanedQuery: String,
-    val itemTypes: Set<String> = emptySet(),
+    val itemTypes: Set<ItemType> = emptySet(),
     val after: Long? = null,
     val before: Long? = null,
     val requireOcr: Boolean = false,
@@ -30,23 +30,23 @@ data class ParsedOperators(
 
 object SearchOperators {
 
-    /** Operator value → concrete VaultItem.itemType set. */
-    private val typeAliases: Map<String, Set<String>> = mapOf(
-        "pdf" to setOf("pdf"),
-        "image" to setOf("photo", "screenshot"),
-        "img" to setOf("photo", "screenshot"),
-        "photo" to setOf("photo"),
-        "screenshot" to setOf("screenshot"),
-        "doc" to setOf("word"), "docx" to setOf("word"), "word" to setOf("word"),
-        "xls" to setOf("excel"), "xlsx" to setOf("excel"), "excel" to setOf("excel"),
-        "epub" to setOf("epub"), "book" to setOf("epub"),
-        "text" to setOf("text"), "txt" to setOf("text"),
+    /** Operator value → the item types it means. */
+    private val typeAliases: Map<String, Set<ItemType>> = mapOf(
+        "pdf" to setOf(ItemType.PDF),
+        "image" to setOf(ItemType.PHOTO, ItemType.SCREENSHOT),
+        "img" to setOf(ItemType.PHOTO, ItemType.SCREENSHOT),
+        "photo" to setOf(ItemType.PHOTO),
+        "screenshot" to setOf(ItemType.SCREENSHOT),
+        "doc" to setOf(ItemType.WORD), "docx" to setOf(ItemType.WORD), "word" to setOf(ItemType.WORD),
+        "xls" to setOf(ItemType.EXCEL), "xlsx" to setOf(ItemType.EXCEL), "excel" to setOf(ItemType.EXCEL),
+        "epub" to setOf(ItemType.EPUB), "book" to setOf(ItemType.EPUB),
+        "text" to setOf(ItemType.TEXT), "txt" to setOf(ItemType.TEXT),
     )
 
     private val OP_REGEX = Regex("""(\w+):(\S+)""")
 
     fun parse(raw: String): ParsedOperators {
-        val itemTypes = mutableSetOf<String>()
+        val itemTypes = mutableSetOf<ItemType>()
         var after: Long? = null
         var before: Long? = null
         var requireOcr = false

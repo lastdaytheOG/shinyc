@@ -107,7 +107,7 @@ class ScreenshotObserver(
                         IndexingPipeline.getInstance(context).indexBitmap(
                             bmp,
                             job.uri.toString(),
-                            if (job.isRealtime) "screenshot" else "photo"
+                            if (job.isRealtime) ItemType.SCREENSHOT else ItemType.PHOTO
                         )
                     }
                 } catch (e: Exception) {

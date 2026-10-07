@@ -6,6 +6,7 @@ import android.net.Uri
 import com.amar.vault.AmarImageViewerActivity
 import com.amar.vault.AmarMediaViewerActivity
 import com.amar.vault.AmarReaderActivity
+import com.amar.vault.ItemType
 import com.amar.vault.PdfViewerActivity
 
 /**
@@ -21,7 +22,7 @@ class ImageStrategy : OpenStrategy {
     override val name = "Image"
     override fun canHandle(target: OpenTarget): Boolean = target.isFile() && (
         target.mimeType.startsWith("image/") ||
-            target.itemType in setOf("photo", "screenshot", "image") ||
+            target.itemType.isImage ||
             listOf(".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".heic").any { target.pathForExtSniff.endsWith(it) }
         )
 
@@ -35,7 +36,7 @@ class ImageStrategy : OpenStrategy {
 class PdfStrategy : OpenStrategy {
     override val name = "Pdf"
     override fun canHandle(target: OpenTarget): Boolean = target.isFile() && (
-        target.itemType == "pdf" || target.mimeType == "application/pdf" || target.pathForExtSniff.endsWith(".pdf")
+        target.itemType == ItemType.PDF || target.mimeType == "application/pdf" || target.pathForExtSniff.endsWith(".pdf")
         )
 
     override fun open(context: Context, target: OpenTarget): Boolean {
@@ -53,7 +54,7 @@ class PdfStrategy : OpenStrategy {
 class VideoStrategy : OpenStrategy {
     override val name = "Video"
     override fun canHandle(target: OpenTarget): Boolean = target.isFile() && (
-        target.itemType == "video" || target.mimeType.startsWith("video/") ||
+        target.itemType == ItemType.VIDEO || target.mimeType.startsWith("video/") ||
             listOf(".mp4", ".mkv", ".mov", ".webm", ".3gp", ".avi").any { target.pathForExtSniff.endsWith(it) }
         )
 
@@ -67,7 +68,7 @@ class VideoStrategy : OpenStrategy {
 class AudioStrategy : OpenStrategy {
     override val name = "Audio"
     override fun canHandle(target: OpenTarget): Boolean = target.isFile() && (
-        target.itemType == "audio" || target.mimeType.startsWith("audio/") ||
+        target.itemType == ItemType.AUDIO || target.mimeType.startsWith("audio/") ||
             listOf(".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac").any { target.pathForExtSniff.endsWith(it) }
         )
 
@@ -81,7 +82,7 @@ class AudioStrategy : OpenStrategy {
 class TextStrategy : OpenStrategy {
     override val name = "Text"
     override fun canHandle(target: OpenTarget): Boolean = target.isFile() && (
-        target.itemType == "text" || target.mimeType.startsWith("text/") ||
+        target.itemType == ItemType.TEXT || target.mimeType.startsWith("text/") ||
             target.item.uri.startsWith("share://text/") ||
             listOf(".txt", ".md", ".log", ".json", ".csv").any { target.pathForExtSniff.endsWith(it) }
         )

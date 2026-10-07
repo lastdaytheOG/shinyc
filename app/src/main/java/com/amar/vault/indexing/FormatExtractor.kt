@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import com.amar.vault.IndexMetrics
+import com.amar.vault.ItemType
 import com.amar.vault.UnicodeText
 import com.amar.vault.VaultLog
 import com.tom_roush.pdfbox.pdmodel.PDDocument
@@ -41,12 +42,15 @@ interface FormatExtractor {
      * whose provider gave no usable type ("application/octet-stream", or none at all).
      */
     val extensions: Set<String>
-    /** Family tag prepended to generated tags (was DocFamily.tag). */
-    val tag: String
     /** VaultItem.itemType for chunks of this family (was DocFamily.itemType). */
-    val itemType: String
-    /** Suspend since Sprint 4A: the PDF extractor may run the (suspend) OCR fallback. */
-    suspend fun extract(context: Context, uri: Uri, chunker: Chunker): List<PagedChunk>
+    val itemType: ItemType
+    /**
+     * Suspend since Sprint 4A: the PDF extractor may run the (suspend) OCR fallback.
+     * [onPageCount] is told how many pages the file has, once, by a format that has pages.
+     */
+    suspend fun extract(
+        context: Context, uri: Uri, chunker: Chunker, onPageCount: suspend (Int) -> Unit = {},
+    ): List<PagedChunk>
 
     /**
      * Sprint P6 — progressive variant. Emits chunks in batches AS THEY ARE PRODUCED so the caller
@@ -62,9 +66,10 @@ interface FormatExtractor {
         context: Context,
         uri: Uri,
         chunker: Chunker,
+        onPageCount: suspend (Int) -> Unit = {},
         onBatch: suspend (List<PagedChunk>) -> Unit,
     ) {
-        val all = extract(context, uri, chunker)
+        val all = extract(context, uri, chunker, onPageCount)
         if (all.isNotEmpty()) onBatch(all)
     }
 }
@@ -91,8 +96,7 @@ internal fun openDocStream(context: Context, uri: Uri): InputStream =
 class PdfFormatExtractor : FormatExtractor {
     override val mimeTypes = setOf("application/pdf")
     override val extensions = setOf("pdf")
-    override val tag = "pdf document"
-    override val itemType = "pdf"
+    override val itemType = ItemType.PDF
 
     private companion object {
         const val TAG = "PdfTrustGate"
@@ -146,7 +150,9 @@ class PdfFormatExtractor : FormatExtractor {
             ocrEngine ?: ImageContentExtractor(context.applicationContext).also { ocrEngine = it }
         }
 
-    override suspend fun extract(context: Context, uri: Uri, chunker: Chunker): List<PagedChunk> {
+    override suspend fun extract(
+        context: Context, uri: Uri, chunker: Chunker, onPageCount: suspend (Int) -> Unit,
+    ): List<PagedChunk> {
         val result = mutableListOf<PagedChunk>()
         var chunkIdx = 0
 
@@ -180,6 +186,7 @@ class PdfFormatExtractor : FormatExtractor {
                 try {
                 val pageCount = doc.numberOfPages
                 prof?.pageCount = pageCount
+                onPageCount(pageCount)
                 // Per-page final text, 1-indexed. Written by the strip/render producer
                 // (trusted pages, render failures) and the OCR consumer (fallback pages)
                 // at DISJOINT indices; read only after coroutineScope joins both, which
@@ -420,6 +427,7 @@ class PdfFormatExtractor : FormatExtractor {
         context: Context,
         uri: Uri,
         chunker: Chunker,
+        onPageCount: suspend (Int) -> Unit,
         onBatch: suspend (List<PagedChunk>) -> Unit,
     ) {
         // Sprint P6.1 — observation-only instrumentation, mirroring [extract]. Before this, the
@@ -455,6 +463,7 @@ class PdfFormatExtractor : FormatExtractor {
                 try {
                 val pageCount = doc.numberOfPages
                 prof?.pageCount = pageCount
+                onPageCount(pageCount)
 
                 // Final per-page text, 1-indexed. null = not yet ready. Written by the producer
                 // (trusted / blank / render-fail pages) and by OCR consumers (fallback pages) at
@@ -653,10 +662,11 @@ class PdfFormatExtractor : FormatExtractor {
 class WordFormatExtractor : FormatExtractor {
     override val mimeTypes = setOf("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     override val extensions = setOf("docx")
-    override val tag = "word document"
-    override val itemType = "word"
+    override val itemType = ItemType.WORD
 
-    override suspend fun extract(context: Context, uri: Uri, chunker: Chunker): List<PagedChunk> {
+    override suspend fun extract(
+        context: Context, uri: Uri, chunker: Chunker, onPageCount: suspend (Int) -> Unit,
+    ): List<PagedChunk> {
         val text = openDocStream(context, uri).use {
             org.apache.poi.xwpf.extractor.XWPFWordExtractor(
                 org.apache.poi.xwpf.usermodel.XWPFDocument(it)
@@ -670,10 +680,11 @@ class WordFormatExtractor : FormatExtractor {
 class ExcelFormatExtractor : FormatExtractor {
     override val mimeTypes = setOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     override val extensions = setOf("xlsx")
-    override val tag = "spreadsheet excel"
-    override val itemType = "excel"
+    override val itemType = ItemType.EXCEL
 
-    override suspend fun extract(context: Context, uri: Uri, chunker: Chunker): List<PagedChunk> {
+    override suspend fun extract(
+        context: Context, uri: Uri, chunker: Chunker, onPageCount: suspend (Int) -> Unit,
+    ): List<PagedChunk> {
         val fmt = org.apache.poi.ss.usermodel.DataFormatter()
         val text = openDocStream(context, uri).use {
             buildExcelText(org.apache.poi.xssf.usermodel.XSSFWorkbook(it), fmt)
@@ -693,10 +704,11 @@ class ExcelFormatExtractor : FormatExtractor {
 class EpubFormatExtractor : FormatExtractor {
     override val mimeTypes = setOf("application/epub+zip")
     override val extensions = setOf("epub")
-    override val tag = "ebook epub"
-    override val itemType = "epub"
+    override val itemType = ItemType.EPUB
 
-    override suspend fun extract(context: Context, uri: Uri, chunker: Chunker): List<PagedChunk> {
+    override suspend fun extract(
+        context: Context, uri: Uri, chunker: Chunker, onPageCount: suspend (Int) -> Unit,
+    ): List<PagedChunk> {
         val text = openDocStream(context, uri).use { stream ->
             val zipBytes = stream.readBytes()
             val fileMap = mutableMapOf<String, String>()

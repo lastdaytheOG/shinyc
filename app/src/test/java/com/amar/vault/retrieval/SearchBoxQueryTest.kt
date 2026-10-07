@@ -1,6 +1,7 @@
 package com.amar.vault.retrieval
 
 import com.amar.vault.QueryPlanner
+import com.amar.vault.ItemType
 import com.amar.vault.VaultItem
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -27,7 +28,7 @@ class SearchBoxQueryTest {
 
     private fun pdf(doc: String, file: String, text: String, timestamp: Long = now) = VaultItem(
         id = "${doc}_chunk0", uri = "content://docs/$doc", ocrText = text, lang = "en",
-        itemType = "pdf", pageNum = 1, sourceFile = file, timestamp = timestamp,
+        itemType = ItemType.PDF, pageNum = 1, sourceFile = file, timestamp = timestamp,
         parentDocumentId = doc, chunkIndex = 0,
     )
 
@@ -40,7 +41,7 @@ class SearchBoxQueryTest {
         pdf("old", "Current Affairs June.pdf", "an older current affairs summary"),
         pdf("marks", "marksheet.pdf", "statement of marks session 2023 roll number"),
         VaultItem(id = "shot", uri = "content://media/1", ocrText = "payment of rs 500 paid to ravi",
-            lang = "en", itemType = "screenshot", sourceFile = "1", timestamp = now),
+            lang = "en", itemType = ItemType.SCREENSHOT, sourceFile = "1", timestamp = now),
     )
 
     /** Mirrors Room; nothing in this vault carries date or classifier metadata. */

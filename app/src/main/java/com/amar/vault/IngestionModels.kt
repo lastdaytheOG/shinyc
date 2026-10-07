@@ -78,7 +78,7 @@ data class IngestionAttachment(
 data class ContentResolution(
     val primaryAttachment: IngestionAttachment,
     val secondaryAttachments: List<IngestionAttachment>,
-    val previewType: String,
+    val previewType: ItemType,
     val recommendedOpenStrategy: OpenStrategy,
     val previewTitle: String?,
     val previewThumbnailPath: String?

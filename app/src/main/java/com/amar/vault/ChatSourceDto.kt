@@ -36,24 +36,30 @@ data class ChatSourceDto(
     val title: String? = null,
     val mimeType: String? = null
 ) {
-    fun toVaultItem(): VaultItem = VaultItem(
-        id = id,
-        uri = uri,
-        ocrText = ocrText,
-        lang = lang,
-        itemType = itemType,
-        pageNum = pageNum,
-        sourceFile = sourceFile,
-        timestamp = timestamp,
-        pHash = pHash,
-        tags = tags,
-        contentHash = contentHash,
-        sourceApp = sourceApp,
-        sharedAt = sharedAt,
-        originalUri = originalUri,
-        title = title,
-        mimeType = mimeType
-    )
+    fun toVaultItem(): VaultItem {
+        // A source saved before database version 14 has its tags glued onto its text and its
+        // type under a former name; the stored JSON is left as it is and read as what it means.
+        val parts = FormerStoredText.split(ocrText)
+        return VaultItem(
+            id = id,
+            uri = uri,
+            ocrText = parts.page,
+            lang = lang,
+            itemType = ItemType.ofStored(itemType) ?: ItemType.fromFormer(itemType, mimeType, uri, sourceFile),
+            pageNum = pageNum,
+            sourceFile = sourceFile,
+            timestamp = timestamp,
+            pHash = pHash,
+            tags = listOf(tags, parts.tags).filter { it.isNotBlank() }.joinToString(" "),
+            contentHash = contentHash,
+            sourceApp = sourceApp,
+            sharedAt = sharedAt,
+            originalUri = originalUri,
+            title = title,
+            mimeType = mimeType,
+            qrPayload = QrPayloads.join(parts.qrPayloads),
+        )
+    }
 
     companion object {
         fun from(item: VaultItem): ChatSourceDto = ChatSourceDto(
@@ -61,7 +67,7 @@ data class ChatSourceDto(
             uri = item.uri,
             ocrText = item.ocrText,
             lang = item.lang,
-            itemType = item.itemType,
+            itemType = item.itemType.stored,
             pageNum = item.pageNum,
             sourceFile = item.sourceFile,
             timestamp = item.timestamp,

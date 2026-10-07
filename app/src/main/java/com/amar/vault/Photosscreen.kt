@@ -110,7 +110,7 @@ fun PhotosScreen(
     val isLoading by viewModel.isSearchLoading.collectAsStateWithLifecycle()
 
     val photos = remember(allItems) {
-        allItems.filter { it.itemType !in setOf("pdf", "word", "excel", "epub") }
+        allItems.filter { !it.isDocumentPiece }
             .sortedByDescending { it.timestamp }
     }
 
@@ -140,7 +140,7 @@ fun PhotosScreen(
                 SearchMode(
                     query = query,
                     onQueryChange = { viewModel.updateQuery(it) },
-                    results = results.filter { it.itemType !in setOf("pdf", "word", "excel", "epub") },
+                    results = results.filter { !it.isDocumentPiece },
                     isLoading = isLoading,
                     suggestions = suggestions,
                     people = people,
@@ -518,7 +518,7 @@ private fun SearchMode(
                         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.55f)), startY = 200f)))
                         Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
                             Text("TOP MATCH", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.6f), letterSpacing = 1.5.sp)
-                            Text(results.first().ocrText.substringBefore("\n[").take(40), fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(results.first().ocrText.take(40), fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -698,7 +698,7 @@ fun PhotoViewer(photo: VaultItem, photos: List<VaultItem>, onClose: () -> Unit) 
                     .padding(20.dp).padding(bottom = 8.dp)
             ) {
                 Text(formatTs(current.timestamp), fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
-                val preview = current.ocrText.substringBefore("\n[").trim().take(120)
+                val preview = current.ocrText.trim().take(120)
                 if (preview.isNotBlank()) {
                     Text(preview, fontSize = 13.sp, color = Color.White.copy(alpha = 0.55f), maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
                 }
@@ -783,7 +783,7 @@ private fun extractPeople(photos: List<VaultItem>): List<PersonInfo> {
     val stop = setOf("The","This","That","They","There","Their","These","Those","From","With","Have","Has","Had","Was","Were","Are","Been","Being","Would","Could","Should","Will","Shall","Can","May","Must","Just","More","Most","Some","Any","All","Each","Every","Other","New","Old","Good","Great","Best","Last","Next","First","Full","Total","Amount","Mobile","Search","Reply","Share","Open","Close","Today","View","Page","Settings","Download","Upload","Delete","Edit","Save","Home","Back","Menu","Help","Info","Data","File","Get","Scan","Pay","App","Accepted","Here","Using")
     val names = mutableMapOf<String, MutableList<VaultItem>>()
     photos.forEach { p ->
-        nameRe.findAll(p.ocrText.substringBefore("\n[")).map { it.value }.filter { it !in stop }.distinct().forEach { n -> names.getOrPut(n) { mutableListOf() }.add(p) }
+        nameRe.findAll(p.ocrText).map { it.value }.filter { it !in stop }.distinct().forEach { n -> names.getOrPut(n) { mutableListOf() }.add(p) }
     }
     return names.filter { it.value.size >= 2 }.map { (n, ps) -> PersonInfo(n, ps) }.sortedByDescending { it.photos.size }.take(8)
 }

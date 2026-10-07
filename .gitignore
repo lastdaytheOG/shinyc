@@ -120,3 +120,8 @@ apk/
 # ==============================
 __pycache__/
 *.pyc
+
+# ==============================
+# Copies of real vault databases used to try upgrades and compare search (local only)
+# ==============================
+tools/db-fixtures/

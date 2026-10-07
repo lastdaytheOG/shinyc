@@ -380,13 +380,16 @@ private fun SourceItemRow(
     source: VaultItem,
     onOpen: () -> Unit
 ) {
-    val title = source.sourceFile.takeIf { it.isNotBlank() } ?: when (source.itemType.uppercase()) {
-        "SCREENSHOT" -> "Screenshot"
-        "PHOTO" -> "Photo"
-        "YOUTUBE" -> "YouTube Video"
-        "REDDIT" -> "Reddit Post"
-        "TEXT" -> "Shared Note"
-        "PDF" -> "PDF Document"
+    val title = source.sourceFile.takeIf { it.isNotBlank() } ?: when (source.itemType) {
+        ItemType.SCREENSHOT -> "Screenshot"
+        ItemType.PHOTO -> "Photo"
+        ItemType.LINK -> when (LinkSite.of(source.uri)) {
+            LinkSite.YOUTUBE -> "YouTube Video"
+            LinkSite.REDDIT -> "Reddit Post"
+            LinkSite.OTHER -> "Document"
+        }
+        ItemType.TEXT -> "Shared Note"
+        ItemType.PDF -> "PDF Document"
         else -> "Document"
     }
 

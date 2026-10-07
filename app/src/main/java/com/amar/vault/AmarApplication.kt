@@ -50,16 +50,11 @@ class AmarApplication : Application(), Configuration.Provider {
             // 4. Initialize native C++ BM25 search engine + hydrate from Room
             withContext(Dispatchers.IO) {
                 // bm25Index (Hilt @Singleton) constructs + initEngine()s the native engine.
-                val items = VaultDatabase.get(applicationContext)
-                    .vaultDao()
-                    .getAllSearchableData()
+                val database = VaultDatabase.get(applicationContext)
+                val items = database.vaultDao().getAllSearchableData()
 
                 items.forEach { item ->
-                    // The name (a document's file name, any item's title) is indexed too, so
-                    // every PDF already in the vault becomes findable by name on this rebuild.
-                    val name = com.amar.vault.retrieval.SearchableName.of(item.itemType, item.sourceFile, item.title)
-                    val text = "${item.ocrText} ${item.tags} ${item.itemType} $name"
-                    bm25Index.addDocument(item.id, text)
+                    bm25Index.addDocument(item.id, com.amar.vault.retrieval.KeywordText.of(item))
                 }
 
                 VaultLog.i("AmarApp", "BM25 hydrated: ${items.size} docs")
@@ -79,9 +74,24 @@ class AmarApplication : Application(), Configuration.Provider {
                     health.recordDbVersion(IndexHealthState.CURRENT_DB_VERSION)
                 }
                 IndexMetrics.logSnapshot("AmarApp")
+
+                // 4c. Bring stored tags up to the current rules. Does something once per
+                //     version of the rules; search is already up, and the engine, which indexes
+                //     tags, is given each changed item again as it is written.
+                try {
+                    com.amar.vault.indexing.AutoTagUpkeep(database, applicationContext).retagIfRulesChanged { ids ->
+                        ids.chunked(400).forEach { some ->
+                            database.vaultDao().getByIds(some).forEach { item ->
+                                bm25Index.addDocument(item.id, com.amar.vault.retrieval.KeywordText.of(item))
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    VaultLog.e("AmarApp", "Tags were not brought up to date; they stay as they were", e)
+                }
             }
 
-            // 4c. Read the text of documents that were shared in before sharing indexed them.
+            // 4d. Read the text of documents that were shared in before sharing indexed them.
             SavedDocumentRepairWorker.enqueue(applicationContext)
 
             // 5. Schedule nightly job

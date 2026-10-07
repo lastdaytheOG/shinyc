@@ -40,7 +40,7 @@ data class SearchHit(
     val similarWord: String? = null,
     /**
      * Set when the item says neither the typed word nor anything like it, and is listed for a
-     * tag the indexer gave it ("receipt" on a page that has "rs" on it): that tag. The card
+     * tag the app gave it ("receipt" on a payment screenshot that says "Paid to"): that tag. The card
      * says so, where the excerpt would have been.
      */
     val filedUnder: String? = null,
@@ -64,10 +64,9 @@ internal object MatchExcerpt {
     private const val AFTER = 110
     private val WHITESPACE = Regex("\\s+")
 
-    /** Null when none of [queryWords] is in [storedText]. */
-    fun of(storedText: String, queryWords: List<String>): String? {
-        // The stored text ends with a "\n[tags]" line that is not part of the page.
-        val text = com.amar.vault.retrieval.StoredText.page(storedText).replace(WHITESPACE, " ").trim()
+    /** Null when none of [queryWords] is in [page]. */
+    fun of(page: String, queryWords: List<String>): String? {
+        val text = page.replace(WHITESPACE, " ").trim()
         // Anchor on the longest word found: in "ministry of law" that is "ministry", not the
         // "of" that stands near the top of every page.
         val at = queryWords.sortedByDescending { it.length }
@@ -82,25 +81,24 @@ internal object MatchExcerpt {
     }
 
     /**
-     * The first word of [storedText] that is spelt nearly like one of [queryWords] — what the
+     * The first word of [page] that is spelt nearly like one of [queryWords] — what the
      * typo lanes matched it by. Null when there is none.
      */
-    fun similarWord(storedText: String, queryWords: List<String>): String? {
+    fun similarWord(page: String, queryWords: List<String>): String? {
         val words = queryWords.filter { it.length >= 3 }
         if (words.isEmpty()) return null
-        val text = com.amar.vault.retrieval.StoredText.page(storedText).lowercase()
+        val text = page.lowercase()
         return com.amar.vault.retrieval.FuzzyMatcher(words, roots = true).firstMatch(text)
             // As it stands on the page it may have a comma or a bracket on it.
             ?.let { com.amar.vault.retrieval.QueryWord(it).bare }?.takeIf { it.length >= 3 }
     }
 
     /**
-     * The tag of [storedText] that one of [queryWords] is found by — the word itself, or else
-     * one spelt nearly like it. Null when it has no such tag.
+     * The one of an item's [itemTags] that one of [queryWords] is found by — the word itself,
+     * or else one spelt nearly like it. Null when it has no such tag.
      */
-    fun tag(storedText: String, queryWords: List<String>): String? {
-        val tags = com.amar.vault.retrieval.StoredText.tags(storedText).lowercase()
-            .split(' ').filter { it.isNotBlank() && !it.startsWith("qr_data:") }
+    fun tag(itemTags: String, queryWords: List<String>): String? {
+        val tags = itemTags.lowercase().split(' ').filter { it.isNotBlank() }
         if (tags.isEmpty()) return null
         tags.firstOrNull { tag -> queryWords.any { tag.contains(it) } }?.let { return it }
         val words = queryWords.filter { it.length >= 3 }
@@ -141,12 +139,10 @@ internal fun oneCardPerDocument(
         val excerpt = exact ?: if (found != null && similar != null) MatchExcerpt.of(found.ocrText, listOf(similar)) else null
         SearchHit(
             row = document?.let(savedByVaultId::get) ?: row,
-            page = found?.pageNum?.takeIf {
-                excerpt != null && document != null && it > 0 && found.itemType.equals("pdf", ignoreCase = true)
-            },
+            page = found?.pdfPage?.takeIf { excerpt != null },
             excerpt = excerpt,
             similarWord = similar,
-            filedUnder = unexplained?.takeIf { similar == null }?.let { MatchExcerpt.tag(it.ocrText, queryWords) },
+            filedUnder = unexplained?.takeIf { similar == null }?.let { MatchExcerpt.tag(it.tags, queryWords) },
         )
     }
 }
@@ -544,7 +540,7 @@ class SearchViewModel @Inject constructor(
         sessionId = null,
         vaultItemId = id,
         vaultType = "SAVED",
-        category = tags,
+        category = "",
         savedAt = timestamp,
         sourceApp = sourceApp ?: "",
         isFavorite = false,
@@ -557,7 +553,9 @@ class SearchViewModel @Inject constructor(
         sourceFile = sourceFile,
         timestamp = timestamp,
         title = title,
-        mimeType = mimeType
+        mimeType = mimeType,
+        tags = tags,
+        parentDocumentId = parentDocumentId,
     )
 
     /**
@@ -597,11 +595,10 @@ class SearchViewModel @Inject constructor(
 
         val a = allow
         items.filter { item ->
-            // Shared items store their type in capitals ("PDF"), indexed ones in lower case.
-            (ops.itemTypes.isEmpty() || item.itemType.lowercase() in ops.itemTypes) &&
+            (ops.itemTypes.isEmpty() || item.itemType in ops.itemTypes) &&
                 (ops.after == null || item.timestamp >= ops.after) &&
                 (ops.before == null || item.timestamp < ops.before) &&
-                (!ops.requireOcr || item.ocrText.substringBefore("\n[").trim().isNotBlank()) &&
+                (!ops.requireOcr || item.ocrText.isNotBlank()) &&
                 (ops.source == null || sequenceOf(item.uri, item.sourceApp, item.sourceFile)
                     .any { it.contains(ops.source, ignoreCase = true) }) &&
                 (a == null || item.vaultItemId in a)
@@ -925,7 +922,7 @@ class SearchViewModel @Inject constructor(
         }
 
         val qLower = queryText.lowercase()
-        val allText = results.map { it.ocrText.substringBefore("\n[").trim() }
+        val allText = results.map { it.ocrText.trim() }
 
         val isMoneyQuery = listOf("expense", "spend", "payment", "upi", "paid", "amount",
             "total", "calculate", "money", "transaction", "rupee", "cost", "bill",
@@ -1067,11 +1064,8 @@ class SearchViewModel @Inject constructor(
         val queryWords = queryText.split(Regex("\\s+")).filter { it.length >= 2 }
 
         results.take(3).forEach { item ->
-            val text = item.ocrText.substringBefore("\n[").trim()
-            val typeIcon = when (item.itemType) {
-                "pdf" -> "📄"; "word" -> "📝"; "excel" -> "📊"
-                "screenshot" -> "📸"; else -> "🖼"
-            }
+            val text = item.ocrText.trim()
+            val typeIcon = item.itemType.rowIcon
 
             val bestLine = text.lines()
                 .filter { it.isNotBlank() && it.length > 3 }

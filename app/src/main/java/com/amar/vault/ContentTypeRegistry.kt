@@ -24,16 +24,15 @@ enum class ContentSpecies(
 
     companion object {
         fun classify(item: StashItemWithVaultItem): ContentSpecies =
-            classify(item.sourceApp, item.uri, item.itemType, item.mimeType, item.ocrText, item.sourceFile)
+            classify(item.sourceApp, item.uri, item.itemType, item.mimeType, item.ocrText)
 
         fun classify(item: VaultItem): ContentSpecies =
-            classify(item.sourceApp.orEmpty(), item.uri, item.itemType, item.mimeType, item.ocrText, item.sourceFile)
+            classify(item.sourceApp.orEmpty(), item.uri, item.itemType, item.mimeType, item.ocrText)
 
         /** True for a stored Word, Excel or EPUB file (a PDF has a species of its own). */
-        fun isOfficeDocument(itemType: String, mimeType: String?, uri: String): Boolean {
-            val type = itemType.uppercase()
+        fun isOfficeDocument(itemType: ItemType, mimeType: String?, uri: String): Boolean {
             val mime = mimeType?.lowercase().orEmpty()
-            return type == "WORD" || type == "EXCEL" || type == "EPUB" ||
+            return itemType == ItemType.WORD || itemType == ItemType.EXCEL || itemType == ItemType.EPUB ||
                 mime.contains("officedocument") || mime.contains("epub") ||
                 OFFICE_EXTENSIONS.any { uri.trim().endsWith(it, ignoreCase = true) }
         }
@@ -42,25 +41,23 @@ enum class ContentSpecies(
 
         /** One body for both item shapes, so the two cannot drift apart. */
         private fun classify(
-            rawSourceApp: String, rawUri: String, rawItemType: String,
-            rawMimeType: String?, ocrText: String, rawSourceFile: String,
+            rawSourceApp: String, rawUri: String, itemType: ItemType,
+            rawMimeType: String?, ocrText: String,
         ): ContentSpecies {
             val sourceApp = rawSourceApp.trim()
             val uri = rawUri.trim()
-            val itemType = rawItemType.uppercase()
             val mimeType = rawMimeType?.lowercase().orEmpty()
             val ocr = ocrText.lowercase()
-            val sourceFile = rawSourceFile.lowercase()
 
             return when {
                 // 1. YouTube video
-                uri.contains("youtube.com", ignoreCase = true) || uri.contains("youtu.be", ignoreCase = true) || sourceApp.equals("YouTube", ignoreCase = true) || itemType == "YOUTUBE" -> YOUTUBE_VIDEO
+                uri.contains("youtube.com", ignoreCase = true) || uri.contains("youtu.be", ignoreCase = true) || sourceApp.equals("YouTube", ignoreCase = true) -> YOUTUBE_VIDEO
 
                 // 2. Reel / Instagram / Tiktok
                 uri.contains("instagram.com", ignoreCase = true) || uri.contains("instagr.am", ignoreCase = true) || uri.contains("tiktok.com", ignoreCase = true) || sourceApp.equals("Instagram", ignoreCase = true) -> REEL
 
                 // 3. Audio / Spotify
-                uri.contains("spotify.com", ignoreCase = true) || uri.startsWith("spotify:", ignoreCase = true) || sourceApp.equals("Spotify", ignoreCase = true) || itemType == "AUDIO" || mimeType.startsWith("audio/") -> AUDIO
+                uri.contains("spotify.com", ignoreCase = true) || uri.startsWith("spotify:", ignoreCase = true) || sourceApp.equals("Spotify", ignoreCase = true) || itemType == ItemType.AUDIO || mimeType.startsWith("audio/") -> AUDIO
 
                 // 4. Play Store App listings
                 uri.contains("play.google.com", ignoreCase = true) || sourceApp.equals("Play Store", ignoreCase = true) -> APP_LISTING
@@ -69,7 +66,7 @@ enum class ContentSpecies(
                 //    for a document the text is a page of its content, so a PDF page that printed a
                 //    rupee sign, a "$" or the word "distance" was drawn as a product or a map pin,
                 //    titled "Saved Item", and its file could not be recognised in search results.
-                itemType == "PDF" || mimeType.contains("pdf") || uri.endsWith(".pdf", ignoreCase = true) -> PDF
+                itemType == ItemType.PDF || mimeType.contains("pdf") || uri.endsWith(".pdf", ignoreCase = true) -> PDF
                 isOfficeDocument(itemType, mimeType, uri) -> DOCUMENT
 
                 // 6. Location / Map details
@@ -79,7 +76,7 @@ enum class ContentSpecies(
                 sourceApp.equals("Amazon", ignoreCase = true) || sourceApp.equals("Flipkart", ignoreCase = true) || uri.contains("amazon.", ignoreCase = true) || uri.contains("etsy.com", ignoreCase = true) || ocr.contains("₹") || ocr.contains("$") -> PRODUCT
 
                 // 8. Screenshot
-                itemType == "SCREENSHOT" || (itemType == "IMAGE" && sourceFile.contains("screenshot")) -> SCREENSHOT
+                itemType == ItemType.SCREENSHOT -> SCREENSHOT
                 
                 // Fallbacks
                 isUrlLike(uri) -> WEBSITE

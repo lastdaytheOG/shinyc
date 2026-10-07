@@ -23,7 +23,7 @@ object ScaleTestGenerator {
                     uri = "content://dummy/$it",
                     ocrText = "Generated scale document $it",
                     lang = "en",
-                    itemType = "PDF",
+                    itemType = ItemType.PDF,
                     timestamp = System.currentTimeMillis()
                 )
             }

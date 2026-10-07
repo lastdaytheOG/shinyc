@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
 import coil.request.ImageRequest
 import com.amar.vault.ContentSpecies
+import com.amar.vault.ItemType
 import com.amar.vault.PdfPreviewGenerator
 import com.amar.vault.SearchHit
 import com.amar.vault.bounceClick
@@ -314,7 +315,7 @@ fun ImageHitCard(
     val item = hit.row
     // What was read off the picture, for when no part of it is being pointed at.
     val readOffIt = remember(item.ocrText) {
-        item.ocrText.substringBefore("\n[").replace(Regex("\\s+"), " ").trim().take(140)
+        item.ocrText.replace(Regex("\\s+"), " ").trim().take(140)
     }
 
     Row(
@@ -386,7 +387,7 @@ fun ImageHitCard(
                 Box(Modifier.size(8.dp).clip(CircleShape).background(ScreenshotColor))
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    text = if (item.itemType.equals("screenshot", ignoreCase = true)) "Screenshot" else "Image",
+                    text = if (item.itemType == ItemType.SCREENSHOT) "Screenshot" else "Image",
                     color = WarmBrownDark,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold

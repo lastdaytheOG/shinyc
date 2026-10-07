@@ -12,7 +12,7 @@ import org.junit.Test
  */
 class DocumentSearchResultTest {
 
-    private fun page(doc: String, index: Int, text: String, itemType: String = "pdf", file: String = "$doc.pdf") =
+    private fun page(doc: String, index: Int, text: String, itemType: ItemType = ItemType.PDF, file: String = "$doc.pdf") =
         VaultItem(
             id = "${doc}_chunk$index", uri = "content://docs/$doc", ocrText = text, lang = "en",
             itemType = itemType, pageNum = index + 1, sourceFile = file, timestamp = 0L,
@@ -24,6 +24,7 @@ class DocumentSearchResultTest {
         savedAt = timestamp, sourceApp = sourceApp.orEmpty(), isFavorite = false, createdAt = timestamp,
         userNote = null, thumbnailPath = null, uri = uri, ocrText = ocrText, itemType = itemType,
         sourceFile = sourceFile, timestamp = timestamp, title = title, mimeType = mimeType,
+        tags = tags, parentDocumentId = parentDocumentId,
     )
 
     // ── The card: a document is a document, whatever its pages say ──────────────────────
@@ -47,7 +48,7 @@ class DocumentSearchResultTest {
     fun aSharedPdfIsAPdfBeforeAndAfterItsTextIsRead() {
         val saved = VaultItem(
             id = "saved", uri = "/data/user/0/com.amar.vault/files/shared_imports/abc.pdf", ocrText = "",
-            lang = "en", itemType = "PDF", sourceFile = "Bill.pdf", timestamp = 0L,
+            lang = "en", itemType = ItemType.PDF, sourceFile = "Bill.pdf", timestamp = 0L,
             title = "Bill.pdf", mimeType = "application/pdf",
         )
         assertEquals(ContentSpecies.PDF, ContentSpecies.classify(saved))
@@ -57,16 +58,16 @@ class DocumentSearchResultTest {
     @Test
     fun wordExcelAndEpubPagesAreNeverProductsOrPlaces() {
         val text = "unit price ₹ 400, distance to location 12 km"
-        assertEquals(ContentSpecies.DOCUMENT, ContentSpecies.classify(page("notes", 0, text, "word", "notes.docx")))
-        assertEquals(ContentSpecies.DOCUMENT, ContentSpecies.classify(page("sheet", 0, text, "excel", "sheet.xlsx")))
-        assertEquals(ContentSpecies.DOCUMENT, ContentSpecies.classify(page("book", 0, text, "epub", "book.epub")))
+        assertEquals(ContentSpecies.DOCUMENT, ContentSpecies.classify(page("notes", 0, text, ItemType.WORD, "notes.docx")))
+        assertEquals(ContentSpecies.DOCUMENT, ContentSpecies.classify(page("sheet", 0, text, ItemType.EXCEL, "sheet.xlsx")))
+        assertEquals(ContentSpecies.DOCUMENT, ContentSpecies.classify(page("book", 0, text, ItemType.EPUB, "book.epub")))
     }
 
     @Test
     fun aScreenshotIsStillReadByItsText() {
         val shot = VaultItem(
             id = "s", uri = "content://media/1", ocrText = "Paid ₹ 250 to Ravi", lang = "en",
-            itemType = "screenshot", timestamp = 0L,
+            itemType = ItemType.SCREENSHOT, timestamp = 0L,
         )
         assertEquals("unchanged for images", ContentSpecies.PRODUCT, ContentSpecies.classify(shot))
     }
@@ -77,7 +78,7 @@ class DocumentSearchResultTest {
     fun aPageOfASavedDocumentIsShownAsThatSavedDocument() {
         val saved = VaultItem(
             id = "bill", uri = "/files/shared_imports/x.pdf", ocrText = "", lang = "en",
-            itemType = "PDF", sourceFile = "Bill.pdf", timestamp = 0L, title = "Bill.pdf",
+            itemType = ItemType.PDF, sourceFile = "Bill.pdf", timestamp = 0L, title = "Bill.pdf",
         )
         val savedRow = saved.asRow(stashId = "stash-1", category = "Bills")
         val hit = page("bill", 4, "amount due in March")
@@ -99,7 +100,7 @@ class DocumentSearchResultTest {
     fun manyPagesOfOneDocumentAreOneCard() {
         val saved = VaultItem(
             id = "bill", uri = "/files/shared_imports/x.pdf", ocrText = "", lang = "en",
-            itemType = "PDF", sourceFile = "Bill.pdf", timestamp = 0L, title = "Bill.pdf",
+            itemType = ItemType.PDF, sourceFile = "Bill.pdf", timestamp = 0L, title = "Bill.pdf",
         )
         val savedRow = saved.asRow(stashId = "stash-1")
         val billPages = (0 until 5).map { page("bill", it, "page $it") }
@@ -131,7 +132,7 @@ class DocumentSearchResultTest {
     fun theSavedDocumentStillOpensOnThePageThatMatched() {
         val saved = VaultItem(
             id = "act", uri = "/files/shared_imports/x.pdf", ocrText = "", lang = "en",
-            itemType = "PDF", sourceFile = "Act.pdf", timestamp = 0L, title = "Act.pdf",
+            itemType = ItemType.PDF, sourceFile = "Act.pdf", timestamp = 0L, title = "Act.pdf",
         )
         val hit = page("act", 36, longPage)
         val card = oneCardPerDocument(
@@ -151,7 +152,7 @@ class DocumentSearchResultTest {
 
     @Test
     fun aWordFileHasWordsToShowButNoPage() {
-        val hit = page("notes", 3, longPage, itemType = "word", file = "notes.docx")
+        val hit = page("notes", 3, longPage, itemType = ItemType.WORD, file = "notes.docx")
         val card = oneCardPerDocument(listOf(hit.asRow()), listOf(hit), emptyMap(), listOf("depository")).single()
         assertNull("a chunk of a Word file is not a page", card.page)
         assertTrue(card.excerpt!!.contains("depository"))
@@ -180,10 +181,9 @@ class DocumentSearchResultTest {
     }
 
     @Test
-    fun theTagLineUnderAPageIsNotItsText() {
-        // As stored: the page's text, then a line feed and the bracketed tags.
-        val stored = "total amount due" + 10.toChar() + "[pdf document invoice billing]"
-        assertNull(MatchExcerpt.of(stored, listOf("invoice")))
+    fun aPagesTagsAreNotItsText() {
+        val row = tagged(page("bill", 0, "total amount due"), "pdf document invoice billing")
+        assertNull(MatchExcerpt.of(row.ocrText, listOf("invoice")))
     }
 
     // ── Pictures, and results that are only spelt nearly the same ───────────────────────
@@ -192,7 +192,7 @@ class DocumentSearchResultTest {
     fun aPictureShowsTheWordsReadOffItThatMatched() {
         val shot = VaultItem(
             id = "shot", uri = "content://media/1", ocrText = "18:09 ELLA CIAO. Add to queue", lang = "en",
-            itemType = "screenshot", timestamp = 0L,
+            itemType = ItemType.SCREENSHOT, timestamp = 0L,
         )
         val card = oneCardPerDocument(listOf(shot.asRow()), listOf(shot), emptyMap(), listOf("queue")).single()
         assertTrue(card.excerpt, card.excerpt!!.contains("queue"))
@@ -220,11 +220,12 @@ class DocumentSearchResultTest {
 
     // ── Found by a tag the indexer added, not by anything it says ───────────────────────
 
-    private fun tagged(text: String, tags: String) = text + 10.toChar() + "[" + tags + "]"
+    /** [row] as the indexer stores it: the page, and the tags it gave the page. */
+    private fun tagged(row: VaultItem, tags: String) = row.copy(tags = tags)
 
     @Test
     fun aRowFoundByATagSaysWhichTag() {
-        val hit = page("act", 3, tagged("the assessee shall pay the amount due", "pdf document invoice billing receipt"))
+        val hit = tagged(page("act", 3, "the assessee shall pay the amount due"), "pdf document invoice billing receipt")
         val card = oneCardPerDocument(listOf(hit.asRow()), listOf(hit), emptyMap(), listOf("invoice")).single()
         assertEquals("invoice", card.filedUnder)
         assertNull("a tag is not on a page", card.excerpt)
@@ -233,7 +234,7 @@ class DocumentSearchResultTest {
 
     @Test
     fun aTagIsNotTheReasonWhenThePageSaysTheWord() {
-        val hit = page("bill", 0, tagged("this is not a gst invoice", "pdf document invoice billing receipt"))
+        val hit = tagged(page("bill", 0, "this is not a gst invoice"), "pdf document invoice billing receipt")
         val card = oneCardPerDocument(listOf(hit.asRow()), listOf(hit), emptyMap(), listOf("invoice")).single()
         assertNull(card.filedUnder)
         assertTrue(card.excerpt!!.contains("invoice"))
@@ -242,21 +243,23 @@ class DocumentSearchResultTest {
 
     @Test
     fun aMisspeltWordFindsTheTagItWasMeantToBe() {
-        val hit = page("act", 3, tagged("the assessee shall pay the amount due", "pdf document invoice billing receipt"))
+        val hit = tagged(page("act", 3, "the assessee shall pay the amount due"), "pdf document invoice billing receipt")
         val card = oneCardPerDocument(listOf(hit.asRow()), listOf(hit), emptyMap(), listOf("recipt")).single()
         assertEquals("receipt", card.filedUnder)
         assertNull(card.similarWord)
     }
 
     @Test
-    fun aTableInThePageIsNotMistakenForItsTags() {
-        // A page can have a bracketed block of its own; the tags are the last line.
-        val stored = "Schedule" + 10.toChar() + "[Table: Sl. No. | Rate of invoice]" + 10.toChar() +
-            "as amended" + 10.toChar() + "[pdf document tax government]"
-        assertEquals("pdf document tax government", com.amar.vault.retrieval.StoredText.tags(stored))
-        assertTrue(com.amar.vault.retrieval.StoredText.page(stored).endsWith("as amended"))
-        assertTrue("the table is part of the page", MatchExcerpt.of(stored, listOf("invoice"))!!.contains("invoice"))
-        assertEquals("no tags, no tag line", "", com.amar.vault.retrieval.StoredText.tags("plain text [with a bracket]"))
+    fun aTableInThePageIsPartOfThePage() {
+        // A page can have a bracketed block of its own. (How such a page was told from its
+        // tags while the two were stored as one text is FormerStoredTextTest's subject.)
+        val row = tagged(
+            page("act", 3, "Schedule" + 10.toChar() + "[Table: Sl. No. | Rate of invoice]" + 10.toChar() + "as amended"),
+            "pdf document tax government",
+        )
+        val card = oneCardPerDocument(listOf(row.asRow()), listOf(row), emptyMap(), listOf("invoice")).single()
+        assertTrue("the table is part of the page", card.excerpt!!.contains("invoice"))
+        assertNull(card.filedUnder)
     }
 
     @Test

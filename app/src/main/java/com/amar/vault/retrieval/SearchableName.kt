@@ -1,5 +1,6 @@
 package com.amar.vault.retrieval
 
+import com.amar.vault.ItemType
 import com.amar.vault.VaultItem
 
 /**
@@ -19,15 +20,13 @@ import com.amar.vault.VaultItem
  */
 object SearchableName {
 
-    val DOCUMENT_TYPES = setOf("pdf", "word", "excel", "epub")
-
     /** Anything that is not a letter, a combining mark (Devanagari vowel signs) or a digit. */
     private val SEPARATORS = Regex("[^\\p{L}\\p{M}\\p{N}]+")
 
     fun of(item: VaultItem): String = of(item.itemType, item.sourceFile, item.title)
 
-    fun of(itemType: String, sourceFile: String?, title: String?): String {
-        val file = sourceFile?.trim()?.takeIf { it.isNotEmpty() && itemType in DOCUMENT_TYPES }
+    fun of(itemType: ItemType, sourceFile: String?, title: String?): String {
+        val file = sourceFile?.trim()?.takeIf { it.isNotEmpty() && itemType.isDocument }
         val heading = title?.trim()?.takeIf { it.isNotEmpty() && it != file }
         if (file == null && heading == null) return ""
         val written = listOfNotNull(file, heading).joinToString(" ")

@@ -58,14 +58,13 @@ class ShareImportWorker @dagger.assisted.AssistedInject constructor(
                                 indexingPipeline.indexBitmap(
                                     bitmap = bitmap,
                                     uri = uriStr,
-                                    itemType = vaultItem.itemType.lowercase(),
+                                    itemType = vaultItem.itemType,
                                     baseId = vaultItem.id
                                 )
                             }
                         }
                     } else if (attachment.attachmentType == "TEXT") {
-                        val docText = "${vaultItem.title ?: ""} ${vaultItem.ocrText} ${vaultItem.sourceFile} ${vaultItem.itemType}"
-                        bm25.addDocument(vaultItem.id, docText)
+                        bm25.addDocument(vaultItem.id, com.amar.vault.retrieval.KeywordText.of(vaultItem))
                     } else if (localPath != null) {
                         // Null for a file that is not a document the indexer reads (video, audio, …).
                         documentFailure = documentIndexer.indexSavedDocument(vaultItem, localPath) as? IndexResult.Failure

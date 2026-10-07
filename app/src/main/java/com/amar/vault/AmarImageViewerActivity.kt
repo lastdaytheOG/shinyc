@@ -36,7 +36,7 @@ class AmarImageViewerActivity : ComponentActivity() {
             uri = uri,
             ocrText = intent.getStringExtra(EXTRA_TEXT).orEmpty(),
             lang = "en",
-            itemType = "PHOTO",
+            itemType = ItemType.PHOTO,
             sourceFile = intent.getStringExtra(EXTRA_TITLE).orEmpty(),
             timestamp = intent.getLongExtra(EXTRA_TIMESTAMP, System.currentTimeMillis()),
             title = intent.getStringExtra(EXTRA_TITLE),

@@ -1,5 +1,6 @@
 package com.amar.vault.benchmark
 
+import com.amar.vault.ItemType
 import com.amar.vault.VaultItem
 import com.amar.vault.retrieval.RetrievalRequest
 import com.amar.vault.retrieval.RetrievalResult
@@ -16,7 +17,7 @@ import org.junit.Test
 class RetrievalAblationBenchmarkTest {
 
     private fun item(id: String) =
-        VaultItem(id = id, uri = "u/$id", ocrText = id, lang = "en", itemType = "pdf", timestamp = 0L)
+        VaultItem(id = id, uri = "u/$id", ocrText = id, lang = "en", itemType = ItemType.PDF, timestamp = 0L)
 
     private class Repo(private val all: List<VaultItem>) : SearchRepository {
         override suspend fun getByIds(ids: List<String>) = all.filter { it.id in ids }

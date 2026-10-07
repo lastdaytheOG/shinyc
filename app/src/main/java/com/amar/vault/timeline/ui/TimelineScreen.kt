@@ -14,7 +14,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.amar.vault.ContentOpenManager
 import com.amar.vault.VaultDatabase
+import com.amar.vault.ItemType
 import com.amar.vault.VaultItem
+import com.amar.vault.rowIcon
 import com.amar.vault.timeline.model.TimelineEntrySnapshot
 import com.amar.vault.timeline.model.TimelineEntryType
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -159,7 +161,7 @@ fun TimelineEntryRow(ui: TimelineEntryUi, onOpen: (VaultItem) -> Unit) {
         .clickable(enabled = item != null) { item?.let(onOpen) }
     ) {
         Text(text = "$icon  $title", fontWeight = FontWeight.SemiBold)
-        val caption = listOfNotNull(item?.itemType?.takeIf { it.isNotBlank() }, dateStr)
+        val caption = listOfNotNull(item?.itemType?.stored, dateStr)
             .joinToString(" · ")
         if (caption.isNotBlank()) {
             Text(text = caption, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
@@ -168,13 +170,9 @@ fun TimelineEntryRow(ui: TimelineEntryUi, onOpen: (VaultItem) -> Unit) {
 }
 
 /** Emoji icon by entry/item type (mirrors the icons already used in search answers). */
-private fun iconFor(entryType: String, itemType: String?): String {
+private fun iconFor(entryType: String, itemType: ItemType?): String {
     if (entryType == TimelineEntryType.EVENT.name) return "📅"
-    return when (itemType) {
-        "pdf" -> "📄"; "word" -> "📝"; "excel" -> "📊"
-        "screenshot" -> "📸"; "epub" -> "📖"
-        else -> "🖼"
-    }
+    return itemType?.rowIcon ?: "🖼"
 }
 
 /** Real, human-readable title resolved from the VaultItem, falling back to the snapshot's label. */
@@ -182,7 +180,7 @@ private fun displayTitle(entry: TimelineEntrySnapshot, item: VaultItem?): String
     if (item != null) {
         item.title?.takeIf { it.isNotBlank() }?.let { return it }
         item.sourceFile.takeIf { it.isNotBlank() }?.let { return it }
-        val firstLine = item.ocrText.substringBefore("\n[").lineSequence()
+        val firstLine = item.ocrText.lineSequence()
             .map { it.trim() }.firstOrNull { it.isNotBlank() }
         if (!firstLine.isNullOrBlank()) return firstLine.take(80)
     }

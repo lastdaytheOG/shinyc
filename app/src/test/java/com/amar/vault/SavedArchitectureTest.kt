@@ -64,7 +64,7 @@ class SavedArchitectureTest {
                 uri = url,
                 ocrText = "",
                 lang = "en",
-                itemType = "LINK",
+                itemType = ItemType.LINK,
                 timestamp = System.currentTimeMillis(),
                 sourceFile = "example.com",
                 contentHash = hash,
@@ -100,7 +100,7 @@ class SavedArchitectureTest {
 
         // Share 1
         db.withTransaction {
-            vaultDao.insert(VaultItem(id = vaultId, uri = url, ocrText = "", lang = "en", itemType = "LINK", timestamp = 1000L, sourceFile = "", contentHash = hash))
+            vaultDao.insert(VaultItem(id = vaultId, uri = url, ocrText = "", lang = "en", itemType = ItemType.LINK, timestamp = 1000L, sourceFile = "", contentHash = hash))
             stashDao.insertOrUpdate(StashItem(id = UUID.randomUUID().toString(), vaultItemId = vaultId, category = "Recipes", savedAt = 1000L, sourceApp = ""))
         }
 
@@ -132,7 +132,7 @@ class SavedArchitectureTest {
         val vaultId = UUID.randomUUID().toString()
 
         // Share 1
-        vaultDao.insert(VaultItem(id = vaultId, uri = url, ocrText = "", lang = "en", itemType = "LINK", timestamp = 1000L, sourceFile = "", contentHash = hash))
+        vaultDao.insert(VaultItem(id = vaultId, uri = url, ocrText = "", lang = "en", itemType = ItemType.LINK, timestamp = 1000L, sourceFile = "", contentHash = hash))
         stashDao.insertOrUpdate(StashItem(id = UUID.randomUUID().toString(), vaultItemId = vaultId, category = "Recipes", savedAt = 1000L, sourceApp = ""))
 
         // Share 2
@@ -151,7 +151,7 @@ class SavedArchitectureTest {
     @Test
     fun test4_ForeignKeyIntegrity() = runBlocking {
         val vaultId = UUID.randomUUID().toString()
-        vaultDao.insert(VaultItem(id = vaultId, uri = "test", ocrText = "", lang = "en", itemType = "LINK", timestamp = 1000L, sourceFile = "", contentHash = "hash"))
+        vaultDao.insert(VaultItem(id = vaultId, uri = "test", ocrText = "", lang = "en", itemType = ItemType.LINK, timestamp = 1000L, sourceFile = "", contentHash = "hash"))
         stashDao.insertOrUpdate(StashItem(id = UUID.randomUUID().toString(), vaultItemId = vaultId, category = "Test", savedAt = 1000L, sourceApp = ""))
 
         var stashItems = stashDao.getStashItemsByType("SAVED").first()
@@ -170,7 +170,7 @@ class SavedArchitectureTest {
     fun test5_Stage2Failure_DoesNotAffectStash() = runBlocking {
         // Stage 1
         val vaultId = UUID.randomUUID().toString()
-        vaultDao.insert(VaultItem(id = vaultId, uri = "test2", ocrText = "basic", lang = "en", itemType = "LINK", timestamp = 1000L, sourceFile = "", contentHash = "hash2", title = "Basic Title"))
+        vaultDao.insert(VaultItem(id = vaultId, uri = "test2", ocrText = "basic", lang = "en", itemType = ItemType.LINK, timestamp = 1000L, sourceFile = "", contentHash = "hash2", title = "Basic Title"))
         stashDao.insertOrUpdate(StashItem(id = UUID.randomUUID().toString(), vaultItemId = vaultId, category = "Test", savedAt = 1000L, sourceApp = ""))
 
         // Simulate Stage 2 OCR failure (Worker crashes, does nothing to the DB)

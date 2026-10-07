@@ -289,7 +289,7 @@ class IndexingBenchmark(
             val id = "benchmark-probe-${UUID.randomUUID()}"
             val item = VaultItem(
                 id = id, uri = "benchmark://probe", ocrText = PROBE_TEXT.take(2000),
-                lang = "en", itemType = "benchmark_probe", timestamp = System.currentTimeMillis(),
+                lang = "en", itemType = com.amar.vault.ItemType.TEXT, timestamp = System.currentTimeMillis(),
             )
             val t0 = System.nanoTime()
             dao.insert(item)

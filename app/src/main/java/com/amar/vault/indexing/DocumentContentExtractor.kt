@@ -2,6 +2,7 @@ package com.amar.vault.indexing
 
 import android.content.Context
 import android.net.Uri
+import com.amar.vault.ItemType
 
 /**
  * Document content-extraction stage (document/BM25 path).
@@ -36,10 +37,10 @@ class DocumentContentExtractor(
     /** Extracted, paged-and-chunked document content plus the format's tag/itemType descriptors. */
     data class Content(
         val pagedChunks: List<PagedChunk>,
-        /** Family tag prepended to generated tags (was DocFamily.tag). */
-        val tag: String,
         /** VaultItem.itemType for chunks of this family (was DocFamily.itemType). */
-        val itemType: String,
+        val itemType: ItemType,
+        /** How many pages the file has; null for a format without pages. */
+        val pageCount: Int?,
     )
 
     /**
@@ -51,32 +52,29 @@ class DocumentContentExtractor(
     suspend fun extract(context: Context, uri: Uri, mimeType: String): Content {
         val extractor = registry.extractorFor(mimeType)
             ?: error("Unsupported mime type '$mimeType' — call isSupported() before extract()")
-        return Content(
-            pagedChunks = extractor.extract(context, uri, chunker),
-            tag = extractor.tag,
-            itemType = extractor.itemType,
-        )
+        var pageCount: Int? = null
+        val pagedChunks = extractor.extract(context, uri, chunker) { pageCount = it }
+        return Content(pagedChunks, itemType = extractor.itemType, pageCount = pageCount)
     }
 
-    /** The format's tag/itemType descriptors — known before extraction (static per format). */
-    data class Descriptor(val tag: String, val itemType: String)
-
-    fun descriptorFor(mimeType: String): Descriptor? =
-        registry.extractorFor(mimeType)?.let { Descriptor(it.tag, it.itemType) }
+    /** What a file of this mime type is stored as — known before extraction; null when it is not read. */
+    fun itemTypeFor(mimeType: String): ItemType? = registry.extractorFor(mimeType)?.itemType
 
     /**
      * Sprint P6 — progressive extraction. Streams chunk batches (per page for PDFs) to [onBatch]
      * so the caller commits them to the index incrementally. Metadata (tag/itemType) is available
-     * up front via [descriptorFor]; this call only drives the batch emission.
+     * up front via [descriptorFor]; this call only drives the batch emission, and tells
+     * [onPageCount] how many pages a paged file has before the first batch.
      */
     suspend fun extractStreaming(
         context: Context,
         uri: Uri,
         mimeType: String,
+        onPageCount: suspend (Int) -> Unit = {},
         onBatch: suspend (List<PagedChunk>) -> Unit,
     ) {
         val extractor = registry.extractorFor(mimeType)
             ?: error("Unsupported mime type '$mimeType' — call isSupported() before extractStreaming()")
-        extractor.extractStreaming(context, uri, chunker, onBatch)
+        extractor.extractStreaming(context, uri, chunker, onPageCount, onBatch)
     }
 }

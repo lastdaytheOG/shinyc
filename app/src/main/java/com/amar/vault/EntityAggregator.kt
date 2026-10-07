@@ -46,9 +46,9 @@ class EntityAggregator(private val retrievalService: RetrievalService) {
             resolution.canonicalId?.let { CanonicalEntityRegistry.entities[it]?.entityType }
         else null
 
-        val documents = items.filter { it.itemType in docTypes }
-        val screenshots = items.filter { it.itemType == "screenshot" }
-        val images = items.filter { it.itemType !in docTypes && it.itemType != "screenshot" }
+        val documents = items.filter { it.isDocumentPiece }
+        val screenshots = items.filter { !it.isDocumentPiece && it.itemType == ItemType.SCREENSHOT }
+        val images = items.filter { !it.isDocumentPiece && it.itemType != ItemType.SCREENSHOT }
         val timestamps = items.map { it.timestamp }
 
         return EntityProfile(
