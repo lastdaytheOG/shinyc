@@ -668,7 +668,7 @@ private fun DetailMetadataPanel(item: StashItemWithVaultItem, species: ContentSp
             }
         }
 
-        val ocrClean = item.ocrText.substringBefore("\n[").trim()
+        val ocrClean = item.ocrText.trim()
         if (ocrClean.isNotBlank()) {
             Divider(color = CreamDark, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 8.dp))
             var textExpanded by remember { mutableStateOf(false) }

@@ -1009,7 +1009,7 @@ private fun GenericDocumentCardContent(
         cleanDisplayTitle(item.title ?: fileName, item.uri, sourceName)
     }
     val cleanSummary = remember(item.ocrText) {
-        val clean = item.ocrText.substringBefore("\n[").trim()
+        val clean = item.ocrText.trim()
         if (clean.length > 80) clean.take(80) + "..." else clean
     }
 

@@ -75,9 +75,9 @@ class EventAggregator(private val entityAggregator: EntityAggregator) {
             referenceCount = cluster.size,
             firstSeen = first,
             lastUpdated = last,
-            documents = cluster.filter { it.itemType in docTypes },
-            screenshots = cluster.filter { it.itemType == "screenshot" },
-            images = cluster.filter { it.itemType !in docTypes && it.itemType != "screenshot" },
+            documents = cluster.filter { it.isDocumentPiece },
+            screenshots = cluster.filter { !it.isDocumentPiece && it.itemType == ItemType.SCREENSHOT },
+            images = cluster.filter { !it.isDocumentPiece && it.itemType != ItemType.SCREENSHOT },
         )
     }
 

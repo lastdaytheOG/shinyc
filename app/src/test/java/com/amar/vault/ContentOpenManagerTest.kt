@@ -32,7 +32,7 @@ class ContentOpenManagerTest {
             uri = url,
             ocrText = "",
             lang = "en",
-            itemType = "LINK",
+            itemType = ItemType.LINK,
             timestamp = System.currentTimeMillis(),
             originalUri = url
         )
@@ -329,7 +329,7 @@ class ContentOpenManagerTest {
         uri = caption,
         ocrText = caption,
         lang = "en",
-        itemType = "LINK",
+        itemType = ItemType.LINK,
         timestamp = System.currentTimeMillis(),
         originalUri = caption,
     )
@@ -357,7 +357,7 @@ class ContentOpenManagerTest {
             uri = "/data/user/0/com.amar.vault/files/shared_imports/pic.jpg",
             ocrText = "grab it here https://example.com/promo",
             lang = "en",
-            itemType = "PHOTO",
+            itemType = ItemType.PHOTO,
             timestamp = System.currentTimeMillis(),
             originalUri = null,
             mimeType = "image/jpeg",
@@ -443,7 +443,7 @@ class ContentOpenManagerTest {
             uri = path,
             ocrText = "",
             lang = "en",
-            itemType = "PHOTO",
+            itemType = ItemType.PHOTO,
             timestamp = System.currentTimeMillis(),
             originalUri = null,
             mimeType = "image/jpeg",

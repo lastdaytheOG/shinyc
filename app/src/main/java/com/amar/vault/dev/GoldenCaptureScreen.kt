@@ -27,7 +27,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.amar.vault.ItemType
 import com.amar.vault.VaultItem
+import com.amar.vault.documentId
 import com.amar.vault.benchmark.BenchmarkCase
 import com.amar.vault.benchmark.BenchmarkContentType
 import com.amar.vault.benchmark.BenchmarkRunner
@@ -48,7 +50,7 @@ import kotlinx.coroutines.withContext
 internal data class GoldenCandidate(
     val docId: String,
     val label: String,
-    val type: String,
+    val type: ItemType,
     val snippet: String,
 )
 
@@ -61,16 +63,16 @@ internal fun goldenLabel(item: VaultItem): String =
 
 /** Chunk rows collapse onto their parent document, exactly as RetrievalEvaluator scores them. */
 internal fun VaultItem.toGoldenCandidate(): GoldenCandidate = GoldenCandidate(
-    docId = parentDocumentId ?: id,
+    docId = documentId,
     label = goldenLabel(this),
     type = itemType,
     snippet = ocrText.replace(WHITESPACE, " ").trim().take(140),
 )
 
-internal fun goldenContentType(itemType: String): BenchmarkContentType = when (itemType.lowercase()) {
-    "pdf", "word", "excel", "epub" -> BenchmarkContentType.PDF
-    "screenshot" -> BenchmarkContentType.SCREENSHOT
-    "link" -> BenchmarkContentType.SAVED_LINK
+internal fun goldenContentType(itemType: ItemType): BenchmarkContentType = when {
+    itemType.isDocument -> BenchmarkContentType.PDF
+    itemType == ItemType.SCREENSHOT -> BenchmarkContentType.SCREENSHOT
+    itemType == ItemType.LINK -> BenchmarkContentType.SAVED_LINK
     else -> BenchmarkContentType.IMAGE
 }
 
@@ -308,7 +310,7 @@ private fun CandidateRow(rank: Int?, candidate: GoldenCandidate, selected: Boole
                     fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = CharcoalSoft,
                     maxLines = 1, overflow = TextOverflow.Ellipsis
                 )
-                Text(candidate.type, fontSize = 11.sp, color = WarmBrown)
+                Text(candidate.type.stored, fontSize = 11.sp, color = WarmBrown)
                 if (candidate.snippet.isNotBlank()) {
                     Text(
                         candidate.snippet,

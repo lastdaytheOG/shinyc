@@ -1,5 +1,6 @@
 package com.amar.vault.retrieval
 
+import com.amar.vault.ItemType
 import com.amar.vault.VaultItem
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -26,7 +27,7 @@ import org.robolectric.annotation.Config
 @Config(sdk = [32])
 class HybridSearchProgressiveTest {
 
-    private fun item(id: String, text: String, type: String = "image") =
+    private fun item(id: String, text: String, type: ItemType = ItemType.PHOTO) =
         VaultItem(id = id, uri = "u/$id", ocrText = text, lang = "en", itemType = type, timestamp = 0L)
 
     /** Mirrors SQLite: an `id IN (…)` lookup comes back in primary-key order, not the order asked. */

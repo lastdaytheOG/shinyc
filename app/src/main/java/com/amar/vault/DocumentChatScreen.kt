@@ -87,7 +87,7 @@ fun DocumentChatScreen(
 
     val docTitle = item?.title?.takeIf { it.isNotBlank() }
         ?: item?.sourceFile?.takeIf { it.isNotBlank() }
-        ?: item?.itemType?.uppercase() ?: "DOCUMENT"
+        ?: item?.itemType?.stored?.uppercase() ?: "DOCUMENT"
 
     Scaffold(
         containerColor = Cream,

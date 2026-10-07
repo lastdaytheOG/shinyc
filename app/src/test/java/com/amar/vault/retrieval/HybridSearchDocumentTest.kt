@@ -1,5 +1,6 @@
 package com.amar.vault.retrieval
 
+import com.amar.vault.ItemType
 import com.amar.vault.VaultItem
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -21,7 +22,7 @@ class HybridSearchDocumentTest {
     private fun chunk(doc: String, index: Int, text: String, file: String = "$doc.pdf", timestamp: Long = 0L) =
         VaultItem(
             id = "${doc}_chunk$index", uri = "content://docs/$doc", ocrText = text, lang = "en",
-            itemType = "pdf", pageNum = index + 1, sourceFile = file, timestamp = timestamp,
+            itemType = ItemType.PDF, pageNum = index + 1, sourceFile = file, timestamp = timestamp,
             parentDocumentId = doc, chunkIndex = index,
         )
 
@@ -91,7 +92,7 @@ class HybridSearchDocumentTest {
         chunk("id", 1, "address and date of birth", file = "Aadhaar_Card-2024.pdf"),
         chunk("bill", 0, "electricity charges for march", file = "bijli.pdf"),
         VaultItem(id = "photo", uri = "content://media/aadhaar.jpg", ocrText = "a street at night",
-            lang = "en", itemType = "image", sourceFile = "aadhaar.jpg", timestamp = 0L),
+            lang = "en", itemType = ItemType.PHOTO, sourceFile = "aadhaar.jpg", timestamp = 0L),
     )
 
     @Test
@@ -117,7 +118,7 @@ class HybridSearchDocumentTest {
     @Test
     fun anItemIsFoundByItsTitle() = runBlocking {
         val saved = VaultItem(id = "link", uri = "https://example.com/a", ocrText = "terms between the parties",
-            lang = "en", itemType = "link", timestamp = 0L, title = "Flat rent agreement")
+            lang = "en", itemType = ItemType.LINK, timestamp = 0L, title = "Flat rent agreement")
         val result = service(listOf(saved)).retrieve(RetrievalRequest("rent agreement"))
         assertEquals(listOf("link"), result.items.map { it.id })
     }
@@ -138,17 +139,17 @@ class HybridSearchDocumentTest {
     @Test
     fun searchableNameKeepsTheSpellingAndAddsTheWords() {
         assertEquals("Aadhaar_Card-2024.pdf Aadhaar Card 2024 pdf",
-            SearchableName.of("pdf", "Aadhaar_Card-2024.pdf", null))
-        assertEquals("resume", SearchableName.of("word", "resume", null))
-        assertEquals("a document with no name has none", "", SearchableName.of("pdf", "", null))
-        assertEquals("an image's file name is not a name", "", SearchableName.of("image", "IMG_0042.jpg", null))
+            SearchableName.of(ItemType.PDF, "Aadhaar_Card-2024.pdf", null))
+        assertEquals("resume", SearchableName.of(ItemType.WORD, "resume", null))
+        assertEquals("a document with no name has none", "", SearchableName.of(ItemType.PDF, "", null))
+        assertEquals("an image's file name is not a name", "", SearchableName.of(ItemType.PHOTO, "IMG_0042.jpg", null))
         assertEquals("a title counts for any item", "Flat rent agreement",
-            SearchableName.of("link", "", "Flat rent agreement"))
+            SearchableName.of(ItemType.LINK, "", "Flat rent agreement"))
     }
 
     @Test
     fun searchableNameDoesNotSplitDevanagariWords() {
         // Vowel signs are combining marks, not letters; splitting on them would shred the word.
-        assertEquals("विद्यालय_सूचना.pdf विद्यालय सूचना pdf", SearchableName.of("pdf", "विद्यालय_सूचना.pdf", null))
+        assertEquals("विद्यालय_सूचना.pdf विद्यालय सूचना pdf", SearchableName.of(ItemType.PDF, "विद्यालय_सूचना.pdf", null))
     }
 }

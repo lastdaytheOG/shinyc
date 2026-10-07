@@ -107,14 +107,12 @@ class FolderSyncObserver(
 
             if (bitmap != null) {
                 val itemType = when {
-                    path.contains("Screenshot", ignoreCase = true) -> "screenshot"
-                    path.contains("Camera", ignoreCase = true) -> "camera"
-                    path.contains("WhatsApp", ignoreCase = true) -> "whatsapp"
-                    else -> "photo"
+                    path.contains("Screenshot", ignoreCase = true) -> ItemType.SCREENSHOT
+                    else -> ItemType.PHOTO
                 }
                 IndexingPipeline.getInstance(context).indexBitmap(bitmap, uri.toString(), itemType)
                 bitmap.recycle()
-                Log.d("FolderSync", "Indexed new $itemType from $path")
+                Log.d("FolderSync", "Indexed new ${itemType.stored} from $path")
             }
         }
     }

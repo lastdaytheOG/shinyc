@@ -223,7 +223,7 @@ class DocumentIndexer private constructor(private val context: Context) {
                 return IndexResult.Failure(fileName, IndexError.ExtractionFailed(it))
             }
             prof?.stageMs(ProfilerStage.EXTRACT, System.currentTimeMillis() - tExtract)
-            prof?.fileType = content.itemType
+            prof?.fileType = content.itemType.stored
             val pagedChunks = content.pagedChunks
 
             // Shadow-only planner observation after the legacy extractor has supplied evidence.
@@ -267,41 +267,25 @@ class DocumentIndexer private constructor(private val context: Context) {
             // ── 3. Build chunk rows (pure), commit atomically, then index ───
             progress?.emit(IndexProgress(fileName, IndexProgress.Phase.STORING))
             val targetId = baseId ?: UUID.randomUUID().toString()
+            val document = VaultDocument(
+                id = targetId, uri = uriKey, name = fileName, itemType = content.itemType,
+                contentHash = contentHash, pageCount = content.pageCount,
+                chunkCount = pagedChunks.size, addedAt = System.currentTimeMillis(),
+            )
+            val chunkItems = pagedChunks.map { chunkRow(document, it, content.tag, totalChunks = pagedChunks.size) }
 
-            val chunkItems = pagedChunks.map { pagedChunk ->
-                val tags = TagEngine.generate(pagedChunk.text, content.tag)
-                val tagSuffix = if (tags.isNotEmpty()) "\n[${tags.joinToString(" ")}]" else ""
-                val finalText = pagedChunk.text + tagSuffix
-                val item = VaultItem(
-                    id          = "${targetId}_chunk${pagedChunk.chunkIndex}",
-                    uri         = uriKey,
-                    ocrText     = finalText,
-                    lang        = LanguageDetector.detect(pagedChunk.text),
-                    itemType    = content.itemType,
-                    pageNum     = pagedChunk.pdfPage ?: pagedChunk.chunkIndex,
-                    sourceFile  = fileName,
-                    timestamp   = System.currentTimeMillis(),
-                    pHash       = 0L,
-                    contentHash = contentHash,
-                    // Explicit ownership (Task 2) — the id string is a key, not a schema.
-                    parentDocumentId = targetId,
-                    chunkIndex       = pagedChunk.chunkIndex,
-                    totalChunks      = pagedChunks.size,
-                )
-                item to finalText
-            }
-
-            // Atomic: all chunk rows persist or none do — via the single Room writer.
+            // Atomic: the document's record and all its chunk rows persist, or none of it does
+            // — via the single Room writer.
             prof.timedStage(ProfilerStage.ROOM) {
-                persister.persistDocumentChunks(chunkItems.map { it.first })
+                persister.persistDocument(document, chunkItems)
             }
 
             // commit-then-index: feed BM25 only after the rows are durably committed.
             // BM25 addDocument is idempotent (re-indexes an existing id), so repairs are safe.
             // No embedding — documents use BM25 + substring search (embedding is query-time only).
-            val entries = chunkItems.map { (item, text) ->
+            val entries = chunkItems.map { item ->
                 com.amar.vault.indexing.IndexEntry(
-                    id = item.id, text = bm25Text(item, text),
+                    id = item.id, text = com.amar.vault.retrieval.KeywordText.of(item),
                     parentId = targetId, chunkIndex = item.chunkIndex, totalChunks = item.totalChunks,
                 )
             }
@@ -365,41 +349,28 @@ class DocumentIndexer private constructor(private val context: Context) {
         val descriptor = contentExtractor.descriptorFor(mimeType)
             ?: return IndexResult.Failure(fileName, IndexError.UnsupportedFormat(mimeType))
         val targetId = baseId ?: UUID.randomUUID().toString()
-        prof?.fileType = descriptor.itemType
+        prof?.fileType = descriptor.itemType.stored
+        val document = VaultDocument(
+            id = targetId, uri = uriKey, name = fileName, itemType = descriptor.itemType,
+            contentHash = sourceFingerprint, pageCount = null, chunkCount = 0,
+            addedAt = System.currentTimeMillis(),
+        )
 
-        // Clear any prior (partial) rows for this exact source before streaming fresh.
-        persister.deletePartialByContentHash(sourceFingerprint)
+        // Clears any prior (partial) rows for this exact source, and records the document
+        // before its first page, so that no page is ever stored without it.
+        persister.beginDocument(document)
 
         progress?.emit(IndexProgress(fileName, IndexProgress.Phase.EXTRACTING))
         var committed = 0
         val onBatch: suspend (List<PagedChunk>) -> Unit = { pageChunks ->
-            val rows = pageChunks.map { pc ->
-                val tags = TagEngine.generate(pc.text, descriptor.tag)
-                val tagSuffix = if (tags.isNotEmpty()) "\n[${tags.joinToString(" ")}]" else ""
-                val finalText = pc.text + tagSuffix
-                val item = VaultItem(
-                    id          = "${targetId}_chunk${pc.chunkIndex}",
-                    uri         = uriKey,
-                    ocrText     = finalText,
-                    lang        = LanguageDetector.detect(pc.text),
-                    itemType    = descriptor.itemType,
-                    pageNum     = pc.pdfPage ?: pc.chunkIndex,
-                    sourceFile  = fileName,
-                    timestamp   = System.currentTimeMillis(),
-                    pHash       = 0L,
-                    contentHash = sourceFingerprint,
-                    parentDocumentId = targetId,
-                    chunkIndex       = pc.chunkIndex,
-                    totalChunks      = 0, // unknown while streaming; informational only for docs
-                )
-                item to finalText
-            }
+            // The size of the document is unknown while streaming: totalChunks stays 0.
+            val rows = pageChunks.map { chunkRow(document, it, descriptor.tag, totalChunks = 0) }
             // Commit this page: Room rows (→ FTS searchable) then BM25 (→ lexical searchable).
-            persister.persistDocumentChunks(rows.map { it.first })
+            persister.appendDocumentChunks(targetId, rows)
             bm25Updater.update(
-                rows.map { (item, text) ->
+                rows.map { item ->
                     com.amar.vault.indexing.IndexEntry(
-                        id = item.id, text = bm25Text(item, text),
+                        id = item.id, text = com.amar.vault.retrieval.KeywordText.of(item),
                         parentId = targetId, chunkIndex = item.chunkIndex, totalChunks = 0,
                     )
                 }
@@ -407,6 +378,7 @@ class DocumentIndexer private constructor(private val context: Context) {
             committed += rows.size
             progress?.emit(IndexProgress(fileName, IndexProgress.Phase.STORING, committed, committed))
         }
+        val onPageCount: suspend (Int) -> Unit = { persister.recordPageCount(targetId, it) }
         // Stored when no text could be read at all — a scan the OCR found nothing in, or a file
         // that would not open. With no row the document could not be found even by its name.
         // Such a file is not recorded as complete, so importing it again reads it again.
@@ -417,8 +389,8 @@ class DocumentIndexer private constructor(private val context: Context) {
             // coroutine-context element (exactly as the batch path does), so PdfFormatExtractor
             // attributes its per-page/sub-stage timings to this document. Null → plain call.
             IndexMetrics.timed(IndexMetrics.Timing.DOC_EXTRACT) {
-                if (prof == null) contentExtractor.extractStreaming(context, uri, mimeType, onBatch)
-                else withContext(prof) { contentExtractor.extractStreaming(context, uri, mimeType, onBatch) }
+                if (prof == null) contentExtractor.extractStreaming(context, uri, mimeType, onPageCount, onBatch)
+                else withContext(prof) { contentExtractor.extractStreaming(context, uri, mimeType, onPageCount, onBatch) }
             }
         } catch (ce: CancellationException) {
             throw ce
@@ -492,12 +464,24 @@ class DocumentIndexer private constructor(private val context: Context) {
         }
     }
 
-    /**
-     * What BM25 indexes for a chunk: its text, then the document's name, so the file is
-     * findable by what it is called. Same name text as the startup rebuild in AmarApplication.
-     */
-    private fun bm25Text(item: VaultItem, text: String): String =
-        "$text ${com.amar.vault.retrieval.SearchableName.of(item)}"
+    /** The row for one piece of [document]. Its tags are worked out from its own text. */
+    private fun chunkRow(document: VaultDocument, piece: PagedChunk, familyTag: String, totalChunks: Int) = VaultItem(
+        id          = "${document.id}_chunk${piece.chunkIndex}",
+        uri         = document.uri,
+        ocrText     = piece.text,
+        lang        = LanguageDetector.detect(piece.text),
+        itemType    = document.itemType,
+        pageNum     = piece.pdfPage ?: piece.chunkIndex,
+        sourceFile  = document.name,
+        timestamp   = System.currentTimeMillis(),
+        pHash       = 0L,
+        tags        = TagEngine.generate(piece.text, familyTag).joinToString(" "),
+        contentHash = document.contentHash,
+        // Explicit ownership (Task 2) — the id string is a key, not a schema.
+        parentDocumentId = document.id,
+        chunkIndex       = piece.chunkIndex,
+        totalChunks      = totalChunks,
+    )
 
     private fun resolveFileName(uri: Uri) = runCatching {
         context.contentResolver.query(uri, null, null, null, null)?.use { c ->

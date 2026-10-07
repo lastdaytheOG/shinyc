@@ -1,5 +1,6 @@
 package com.amar.vault.retrieval
 
+import com.amar.vault.ItemType
 import com.amar.vault.QueryPlanner
 import com.amar.vault.SearchFilter
 import com.amar.vault.SortOrder
@@ -32,14 +33,14 @@ class SearchPrecisionTest {
 
     private fun page(doc: String, pdfPage: Int, text: String, file: String, addedDaysAgo: Int = 0) = VaultItem(
         id = "${doc}_chunk${pdfPage - 1}", uri = "content://docs/$doc", ocrText = text, lang = "en",
-        itemType = "pdf", pageNum = pdfPage, sourceFile = file,
+        itemType = ItemType.PDF, pageNum = pdfPage, sourceFile = file,
         timestamp = now - addedDaysAgo * 24L * 60 * 60 * 1000 + pdfPage,
         parentDocumentId = doc, chunkIndex = pdfPage - 1,
     )
 
     private fun screenshot(id: String, text: String) = VaultItem(
         id = id, uri = "content://media/external/images/media/$id", ocrText = text, lang = "en",
-        itemType = "screenshot", sourceFile = id, timestamp = now,
+        itemType = ItemType.SCREENSHOT, sourceFile = id, timestamp = now,
     )
 
     private val vault = listOf(
@@ -76,13 +77,13 @@ class SearchPrecisionTest {
         override fun bm25(query: String, limit: Int): List<String> {
             val hits = LinkedHashSet<String>()
             for (word in words(query)) {
-                val whole = all.filter { word in words("${it.ocrText} ${SearchableName.of(it)}") }
+                val whole = all.filter { word in words("${it.ocrText} ${it.tags} ${SearchableName.of(it)}") }
                 if (whole.isNotEmpty()) {
                     hits += whole.map { it.id }
                 } else {
                     val pieces = word.windowed(3).toSet()
                     hits += all.filter { row ->
-                        val inRow = words(row.ocrText).flatMap { it.windowed(3) }.toSet()
+                        val inRow = words("${row.ocrText} ${row.tags}").flatMap { it.windowed(3) }.toSet()
                         pieces.isNotEmpty() && pieces.count { it in inRow } * 10 >= pieces.size * 4
                     }.map { it.id }
                 }
@@ -225,8 +226,8 @@ class SearchPrecisionTest {
 
     // ── Words a page says, and words it is only tagged with ─────────────────────────────
 
-    /** [row] as the indexer stores it: the page, then a line of tags in brackets. */
-    private fun tagged(row: VaultItem, tags: String) = row.copy(ocrText = row.ocrText + 10.toChar() + "[" + tags + "]")
+    /** [row] as the indexer stores it: the page, and the tags it gave the page. */
+    private fun tagged(row: VaultItem, tags: String) = row.copy(tags = tags)
 
     /** The list as it was before: a tag read as one more word of the page. */
     private val tagsAsText = RetrievalTuning(pageWordsBeforeTags = false)

@@ -26,10 +26,11 @@ object NerActionEngine {
         "Amount"  to Regex("""(?:Rs\.?|₹)\s?[\d,]+(?:\.\d{2})?"""),
     )
 
-    // Pattern to extract QR payloads stored by IndexingPipeline
-    private val qrDataPattern = Regex("""qr_data:(\S+)""")
-
-    fun detect(text: String): List<DetectedAction> {
+    /**
+     * What can be done with [text], and with what the picture's QR codes hold ([qrPayloads],
+     * from [VaultItem.qrPayload]).
+     */
+    fun detect(text: String, qrPayloads: List<String> = emptyList()): List<DetectedAction> {
         val actions = mutableListOf<DetectedAction>()
 
         // ── 1. Standard NER patterns ────────────────────────────────────
@@ -67,9 +68,9 @@ object NerActionEngine {
             }
         }
 
-        // ── 2. QR code payloads (stored as qr_data:xxx during indexing) ─
-        for (match in qrDataPattern.findAll(text)) {
-            val payload = match.groupValues[1].trim()
+        // ── 2. QR code payloads ─────────────────────────────────────────
+        for (raw in qrPayloads) {
+            val payload = raw.trim()
             if (payload.isBlank()) continue
 
             val qrAction = buildQrAction(payload)

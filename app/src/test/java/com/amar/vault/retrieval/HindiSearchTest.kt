@@ -1,6 +1,7 @@
 package com.amar.vault.retrieval
 
 import com.amar.vault.StashItemWithVaultItem
+import com.amar.vault.ItemType
 import com.amar.vault.VaultItem
 import com.amar.vault.oneCardPerDocument
 import com.amar.vault.queryWordsOf
@@ -28,7 +29,7 @@ class HindiSearchTest {
 
     private fun page(doc: String, pdfPage: Int, text: String, file: String = "$doc.pdf") = VaultItem(
         id = "${doc}_chunk${pdfPage - 1}", uri = "content://docs/$doc", ocrText = text, lang = "hi",
-        itemType = "pdf", pageNum = pdfPage, sourceFile = file, timestamp = 0L,
+        itemType = ItemType.PDF, pageNum = pdfPage, sourceFile = file, timestamp = 0L,
         parentDocumentId = doc, chunkIndex = pdfPage - 1,
     )
 

@@ -49,7 +49,7 @@ class IndexingPipeline private constructor(private val context: Context) {
     suspend fun indexBitmap(
         bitmap: Bitmap,
         uri: String,
-        itemType: String = "screenshot",
+        itemType: ItemType = ItemType.SCREENSHOT,
         baseId: String? = null
     ) = withContext(Dispatchers.Default) {
 
@@ -57,7 +57,7 @@ class IndexingPipeline private constructor(private val context: Context) {
 
         // Shadow-only planner observation. Disabled by default and intentionally before no
         // existing decision; it cannot alter dedup, OCR, persistence, or vector behaviour.
-        PlannerShadowRegistry.observeImage(uri, itemType, bitmap.width, bitmap.height)
+        PlannerShadowRegistry.observeImage(uri, itemType.stored, bitmap.width, bitmap.height)
 
         val duplicateTarget = baseId?.let { dao.getByIds(listOf(it)).firstOrNull() }
 
@@ -76,7 +76,7 @@ class IndexingPipeline private constructor(private val context: Context) {
 
         val targetId = duplicateTarget?.id ?: baseId ?: dao.findByPHash(hash)?.takeIf { it.ocrText.isBlank() }?.id ?: UUID.randomUUID().toString()
         val existing = duplicateTarget ?: dao.getByIds(listOf(targetId)).firstOrNull()
-        val prof = IndexingProfiler.beginOrNull(uri, uri.substringAfterLast('/').ifBlank { uri }, itemType)
+        val prof = IndexingProfiler.beginOrNull(uri, uri.substringAfterLast('/').ifBlank { uri }, itemType.stored)
 
         val shellItem = existing?.copy(
             pHash = hash,
@@ -117,15 +117,7 @@ class IndexingPipeline private constructor(private val context: Context) {
             return@withContext
         }
 
-        // Build final text with smart tags + QR payloads
         val smartTags = generateSmartTags(ocrText)
-        val qrTags = qrPayloads.map { payload ->
-            "qr_data:$payload"
-        }
-
-        val allTags = mutableListOf<String>()
-        if (smartTags.isNotEmpty()) allTags.add(smartTags)
-        allTags.addAll(qrTags)
 
         // Also append QR content as searchable text so "upi" or "paytm" finds it
         val qrSearchText = qrPayloads.joinToString(" ") { payload ->
@@ -150,11 +142,12 @@ class IndexingPipeline private constructor(private val context: Context) {
             ocrText
         }
 
-        val tagSuffix = if (allTags.isNotEmpty()) "\n[${allTags.joinToString(" ")}]" else ""
-        val finalOcrText = combinedText + tagSuffix
-
+        // What was read is the text; the tags and what the QR codes hold each have their own
+        // column, so nothing that reads the text has to cut them off it again.
         val item = shellItem.copy(
-            ocrText = finalOcrText,
+            ocrText = combinedText,
+            tags = smartTags,
+            qrPayload = QrPayloads.join(qrPayloads),
             lang = detectLang(ocrText),
             pHash = hash,
         )
@@ -165,7 +158,9 @@ class IndexingPipeline private constructor(private val context: Context) {
         IndexMetrics.recordDuration(IndexMetrics.Timing.INDEX_SEARCHABLE_COMMIT, System.currentTimeMillis() - t0)
 
         prof.timedStage(ProfilerStage.BM25) {
-            bm25Updater.update(listOf(com.amar.vault.indexing.IndexEntry(id = targetId, text = finalOcrText)))
+            bm25Updater.update(listOf(com.amar.vault.indexing.IndexEntry(
+                id = targetId, text = com.amar.vault.retrieval.KeywordText.of(item),
+            )))
         }
         // ── Extract metadata + classification (pure computation — no DB writes yet) ──
         val metaStartTime = System.currentTimeMillis()

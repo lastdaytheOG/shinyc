@@ -112,7 +112,6 @@ class RagService @Inject constructor(
 
     fun ocrCleanup(text: String): String {
         return text
-            .substringBefore("\n[") // Remove smart tags suffix
             .replace(Regex("<\\|im_start\\|>", RegexOption.IGNORE_CASE), "") // Stripping ChatML tokens to prevent injection
             .replace(Regex("<\\|im_end\\|>", RegexOption.IGNORE_CASE), "")
             .trim()

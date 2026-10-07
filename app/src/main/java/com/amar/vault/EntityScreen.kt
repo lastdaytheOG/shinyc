@@ -109,9 +109,9 @@ private fun EntityItemRow(item: VaultItem, onOpen: (VaultItem) -> Unit) {
         .padding(vertical = 6.dp)
         .clickable { onOpen(item) }
     ) {
-        Text("${iconFor(item.itemType)}  ${titleFor(item)}", fontWeight = FontWeight.SemiBold)
+        Text("${item.itemType.rowIcon}  ${titleFor(item)}", fontWeight = FontWeight.SemiBold)
         val caption = listOfNotNull(
-            item.itemType.takeIf { it.isNotBlank() },
+            item.itemType.stored,
             item.timestamp.takeIf { it > 0 }?.let { fmtDate(it) },
         ).joinToString(" · ")
         if (caption.isNotBlank()) {
@@ -123,16 +123,10 @@ private fun EntityItemRow(item: VaultItem, onOpen: (VaultItem) -> Unit) {
 private fun fmtDate(ts: Long): String =
     SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(ts))
 
-private fun iconFor(itemType: String): String = when (itemType) {
-    "pdf" -> "📄"; "word" -> "📝"; "excel" -> "📊"
-    "screenshot" -> "📸"; "epub" -> "📖"
-    else -> "🖼"
-}
-
 private fun titleFor(item: VaultItem): String {
     item.title?.takeIf { it.isNotBlank() }?.let { return it }
     item.sourceFile.takeIf { it.isNotBlank() }?.let { return it }
-    val firstLine = item.ocrText.substringBefore("\n[").lineSequence()
+    val firstLine = item.ocrText.lineSequence()
         .map { it.trim() }.firstOrNull { it.isNotBlank() }
     return firstLine?.take(80) ?: "Item"
 }

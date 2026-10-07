@@ -19,7 +19,7 @@ class OpenStrategyResolver private constructor(
         for (strategy in strategies) {
             val applicable = runCatching { strategy.canHandle(target) }.getOrDefault(false)
             if (!applicable) continue
-            Log.i(tag, "resolver selected=${strategy.name} url=${target.url} mime=${target.mimeType} type=${target.itemType}")
+            Log.i(tag, "resolver selected=${strategy.name} url=${target.url} mime=${target.mimeType} type=${target.itemType.stored}")
             // A throwing strategy (e.g. a viewer that rejects the context) must never
             // crash the caller — treat it as declined and fall through to the next.
             val opened = runCatching { strategy.open(context, target) }

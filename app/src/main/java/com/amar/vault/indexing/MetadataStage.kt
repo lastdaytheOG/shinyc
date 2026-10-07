@@ -2,6 +2,7 @@ package com.amar.vault.indexing
 
 import com.amar.vault.CanonicalReviewQueue
 import com.amar.vault.ClassificationEngine
+import com.amar.vault.ItemType
 import com.amar.vault.MetadataCandidateBuffer
 import com.amar.vault.MetadataExtractionEngine
 import com.amar.vault.VaultMetadata
@@ -21,7 +22,7 @@ class MetadataStage {
     fun extract(
         vaultItemId: String,
         ocrText: String,
-        itemType: String,
+        itemType: ItemType,
     ): Pair<List<VaultMetadata>, List<CanonicalReviewQueue>> {
         val extractionResult = MetadataExtractionEngine.extract(vaultItemId, ocrText)
         val rawMetadataList = extractionResult.first.toMutableList()
@@ -32,7 +33,7 @@ class MetadataStage {
             VaultMetadata(
                 vaultItemId = vaultItemId,
                 type = "SOURCE_TYPE",
-                value = itemType.uppercase(),
+                value = itemType.stored.uppercase(),
                 confidence = 1.0f,
                 source = "system",
                 extractionVersion = "v3"

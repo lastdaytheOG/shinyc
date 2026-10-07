@@ -67,7 +67,7 @@ fun DocumentViewerScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(item?.itemType?.uppercase() ?: "DOCUMENT", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CharcoalSoft) },
+                title = { Text(item?.itemType?.stored?.uppercase() ?: "DOCUMENT", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CharcoalSoft) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Back", tint = WarmBrownDark)
@@ -189,7 +189,7 @@ fun DocumentViewerScreen(
                                 .padding(12.dp)
                         ) {
                             Text(
-                                text = item!!.ocrText.substringBefore("\n[").trim(),
+                                text = item!!.ocrText.trim(),
                                 fontSize = 13.sp,
                                 color = CharcoalSoft,
                                 lineHeight = 18.sp
@@ -212,7 +212,7 @@ fun DocumentViewerScreen(
 
                     // ── Document Summary (read-only, local LLM) ──────────────────
                     if (summarize != null) {
-                        val cleanText = item!!.ocrText.substringBefore("\n[").trim()
+                        val cleanText = item!!.ocrText.trim()
                         val wordCount = cleanText.split(Regex("\\s+")).count { it.isNotBlank() }
                         val keyTopics = metadataList
                             .filter { it.type in setOf("DOCUMENT_CLASS", "DOCUMENT_TYPE", "CATEGORY", "ORGANIZATION") }

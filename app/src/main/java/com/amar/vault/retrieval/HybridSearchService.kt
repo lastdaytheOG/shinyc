@@ -6,6 +6,7 @@ import com.amar.vault.SortOrder
 import com.amar.vault.VaultConfig
 import com.amar.vault.VaultItem
 import com.amar.vault.VaultLog
+import com.amar.vault.isDocumentPiece
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -46,6 +47,13 @@ class HybridSearchService(
         val NOT_A_WORD = Regex("[^\\p{L}\\p{M}\\p{N}]+")
         /** More than a query has words: the scan lane's sort key is `words said * this + words`. */
         const val SAID_RADIX = 1024
+        /**
+         * What stands between a row's page and its tags, and after them, in [RowText]. This is
+         * how the two were stored as one text before database version 14; kept for now so that
+         * every word boundary the lanes see is where it was.
+         */
+        const val TAGS_OPEN = "\n["
+        const val TAGS_CLOSE = "]"
     }
 
     override suspend fun retrieve(request: RetrievalRequest): RetrievalResult =
@@ -214,10 +222,10 @@ class HybridSearchService(
             base.applyStrictFilter().map { item ->
                 val name = when {
                     item.title != null -> loweredName(item)
-                    item.itemType !in SearchableName.DOCUMENT_TYPES -> ""
+                    !item.itemType.isDocument -> ""
                     else -> fileNames.getOrPut(item.sourceFile) { loweredName(item) }
                 }
-                Candidate(item, item.ocrText.lowercase(), name)
+                Candidate(item, RowText.of(item), name)
             }
         }
 
@@ -279,7 +287,7 @@ class HybridSearchService(
         fun claimDocuments(lane: List<VaultItem>, judge: Gate?) {
             if (!tuning.onePerDocument) return
             fun standing(row: VaultItem) =
-                standings.getOrPut(row.id) { judge!!.standing(row.ocrText.lowercase(), loweredName(row)) }
+                standings.getOrPut(row.id) { judge!!.standing(RowText.of(row), loweredName(row)) }
             for (row in lane) {
                 val document = documentKey(row)
                 val kept = documentRow[document]
@@ -384,7 +392,7 @@ class HybridSearchService(
                     (item.ocrText.contains(term, ignoreCase = true) && pattern.containsMatchIn(item.ocrText)) ||
                         when {
                             item.title != null -> pattern.containsMatchIn(SearchableName.of(item))
-                            item.itemType !in SearchableName.DOCUMENT_TYPES -> false
+                            !item.itemType.isDocument -> false
                             else -> nameSaysIt.getOrPut("$term\n${item.sourceFile}") {
                                 pattern.containsMatchIn(SearchableName.of(item))
                             }
@@ -457,9 +465,25 @@ class HybridSearchService(
      * A row as the scan lanes see it: its text and its searchable name ([SearchableName]),
      * both lowercased once upstream. [name] is empty for a row that has none.
      */
-    private class Candidate(val item: VaultItem, val text: String, val name: String) {
-        /** Where the page ends in [text] and the line of tags begins ([StoredText]). */
-        val pageEnd: Int = StoredText.endOfPage(text)
+    private class Candidate(val item: VaultItem, row: RowText, val name: String) {
+        val text: String = row.all
+        /** Where the page ends in [text] and the tags begin. */
+        val pageEnd: Int = row.pageEnd
+    }
+
+    /**
+     * What a row has to be searched, lowered: its page and then its tags, as one string. The
+     * page is the first [pageEnd] characters. Where it ends is known from the row — the page
+     * and the tags are separate columns — so nothing is guessed from the text.
+     */
+    private class RowText(val all: String, val pageEnd: Int) {
+        companion object {
+            fun of(item: VaultItem): RowText {
+                val page = item.ocrText.lowercase()
+                if (item.tags.isEmpty()) return RowText(page, page.length)
+                return RowText(page + TAGS_OPEN + item.tags.lowercase() + TAGS_CLOSE, page.length)
+            }
+        }
     }
 
     private fun loweredName(item: VaultItem): String = SearchableName.of(item).lowercase()
@@ -578,9 +602,8 @@ class HybridSearchService(
     ): Map<String, Double> {
         if (queryType != QueryType.SEMANTIC_PHRASE || qLower.length < 6) return emptyMap()
         if (!tuning.semanticEnabled || !semantic.isReady) return emptyMap()
-        val docTypes = setOf("pdf", "word", "excel", "epub")
         val docCandidates = (bm25Results + substringResults)
-            .filter { it.itemType in docTypes }
+            .filter { it.isDocumentPiece }
             .distinctBy { it.id }
             .take(VaultConfig.Retrieval.LATE_EMBED_DOC_LIMIT)
         if (docCandidates.isEmpty()) return emptyMap()
@@ -589,7 +612,7 @@ class HybridSearchService(
             val queryVec = semantic.embedQuery(q, tuning.queryTrueLength)
             docCandidates.forEach { item ->
                 scope.ensureActive()
-                val chunkText = item.ocrText.substringBefore("\n[").trim()
+                val chunkText = item.ocrText.trim()
                 if (chunkText.length >= 20) {
                     val sim = cosineSimilarity(queryVec, semantic.embedText(chunkText))
                     if (sim > VaultConfig.Retrieval.LATE_EMBED_SIM_THRESHOLD) boosts[item.id] = sim.toDouble()
@@ -626,8 +649,8 @@ class HybridSearchService(
      * names a row for sharing a few three-letter pieces with the word, wherever in the row
      * they are, which is how a calendar came up for "brenda".
      *
-     * With [pageFirst], what a row says — on its page, in its name — is told apart from the
-     * tags after its page ([StoredText]); without it the tags are read as part of the page.
+     * With [pageFirst], what a row says — on its page, in its name — is told apart from its
+     * tags ([RowText]); without it the tags are read as part of the page.
      */
     private class Gate(
         val words: List<QueryWord>,
@@ -639,7 +662,7 @@ class HybridSearchService(
         val nearMissing: FuzzyMatcher?,
     ) {
         /** Where the page ends in a row's lowered text, for the checks below. */
-        fun pageEnd(text: String): Int = if (pageFirst) StoredText.endOfPage(text) else text.length
+        fun pageEnd(row: RowText): Int = if (pageFirst) row.pageEnd else row.all.length
 
         /** How many of the query's words are in a row with this text and name, tags included. */
         fun wordsIn(text: String, name: String): Int = words.count { it.isIn(text) || it.isIn(name) }
@@ -663,8 +686,9 @@ class HybridSearchService(
          * tagged with one (3); it says a near spelling of a word the vault does not have (2);
          * it is tagged with one (1); none of these (0).
          */
-        fun standing(text: String, name: String): Int {
-            val pageEnd = pageEnd(text)
+        fun standing(row: RowText, name: String): Int {
+            val text = row.all
+            val pageEnd = pageEnd(row)
             return when {
                 wordsSaid(text, pageEnd, name) > 0 -> 4
                 wordsIn(text, name) > 0 || hasAPartOfAWord(text, name) -> 3
@@ -734,14 +758,15 @@ class HybridSearchService(
         var anyByMeaning = false
         val toRemove = mutableListOf<String>()
         for ((id, item) in itemMap) {
-            val text = item.ocrText.lowercase()
+            val row = RowText.of(item)
+            val text = row.all
             val name = loweredName(item)
             val matched = gate.wordsIn(text, name)
             if (matched > 0) {
                 anyHasAQueryWord = true
                 // The bonuses are for the words the row says. One it is only tagged with keeps
                 // it in the list, below the rows that say it.
-                val pageEnd = gate.pageEnd(text)
+                val pageEnd = gate.pageEnd(row)
                 val page = if (pageEnd == text.length) text else text.substring(0, pageEnd)
                 val said = if (pageEnd == text.length) matched else gate.wordsSaid(text, pageEnd, name)
                 if (page.contains(qLower) || name.contains(qLower) ||

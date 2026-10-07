@@ -206,8 +206,8 @@ object VaultConfig {
         const val WORDS_IN_ORDER_BONUS = 0.10
 
         /**
-         * A row's stored text ends with a line of tags the indexers work out from fragments of
-         * it ([com.amar.vault.retrieval.StoredText]): a page with "rs" on it is tagged
+         * A row has tags the indexers work out from fragments of its text
+         * ([com.amar.vault.VaultItem.tags]): a page with "rs" on it is tagged
          * "receipt payment bill invoice", one with "exam" (or "example") "academic education".
          * A tag is found like any other word, which is the point of it, and was also scored
          * like one: a page tagged "invoice" earned what a page that says "invoice" earns, and

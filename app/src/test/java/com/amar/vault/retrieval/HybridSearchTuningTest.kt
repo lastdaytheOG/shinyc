@@ -1,5 +1,6 @@
 package com.amar.vault.retrieval
 
+import com.amar.vault.ItemType
 import com.amar.vault.VaultItem
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -15,7 +16,7 @@ import org.robolectric.annotation.Config
 @Config(sdk = [32])
 class HybridSearchTuningTest {
 
-    private fun item(id: String, text: String, type: String = "image") =
+    private fun item(id: String, text: String, type: ItemType = ItemType.PHOTO) =
         VaultItem(id = id, uri = "u/$id", ocrText = text, lang = "en", itemType = type, timestamp = 0L)
 
     private class Repo(private val all: List<VaultItem>) : SearchRepository {
@@ -95,7 +96,7 @@ class HybridSearchTuningTest {
     fun keywordOnlyNeverTouchesTheModel() = runBlocking {
         // A phrase query with a document among the keyword hits: the one case that also runs
         // the late passage boosts when semantic is enabled.
-        val docs = listOf(item("d1", "refund policy for all returned items in seven days", type = "pdf"))
+        val docs = listOf(item("d1", "refund policy for all returned items in seven days", type = ItemType.PDF))
         val semantic = Semantic()
         val svc = HybridSearchService(Repo(docs), Lexical(listOf("d1")), semantic, BoostConfig())
 

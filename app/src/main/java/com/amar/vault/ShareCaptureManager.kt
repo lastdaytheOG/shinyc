@@ -107,7 +107,7 @@ object ShareCaptureManager {
                         )
                         vaultDao.insert(newItem)
                     }
-                    CaptureTelemetry.stage(session.id, CaptureTelemetry.Stage.VAULT_SAVED, "vaultId=$vaultItemId type=${resolution.previewType}")
+                    CaptureTelemetry.stage(session.id, CaptureTelemetry.Stage.VAULT_SAVED, "vaultId=$vaultItemId type=${resolution.previewType.stored}")
 
                     // Create StashItem
                     val stashItemId = UUID.randomUUID().toString()

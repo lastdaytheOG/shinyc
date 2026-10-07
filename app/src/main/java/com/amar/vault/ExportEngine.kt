@@ -52,8 +52,8 @@ class ExportEngine(private val context: Context) {
         writer.name("@graph").beginArray()
 
         items.forEach { item ->
-            val cleanText = item.ocrText.substringBefore("\n[").trim()
-            val actions   = NerActionEngine.detect(cleanText)
+            val cleanText = item.ocrText.trim()
+            val actions   = NerActionEngine.detect(cleanText, QrPayloads.split(item.qrPayload))
 
             val node = mapOf(
                 "@type"      to "Screenshot",
@@ -62,7 +62,7 @@ class ExportEngine(private val context: Context) {
                 "text"       to cleanText,
                 "timestamp"  to dateFormat.format(Date(item.timestamp)),
                 "entities"   to actions.map { mapOf("type" to it.label, "value" to it.value) },
-                "tags"       to extractTags(item.ocrText)
+                "tags"       to item.tags.split(' ').filter { it.isNotBlank() }
             )
             // Stream this single object to disk, then clear it from memory
             gson.toJson(gson.toJsonTree(node), writer)
@@ -88,15 +88,15 @@ class ExportEngine(private val context: Context) {
 
         val entityToItems = mutableMapOf<String, MutableList<String>>()
         items.forEach { item ->
-            val cleanText = item.ocrText.substringBefore("\n[").trim()
-            NerActionEngine.detect(cleanText).forEach { action ->
+            val cleanText = item.ocrText.trim()
+            NerActionEngine.detect(cleanText, QrPayloads.split(item.qrPayload)).forEach { action ->
                 entityToItems.getOrPut(action.value) { mutableListOf() }.add(item.id)
             }
         }
 
         items.forEach { item ->
-            val cleanText = item.ocrText.substringBefore("\n[").trim()
-            val actions   = NerActionEngine.detect(cleanText)
+            val cleanText = item.ocrText.trim()
+            val actions   = NerActionEngine.detect(cleanText, QrPayloads.split(item.qrPayload))
             val date      = dateFormat.format(Date(item.timestamp))
             val title     = generateTitle(cleanText, item.timestamp)
             val safeTitle = title.take(50).replace(Regex("[^a-zA-Z0-9 ]"), "").trim()
@@ -164,8 +164,8 @@ class ExportEngine(private val context: Context) {
             writer.appendLine("ID,Date,Phone,UPI,URL,Amount,OCR_Text")
 
             items.forEach { item ->
-                val cleanText = item.ocrText.substringBefore("\n[").trim()
-                val actions   = NerActionEngine.detect(cleanText)
+                val cleanText = item.ocrText.trim()
+                val actions   = NerActionEngine.detect(cleanText, QrPayloads.split(item.qrPayload))
                 val date      = dateFormat.format(Date(item.timestamp))
 
                 val phone  = actions.firstOrNull { it.label == "Phone"  }?.value ?: ""
@@ -192,11 +192,6 @@ class ExportEngine(private val context: Context) {
             putExtra(Intent.EXTRA_SUBJECT, "Amar Vault Export — ${file.name}")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-    }
-
-    private fun extractTags(ocrText: String): List<String> {
-        val tagSection = ocrText.substringAfter("\n[", "").substringBefore("]")
-        return if (tagSection.isNotBlank()) tagSection.split(" ").filter { it.isNotBlank() } else emptyList()
     }
 
     private fun generateTitle(text: String, timestamp: Long): String {

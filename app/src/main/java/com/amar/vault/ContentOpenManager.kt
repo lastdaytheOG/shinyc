@@ -56,7 +56,7 @@ object ContentOpenManager {
 
     fun share(context: Context, item: VaultItem) {
         val target = OpenTarget.from(context, item)
-        val intent = if (target.url != null || item.itemType.equals("TEXT", ignoreCase = true)) {
+        val intent = if (target.url != null || item.itemType == ItemType.TEXT) {
             Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
                 putExtra(Intent.EXTRA_TEXT, target.url ?: item.ocrText)

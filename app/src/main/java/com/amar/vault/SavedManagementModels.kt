@@ -125,6 +125,7 @@ object SavedSearch {
             append(s.sourceFile).append(' ')
             s.userNote?.let { append(it).append(' ') }
             append(s.ocrText).append(' ')
+            append(s.tags).append(' ')
             append(s.uri).append(' ')
             com.amar.vault.ui.renderengine.core.PlatformStyles.labelFor(item.contentType)?.let { append(it).append(' ') }
             if (item.infoChips.isNotEmpty()) append(item.infoChips.joinToString(" "))

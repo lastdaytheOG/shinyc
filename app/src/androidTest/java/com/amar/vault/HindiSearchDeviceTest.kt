@@ -40,7 +40,7 @@ class HindiSearchDeviceTest {
 
     private fun page(doc: String, pdfPage: Int, text: String, file: String = "$doc.pdf") = VaultItem(
         id = "$PREFIX${doc}_chunk${pdfPage - 1}", uri = "content://hinditest/$doc", ocrText = text, lang = "hi",
-        itemType = "pdf", pageNum = pdfPage, sourceFile = file, timestamp = 1_700_000_000_000L + pdfPage,
+        itemType = ItemType.PDF, pageNum = pdfPage, sourceFile = file, timestamp = 1_700_000_000_000L + pdfPage,
         parentDocumentId = "$PREFIX$doc", chunkIndex = pdfPage - 1,
     )
 

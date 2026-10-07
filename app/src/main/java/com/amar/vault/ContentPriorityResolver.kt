@@ -73,26 +73,28 @@ class ContentPriorityResolver {
         return OpenStrategy.OPEN_NATIVE_FALLBACK
     }
 
-    private fun determinePreviewType(attachment: IngestionAttachment): String {
+    /**
+     * What the saved item is. A link is a link whichever site it points to ([LinkSite] tells
+     * the site from the address when it is shown).
+     */
+    private fun determinePreviewType(attachment: IngestionAttachment): ItemType {
         val mime = attachment.mimeType.lowercase()
-        val uri = (ShareUrlExtractor.extractFirstUrl(attachment.originalUri) ?: attachment.originalUri.orEmpty()).lowercase()
         val type = attachment.attachmentType
 
-        if (type == "TEXT" && ShareUrlExtractor.containsUrl(attachment.originalUri)) {
-            if (uri.contains("youtube.com") || uri.contains("youtu.be")) return "YOUTUBE"
-            if (uri.contains("reddit.com")) return "REDDIT"
-            if (uri.contains("twitter.com") || uri.contains("x.com") || uri.contains("instagram.com")) return "ARTICLE"
-            return "LINK"
-        }
+        if (type == "TEXT" && ShareUrlExtractor.containsUrl(attachment.originalUri)) return ItemType.LINK
 
-        if (mime.contains("pdf")) return "PDF"
+        if (mime.contains("pdf")) return ItemType.PDF
         if (mime.startsWith("image/")) {
-            return if (attachment.filename?.lowercase()?.contains("screenshot") == true) "SCREENSHOT" else "PHOTO"
+            return if (attachment.filename?.lowercase()?.contains("screenshot") == true) ItemType.SCREENSHOT else ItemType.PHOTO
         }
-        if (mime.startsWith("video/")) return "VIDEO"
-        if (mime.startsWith("audio/")) return "AUDIO"
-        
-        if (type == "TEXT") return "TEXT"
-        return "DOCUMENT"
+        if (mime.startsWith("video/")) return ItemType.VIDEO
+        if (mime.startsWith("audio/")) return ItemType.AUDIO
+
+        if (type == "TEXT") return ItemType.TEXT
+        // Any other file: a Word, Excel or EPUB file by its type or its name, else a plain file.
+        return ItemType.fromFormer(
+            "document", attachment.mimeType,
+            uri = attachment.localPath ?: attachment.originalUri.orEmpty(), sourceFile = attachment.filename.orEmpty(),
+        )
     }
 }

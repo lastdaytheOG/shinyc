@@ -88,7 +88,6 @@ private fun WidgetContent(context: Context, items: List<VaultItem>) {
 @Composable
 private fun WidgetItemRow(item: VaultItem) {
     val cleanText = item.ocrText
-        .substringBefore("\n[")
         .trim()
         .lines()
         .firstOrNull { it.isNotBlank() }

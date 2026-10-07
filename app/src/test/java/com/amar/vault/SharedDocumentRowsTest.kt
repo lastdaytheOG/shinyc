@@ -30,13 +30,13 @@ class SharedDocumentRowsTest {
     private val hash = "af6b6d9dc0f2"
     private val saved = VaultItem(
         id = "saved", uri = "/data/user/0/com.amar.vault/files/shared_imports/abc.pdf", ocrText = "",
-        lang = "en", itemType = "PDF", sourceFile = "Bill.pdf", timestamp = 1L, contentHash = hash,
+        lang = "en", itemType = ItemType.PDF, sourceFile = "Bill.pdf", timestamp = 1L, contentHash = hash,
         title = "Bill.pdf", mimeType = "application/pdf",
     )
     private val chunks = (0 until 3).map {
         VaultItem(
             id = "saved_chunk$it", uri = "file:///data/user/0/com.amar.vault/files/shared_imports/abc.pdf",
-            ocrText = "page $it", lang = "en", itemType = "pdf", pageNum = it + 1, sourceFile = "Bill.pdf",
+            ocrText = "page $it", lang = "en", itemType = ItemType.PDF, pageNum = it + 1, sourceFile = "Bill.pdf",
             timestamp = 2L, contentHash = hash, parentDocumentId = "saved", chunkIndex = it,
         )
     }
@@ -85,7 +85,7 @@ class SharedDocumentRowsTest {
     @Test
     fun repairLooksAtSavedLocalFilesOnly() = runBlocking {
         vaultDao.insert(
-            VaultItem(id = "link", uri = "https://example.com/a.pdf", ocrText = "", lang = "en", itemType = "LINK", timestamp = 3L)
+            VaultItem(id = "link", uri = "https://example.com/a.pdf", ocrText = "", lang = "en", itemType = ItemType.LINK, timestamp = 3L)
         )
         assertEquals(listOf("saved"), vaultDao.getStandaloneLocalFiles().map { it.id })
     }

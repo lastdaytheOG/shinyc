@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
+import com.amar.vault.ItemType
 import com.amar.vault.ShareUrlExtractor
 import com.amar.vault.VaultItem
 import java.io.File
@@ -26,8 +27,7 @@ data class OpenTarget(
     val localUri: Uri?,
     /** Resolved lowercase MIME type (may be blank). */
     val mimeType: String,
-    /** Lowercase logical item type (e.g. "photo", "pdf", "link"). */
-    val itemType: String,
+    val itemType: ItemType,
     /** Best available human-facing title. */
     val title: String?,
 ) {
@@ -41,7 +41,7 @@ data class OpenTarget(
     companion object {
         // Item types + URI shapes that denote a locally stored file rather than a link.
         private val FILE_ITEM_TYPES = setOf(
-            "photo", "screenshot", "image", "video", "audio", "pdf", "document"
+            ItemType.PHOTO, ItemType.SCREENSHOT, ItemType.VIDEO, ItemType.AUDIO, ItemType.PDF, ItemType.FILE,
         )
 
         fun from(context: Context, item: VaultItem): OpenTarget {
@@ -51,7 +51,7 @@ data class OpenTarget(
             // in Chrome instead of the correct in-app viewer. Only genuine link/text
             // captures (originalUri or an http uri) fall back to OCR-derived URLs.
             val looksLikeLocalFile = item.originalUri.isNullOrBlank() && (
-                item.itemType.lowercase() in FILE_ITEM_TYPES ||
+                item.itemType in FILE_ITEM_TYPES ||
                     item.uri.startsWith("/") ||
                     item.uri.startsWith("file:", ignoreCase = true) ||
                     item.uri.startsWith("content:", ignoreCase = true)
@@ -71,7 +71,7 @@ data class OpenTarget(
                 url = url,
                 localUri = localUri,
                 mimeType = resolveMimeType(context, item),
-                itemType = item.itemType.lowercase(),
+                itemType = item.itemType,
                 title = item.title ?: item.sourceFile,
             )
         }

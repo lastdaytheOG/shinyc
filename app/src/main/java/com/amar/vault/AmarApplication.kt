@@ -55,11 +55,7 @@ class AmarApplication : Application(), Configuration.Provider {
                     .getAllSearchableData()
 
                 items.forEach { item ->
-                    // The name (a document's file name, any item's title) is indexed too, so
-                    // every PDF already in the vault becomes findable by name on this rebuild.
-                    val name = com.amar.vault.retrieval.SearchableName.of(item.itemType, item.sourceFile, item.title)
-                    val text = "${item.ocrText} ${item.tags} ${item.itemType} $name"
-                    bm25Index.addDocument(item.id, text)
+                    bm25Index.addDocument(item.id, com.amar.vault.retrieval.KeywordText.of(item))
                 }
 
                 VaultLog.i("AmarApp", "BM25 hydrated: ${items.size} docs")

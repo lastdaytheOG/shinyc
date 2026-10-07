@@ -4,24 +4,46 @@ import android.content.Context
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * One searchable thing in the vault. It is one of two shapes:
+ *
+ *  - a whole item — a picture, a saved link, a saved file ([parentDocumentId] is null);
+ *  - a piece of a document's text ([parentDocumentId] names its [VaultDocument]). A document
+ *    is cut into pieces of a few sentences, several to a page, and each piece is a row, so
+ *    that a search can name the page a word is on.
+ */
 @Entity(
     tableName = "vault_items",
     // Sprint P1 — contentHash backs the per-document duplicate check
     // (countChunksByContentHash / deleteChunksByContentHash); without the index each PDF
-    // index pays a full table scan that grows with the vault.
-    indices = [Index("contentHash")]
+    // index pays a full table scan that grows with the vault. parentDocumentId: a document's
+    // pieces are asked for by the document.
+    indices = [Index("contentHash"), Index("parentDocumentId")]
 )
 data class VaultItem(
     @PrimaryKey val id: String,
     val uri: String,
+    /**
+     * What was read: the text of the page, or the text on the picture. Nothing else is in it.
+     * (Until version 14 the item's tags were glued on as a last line in square brackets.)
+     */
     val ocrText: String,
     val lang: String,
 
-    val itemType: String,
+    val itemType: ItemType,
+    /**
+     * For a piece of a PDF, the page it is on, counted from 1. Other documents have no pages:
+     * their pieces hold [chunkIndex] here. 0 for a whole item. Read it through [pdfPage].
+     */
     val pageNum: Int = 0,
     val sourceFile: String = "",
     val timestamp: Long,
     val pHash: Long = 0L,
+    /**
+     * Labels the app gave the item, in lower case with a space between them
+     * ("pdf document tax government"). They let a payment screenshot be found by "receipt";
+     * they are not something the item says, and search keeps the two apart.
+     */
     val tags: String = "",
     val contentHash: String = "",
 
@@ -38,7 +60,49 @@ data class VaultItem(
     // its own root. Ownership must be read from these columns, never parsed from id.
     val parentDocumentId: String? = null,
     @ColumnInfo(defaultValue = "0") val chunkIndex: Int = 0,
-    @ColumnInfo(defaultValue = "1") val totalChunks: Int = 1
+    /**
+     * Not kept up: 0 for a document indexed page by page, whose size is not known while its
+     * rows are written. How many pieces a document has is [VaultDocument.chunkCount].
+     */
+    @ColumnInfo(defaultValue = "1") val totalChunks: Int = 1,
+
+    /** What the QR codes and barcodes on a picture hold ([QrPayloads]); null when it has none. */
+    val qrPayload: String? = null,
+)
+
+/** The document this row is a piece of; for a whole item, the item itself. */
+val VaultItem.documentId: String get() = parentDocumentId ?: id
+
+/** True for a piece of a document's text, false for a whole item. */
+val VaultItem.isDocumentPiece: Boolean get() = parentDocumentId != null
+
+/** The page of the PDF this piece is on, counted from 1; null for anything else. */
+val VaultItem.pdfPage: Int?
+    get() = pageNum.takeIf { parentDocumentId != null && itemType == ItemType.PDF && it > 0 }
+
+/**
+ * A file whose text is stored as pieces in `vault_items`: what is true of the whole file, kept
+ * once. Its [id] is what each of its pieces names as `parentDocumentId`.
+ *
+ * A document that was shared into the vault also has a whole-item row in `vault_items` with
+ * the same id: that row is the saved item, with its folder and note. One picked from the
+ * phone's files has no such row.
+ */
+@Entity(tableName = "documents", indices = [Index("contentHash")])
+data class VaultDocument(
+    @PrimaryKey val id: String,
+    /** Where the file is opened from. */
+    val uri: String,
+    /** What the file is called. */
+    val name: String,
+    val itemType: ItemType,
+    /** The hash its pieces carry in `vault_items.contentHash`. */
+    val contentHash: String,
+    /** How many pages the PDF has; null for a file without pages, or when it is not known. */
+    val pageCount: Int?,
+    /** How many pieces of it are stored. */
+    val chunkCount: Int,
+    val addedAt: Long,
 )
 
 @Fts4(contentEntity = VaultItem::class)
@@ -48,11 +112,12 @@ data class VaultItemFts(
     val ocrText: String
 )
 
+/** What the keyword engine is filled from when the app starts ([com.amar.vault.retrieval.KeywordText]). */
 data class VaultItemSearchData(
     val id: String,
     val ocrText: String,
     val tags: String,
-    val itemType: String,
+    val itemType: ItemType,
     val sourceFile: String,
     val title: String?
 )
@@ -82,6 +147,10 @@ interface VaultDao {
     /** Removes the chunk rows of the document with this hash, leaving any standalone item. */
     @Query("DELETE FROM vault_items WHERE contentHash = :hash AND parentDocumentId IS NOT NULL")
     suspend fun deleteChunksByContentHash(hash: String)
+
+    /** Removes every piece of this document, whichever version of the file it was read from. */
+    @Query("DELETE FROM vault_items WHERE parentDocumentId = :documentId")
+    suspend fun deleteChunksOfDocument(documentId: String)
 
     /**
      * Standalone items whose file is the app's own private copy, stored as a bare absolute
@@ -143,6 +212,38 @@ interface VaultDao {
     suspend fun delete(item: VaultItem)
 }
 
+@Dao
+interface VaultDocumentDao {
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(document: VaultDocument)
+
+    @Query("SELECT * FROM documents WHERE id = :id")
+    suspend fun getById(id: String): VaultDocument?
+
+    @Query("SELECT * FROM documents ORDER BY addedAt DESC")
+    suspend fun getAll(): List<VaultDocument>
+
+    @Query("UPDATE documents SET pageCount = :pageCount WHERE id = :id")
+    suspend fun setPageCount(id: String, pageCount: Int)
+
+    /** Counts the document's pieces again. */
+    @Query("UPDATE documents SET chunkCount = (SELECT COUNT(*) FROM vault_items WHERE parentDocumentId = :id) WHERE id = :id")
+    suspend fun refreshChunkCount(id: String)
+
+    /** Removes the record of every document with this hash; its pieces are removed separately. */
+    @Query("DELETE FROM documents WHERE contentHash = :hash")
+    suspend fun deleteByContentHash(hash: String)
+
+    /** Pieces that name a document there is no record of. Always 0; asked by tests. */
+    @Query("""
+        SELECT COUNT(*) FROM vault_items
+        WHERE parentDocumentId IS NOT NULL
+          AND parentDocumentId NOT IN (SELECT id FROM documents)
+    """)
+    suspend fun countPiecesWithoutDocument(): Int
+}
+
 @Entity(
     tableName = "vault_relationship",
     primaryKeys = ["sourceId", "targetId", "relationshipType"],
@@ -177,6 +278,7 @@ interface VaultRelationshipDao {
 @Database(
     entities = [
         VaultItem::class,
+        VaultDocument::class,
         VaultItemFts::class,
         VaultMetadata::class, 
         VaultMetadataStats::class,
@@ -195,11 +297,13 @@ interface VaultRelationshipDao {
         IngestionSession::class,
         IngestionAttachment::class
     ], 
-    version = 13,
-    exportSchema = false
+    version = 14,
+    exportSchema = true
 )
+@TypeConverters(ItemTypeConverter::class)
 abstract class VaultDatabase : RoomDatabase() {
     abstract fun vaultDao(): VaultDao
+    abstract fun vaultDocumentDao(): VaultDocumentDao
     abstract fun vaultMetadataDao(): VaultMetadataDao
     abstract fun vaultMetadataStatsDao(): VaultMetadataStatsDao
     abstract fun canonicalEntityStatsDao(): CanonicalEntityStatsDao
@@ -387,6 +491,17 @@ abstract class VaultDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Every step from version 6 to the current one, in order. [context] is where the last
+         * step leaves its account of what it changed ([MigrationReport]); a test that only
+         * wants the steps passes none.
+         */
+        internal fun migrations(context: Context? = null): Array<androidx.room.migration.Migration> = arrayOf(
+            MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
+            MIGRATION_11_12, MIGRATION_12_13,
+            Migration13To14 { report -> context?.let { MigrationReport.save(it, report) } },
+        )
+
         fun get(context: Context): VaultDatabase {
             return INSTANCE ?: synchronized(this) {
                 Room.databaseBuilder(
@@ -394,7 +509,7 @@ abstract class VaultDatabase : RoomDatabase() {
                     VaultDatabase::class.java,
                     "vault.db"
                 )
-                    .addMigrations(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
+                    .addMigrations(*migrations(context.applicationContext))
                     .build()
                     .also { INSTANCE = it }
             }

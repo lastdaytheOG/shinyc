@@ -79,7 +79,8 @@ class ShareCaptureUnitTest {
     fun embeddedYouTubeLinkResolvesToYouTubeStrategy() {
         val res = ContentPriorityResolver().resolve(listOf(textAttachment("watch this https://youtu.be/abcdefghijk")))
         assertEquals(OpenStrategy.OPEN_YOUTUBE, res.recommendedOpenStrategy)
-        assertEquals("YOUTUBE", res.previewType)
+        assertEquals(ItemType.LINK, res.previewType)
+        assertEquals(LinkSite.YOUTUBE, LinkSite.of(res.primaryAttachment.originalUri.orEmpty()))
     }
 
     @Test
@@ -93,7 +94,7 @@ class ShareCaptureUnitTest {
     @Test
     fun plainTextWithoutUrlIsTextType() {
         val res = ContentPriorityResolver().resolve(listOf(textAttachment("a grocery list, no links")))
-        assertEquals("TEXT", res.previewType)
+        assertEquals(ItemType.TEXT, res.previewType)
         assertEquals(OpenStrategy.OPEN_FILE, res.recommendedOpenStrategy)
     }
 
@@ -124,7 +125,7 @@ class ShareCaptureUnitTest {
                 textAttachment("read more https://news.example.com/story"),
             )
         )
-        assertEquals("STREAM should defer to the link", "LINK", res.previewType)
+        assertEquals("STREAM should defer to the link", ItemType.LINK, res.previewType)
         assertEquals(1, res.secondaryAttachments.size)
     }
 
@@ -137,14 +138,14 @@ class ShareCaptureUnitTest {
                 fileAttachment("image/jpeg", "c.jpg"),
             )
         )
-        assertTrue(res.previewType == "PHOTO" || res.previewType == "SCREENSHOT")
+        assertTrue(res.previewType == ItemType.PHOTO || res.previewType == ItemType.SCREENSHOT)
         assertEquals(2, res.secondaryAttachments.size)
     }
 
     @Test
     fun pdfShare_resolvesToPdf() {
         val res = ContentPriorityResolver().resolve(listOf(fileAttachment("application/pdf", "doc.pdf")))
-        assertEquals("PDF", res.previewType)
+        assertEquals(ItemType.PDF, res.previewType)
         assertEquals(OpenStrategy.OPEN_PDF, res.recommendedOpenStrategy)
     }
 }

@@ -260,9 +260,7 @@ private fun SavedItemRowCard(item: StashItemWithVaultItem, onClick: () -> Unit) 
                     .background(Color(0xFFE5DCD0)),
                 contentAlignment = Alignment.Center
             ) {
-                val itemTypeUpper = item.itemType.uppercase()
-                val isImage = itemTypeUpper == "PHOTO" || itemTypeUpper == "SCREENSHOT"
-                if (isImage) {
+                if (item.itemType.isImage) {
                     val painter = rememberAsyncImagePainter(model = item.uri)
                     Image(
                         painter = painter,
@@ -271,25 +269,30 @@ private fun SavedItemRowCard(item: StashItemWithVaultItem, onClick: () -> Unit) 
                         contentScale = ContentScale.Crop
                     )
                 } else {
-                    val emoji = when (itemTypeUpper) {
-                        "YOUTUBE" -> "🎥"
-                        "REDDIT" -> "🤖"
-                        "ARTICLE", "LINK" -> "🔗"
-                        "TEXT" -> "📝"
-                        "PDF" -> "📄"
+                    val emoji = when (item.itemType) {
+                        ItemType.LINK -> when (LinkSite.of(item.uri)) {
+                            LinkSite.YOUTUBE -> "🎥"
+                            LinkSite.REDDIT -> "🤖"
+                            LinkSite.OTHER -> "🔗"
+                        }
+                        ItemType.TEXT -> "📝"
+                        ItemType.PDF -> "📄"
                         else -> "📁"
                     }
                     Text(text = emoji, fontSize = 28.sp)
                 }
             }
             Column(modifier = Modifier.padding(8.dp)) {
-                val displayTitle = item.title ?: item.sourceFile.takeIf { it.isNotBlank() } ?: when (item.itemType.uppercase()) {
-                    "SCREENSHOT" -> "Screenshot"
-                    "PHOTO" -> "Photo"
-                    "YOUTUBE" -> "YouTube"
-                    "REDDIT" -> "Reddit"
-                    "TEXT" -> "Text Note"
-                    "PDF" -> "PDF Document"
+                val displayTitle = item.title ?: item.sourceFile.takeIf { it.isNotBlank() } ?: when (item.itemType) {
+                    ItemType.SCREENSHOT -> "Screenshot"
+                    ItemType.PHOTO -> "Photo"
+                    ItemType.LINK -> when (LinkSite.of(item.uri)) {
+                        LinkSite.YOUTUBE -> "YouTube"
+                        LinkSite.REDDIT -> "Reddit"
+                        LinkSite.OTHER -> "Document"
+                    }
+                    ItemType.TEXT -> "Text Note"
+                    ItemType.PDF -> "PDF Document"
                     else -> "Document"
                 }
                 Text(

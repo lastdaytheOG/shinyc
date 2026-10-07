@@ -38,19 +38,16 @@ class SearchPrecisionDeviceTest {
         EntryPointAccessors.fromApplication(app, BenchmarkRunner.BenchmarkEntryPoint::class.java)
     }
 
-    private fun page(doc: String, pdfPage: Int, text: String, file: String) = VaultItem(
+    private fun page(doc: String, pdfPage: Int, text: String, file: String, tags: String = "") = VaultItem(
         id = "$PREFIX${doc}_chunk${pdfPage - 1}", uri = "content://precisiontest/$doc", ocrText = text, lang = "en",
-        itemType = "pdf", pageNum = pdfPage, sourceFile = file, timestamp = 1_700_000_000_000L + pdfPage,
-        parentDocumentId = "$PREFIX$doc", chunkIndex = pdfPage - 1,
+        itemType = ItemType.PDF, pageNum = pdfPage, sourceFile = file, timestamp = 1_700_000_000_000L + pdfPage,
+        tags = tags, parentDocumentId = "$PREFIX$doc", chunkIndex = pdfPage - 1,
     )
 
     private fun screenshot(id: String, text: String) = VaultItem(
         id = "$PREFIX$id", uri = "content://media/external/images/media/$id", ocrText = text, lang = "en",
-        itemType = "screenshot", sourceFile = id, timestamp = 1_700_000_000_500L,
+        itemType = ItemType.SCREENSHOT, sourceFile = id, timestamp = 1_700_000_000_500L,
     )
-
-    /** A page as the indexer stores it: its text, a line feed, its tags in brackets. */
-    private fun tagged(text: String, tags: String) = text + 10.toChar() + "[" + tags + "]"
 
     // The words are made up where they need to be in no other document on the device.
     private val corpus = listOf(
@@ -67,18 +64,18 @@ class SearchPrecisionDeviceTest {
         screenshot("player", "18:09 ELLA CIAO. zylaude playing next"),
         // Between them, "zylab" and "laudx" have four of the six three-letter pieces of "zylaudde".
         page("notes", 2, "zylab results and laudx figures", "Lab notes.pdf"),
-        // As the indexer stores a page: its text, then a line of tags. Page 2 is short and only
-        // tagged with the word, which is what the engine ranks highest; page 9 says it.
-        page("ledger", 2, tagged("sums due", "pdf document zinvoice zbilling"), "Ledger.pdf"),
-        page("ledger", 9, tagged("upon production of the zinvoice the assessing officer shall, within thirty days of the end " +
-            "of the month in which it is received, pass an order in writing and serve a copy of it", "pdf document"), "Ledger.pdf"),
-        page("memo", 1, tagged("a short memo about nothing", "pdf document zinvoice"), "Memo.pdf"),
+        // As the indexer stores a page: its text, and the tags it gave it. Page 2 is short and
+        // only tagged with the word, which is what the engine ranks highest; page 9 says it.
+        page("ledger", 2, "sums due", "Ledger.pdf", tags = "pdf document zinvoice zbilling"),
+        page("ledger", 9, "upon production of the zinvoice the assessing officer shall, within thirty days of the end " +
+            "of the month in which it is received, pass an order in writing and serve a copy of it", "Ledger.pdf", tags = "pdf document"),
+        page("memo", 1, "a short memo about nothing", "Memo.pdf", tags = "pdf document zinvoice"),
     )
 
     @Before
     fun seed() = runBlocking {
         services.database().vaultDao().insertAll(corpus)
-        corpus.forEach { services.bm25Index().addDocument(it.id, "${it.ocrText} ${SearchableName.of(it)}") }
+        corpus.forEach { services.bm25Index().addDocument(it.id, "${it.ocrText} ${it.tags} ${SearchableName.of(it)}") }
     }
 
     @After

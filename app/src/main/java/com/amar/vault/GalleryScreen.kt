@@ -79,7 +79,7 @@ fun GalleryScreen(viewModel: SearchViewModel = hiltViewModel()) {
 
     // Photos only (no document chunks)
     val photos = remember(allItems) {
-        allItems.filter { it.itemType !in setOf("pdf", "word", "excel", "epub") }
+        allItems.filter { !it.isDocumentPiece }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -153,12 +153,11 @@ private fun SearchResults(results: List<VaultItem>, query: String, onItemClick: 
     }
 
     val grouped = remember(results) {
-        val docTypes = setOf("pdf", "word", "excel", "epub")
         val docs = mutableMapOf<String, MutableList<VaultItem>>()
         val singles = mutableListOf<VaultItem>()
 
         results.forEach { item ->
-            val isDoc = item.itemType in docTypes && !item.sourceFile.isNullOrBlank()
+            val isDoc = item.isDocumentPiece && !item.sourceFile.isNullOrBlank()
             if (isDoc) {
                 docs.getOrPut(item.sourceFile!!) { mutableListOf() }.add(item)
             } else {
@@ -221,7 +220,7 @@ private fun DocumentGroupCard(chunks: List<VaultItem>, query: String, onItemClic
                         maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        if (first.itemType == "pdf") "${chunks.size} matching pages found"
+                        if (first.itemType == ItemType.PDF) "${chunks.size} matching pages found"
                         else "${chunks.size} matching sections found",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary
@@ -256,7 +255,7 @@ private fun DocumentGroupCard(chunks: List<VaultItem>, query: String, onItemClic
 
 @Composable
 private fun ChunkMatchRow(chunk: VaultItem, query: String, onClick: () -> Unit) {
-    val cleanText = chunk.ocrText.substringBefore("\n[").trim()
+    val cleanText = chunk.ocrText.trim()
     val matchCount = countMatches(cleanText, query)
     val snippet = buildMatchSnippet(cleanText, query, 160)
     val highlighted = highlightMatches(snippet, query)
@@ -265,7 +264,7 @@ private fun ChunkMatchRow(chunk: VaultItem, query: String, onClick: () -> Unit) 
         Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
             Surface(shape = RoundedCornerShape(6.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
                 Text(
-                    if (chunk.itemType == "pdf") "P${chunk.pageNum ?: 1}" else "#${(chunk.pageNum ?: 0) + 1}",
+                    if (chunk.itemType == ItemType.PDF) "P${chunk.pageNum ?: 1}" else "#${(chunk.pageNum ?: 0) + 1}",
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -291,10 +290,10 @@ private fun ChunkMatchRow(chunk: VaultItem, query: String, onClick: () -> Unit) 
 @Composable
 private fun SearchResultCard(item: VaultItem, query: String, onItemClick: (VaultItem, String) -> Unit) {
     val context = LocalContext.current
-    val isDocument = item.itemType in setOf("pdf", "word", "excel", "epub")
+    val isDocument = item.isDocumentPiece
 
-    val actions = remember(item.ocrText) {
-        NerActionEngine.detect(item.ocrText.substringBefore("\n[").trim())
+    val actions = remember(item.ocrText, item.qrPayload) {
+        NerActionEngine.detect(item.ocrText.trim(), QrPayloads.split(item.qrPayload))
     }
 
     Card(
@@ -311,7 +310,7 @@ private fun SearchResultCard(item: VaultItem, query: String, onItemClick: (Vault
                     Column(Modifier.weight(1f)) {
                         Text(item.sourceFile ?: "Unknown file", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            if (item.itemType == "pdf") "Page ${item.pageNum ?: 1}" else "Chunk ${(item.pageNum ?: 0) + 1}",
+                            if (item.itemType == ItemType.PDF) "Page ${item.pageNum ?: 1}" else "Chunk ${(item.pageNum ?: 0) + 1}",
                             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -331,7 +330,7 @@ private fun SearchResultCard(item: VaultItem, query: String, onItemClick: (Vault
                     Spacer(Modifier.width(12.dp))
                 }
                 Column(Modifier.weight(1f)) {
-                    val cleanText = item.ocrText.substringBefore("\n[").trim()
+                    val cleanText = item.ocrText.trim()
                     val snippet = buildMatchSnippet(cleanText, query, 180)
                     val highlighted = highlightMatches(snippet, query)
                     Text(highlighted, style = MaterialTheme.typography.bodySmall, maxLines = if (isDocument) 4 else 3, lineHeight = 18.sp, overflow = TextOverflow.Ellipsis)
@@ -369,15 +368,15 @@ private fun SearchResultCard(item: VaultItem, query: String, onItemClick: (Vault
 private data class BadgeStyle(val label: String, val colorIndex: Int)
 
 private val BADGE_STYLES = mapOf(
-    "pdf" to BadgeStyle("PDF", 2),
-    "word" to BadgeStyle("DOCX", 0),
-    "excel" to BadgeStyle("XLSX", 1),
-    "epub" to BadgeStyle("EPUB", 3)
+    ItemType.PDF to BadgeStyle("PDF", 2),
+    ItemType.WORD to BadgeStyle("DOCX", 0),
+    ItemType.EXCEL to BadgeStyle("XLSX", 1),
+    ItemType.EPUB to BadgeStyle("EPUB", 3)
 )
 
 @Composable
-private fun FileTypeBadge(itemType: String) {
-    val badge = BADGE_STYLES[itemType] ?: BadgeStyle(itemType.uppercase(), 0)
+private fun FileTypeBadge(itemType: ItemType) {
+    val badge = BADGE_STYLES[itemType] ?: BadgeStyle(itemType.stored.uppercase(), 0)
     val containerColor = when (badge.colorIndex) {
         0 -> MaterialTheme.colorScheme.primaryContainer
         1 -> MaterialTheme.colorScheme.tertiaryContainer
@@ -474,15 +473,13 @@ private fun openItemOrViewer(
     allPhotos: List<VaultItem>,
     showViewer: (VaultItem, List<VaultItem>) -> Unit,
 ) {
-    val docTypes = setOf("pdf", "word", "excel", "epub")
-
-    if (item.itemType !in docTypes) {
+    if (!item.isDocumentPiece) {
         // Image/screenshot → open in-app viewer
         showViewer(item, allPhotos)
         return
     }
 
-    if (item.itemType == "pdf") {
+    if (item.itemType == ItemType.PDF) {
         PdfViewerActivity.open(
             context = context, uri = Uri.parse(item.uri),
             page = item.pageNum ?: 1, searchQuery = query,
@@ -493,9 +490,9 @@ private fun openItemOrViewer(
 
     // Word/Excel/EPUB → external viewer
     val mimeType = when (item.itemType) {
-        "word" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        "excel" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        "epub" -> "application/epub+zip"
+        ItemType.WORD -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ItemType.EXCEL -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ItemType.EPUB -> "application/epub+zip"
         else -> "image/*"
     }
 
