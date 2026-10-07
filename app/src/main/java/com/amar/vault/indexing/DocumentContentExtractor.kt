@@ -37,8 +37,6 @@ class DocumentContentExtractor(
     /** Extracted, paged-and-chunked document content plus the format's tag/itemType descriptors. */
     data class Content(
         val pagedChunks: List<PagedChunk>,
-        /** Family tag prepended to generated tags (was DocFamily.tag). */
-        val tag: String,
         /** VaultItem.itemType for chunks of this family (was DocFamily.itemType). */
         val itemType: ItemType,
         /** How many pages the file has; null for a format without pages. */
@@ -56,14 +54,11 @@ class DocumentContentExtractor(
             ?: error("Unsupported mime type '$mimeType' — call isSupported() before extract()")
         var pageCount: Int? = null
         val pagedChunks = extractor.extract(context, uri, chunker) { pageCount = it }
-        return Content(pagedChunks, tag = extractor.tag, itemType = extractor.itemType, pageCount = pageCount)
+        return Content(pagedChunks, itemType = extractor.itemType, pageCount = pageCount)
     }
 
-    /** The format's tag/itemType descriptors — known before extraction (static per format). */
-    data class Descriptor(val tag: String, val itemType: ItemType)
-
-    fun descriptorFor(mimeType: String): Descriptor? =
-        registry.extractorFor(mimeType)?.let { Descriptor(it.tag, it.itemType) }
+    /** What a file of this mime type is stored as — known before extraction; null when it is not read. */
+    fun itemTypeFor(mimeType: String): ItemType? = registry.extractorFor(mimeType)?.itemType
 
     /**
      * Sprint P6 — progressive extraction. Streams chunk batches (per page for PDFs) to [onBatch]

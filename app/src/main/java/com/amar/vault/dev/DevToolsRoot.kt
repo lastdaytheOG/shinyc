@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.amar.vault.MigrationReport
+import com.amar.vault.indexing.AutoTagUpkeep
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -52,8 +53,21 @@ private fun DevToolsHub(onExit: () -> Unit, onNavigate: (DevRoute) -> Unit) {
         DevNavCard("Benchmarks", "Run evaluation suites · regression vs baseline · reports", "📊") { onNavigate(DevRoute.BENCHMARKS) }
         DevNavCard("Golden Queries", "Type a real query · mark the right answers · scored by Benchmarks", "🎯") { onNavigate(DevRoute.GOLDEN_QUERIES) }
         Spacer(Modifier.height(8.dp))
+        TagUpkeepNote()
         DatabaseUpgradeNote()
     }
+}
+
+/** When everything in the vault was last tagged again, and what the rules recognised. */
+@Composable
+private fun TagUpkeepNote() {
+    val context = LocalContext.current
+    val last = remember { AutoTagUpkeep.lastReport(context) } ?: return
+    val on = remember(last.first) {
+        SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()).format(Date(last.first))
+    }
+    DevSectionLabel("Tags worked out again · $on")
+    DevCard { DevMono(last.second.split("; ").joinToString(System.lineSeparator())) }
 }
 
 /**

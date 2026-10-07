@@ -42,8 +42,6 @@ interface FormatExtractor {
      * whose provider gave no usable type ("application/octet-stream", or none at all).
      */
     val extensions: Set<String>
-    /** Family tag prepended to generated tags (was DocFamily.tag). */
-    val tag: String
     /** VaultItem.itemType for chunks of this family (was DocFamily.itemType). */
     val itemType: ItemType
     /**
@@ -98,7 +96,6 @@ internal fun openDocStream(context: Context, uri: Uri): InputStream =
 class PdfFormatExtractor : FormatExtractor {
     override val mimeTypes = setOf("application/pdf")
     override val extensions = setOf("pdf")
-    override val tag = "pdf document"
     override val itemType = ItemType.PDF
 
     private companion object {
@@ -665,7 +662,6 @@ class PdfFormatExtractor : FormatExtractor {
 class WordFormatExtractor : FormatExtractor {
     override val mimeTypes = setOf("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     override val extensions = setOf("docx")
-    override val tag = "word document"
     override val itemType = ItemType.WORD
 
     override suspend fun extract(
@@ -684,7 +680,6 @@ class WordFormatExtractor : FormatExtractor {
 class ExcelFormatExtractor : FormatExtractor {
     override val mimeTypes = setOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     override val extensions = setOf("xlsx")
-    override val tag = "spreadsheet excel"
     override val itemType = ItemType.EXCEL
 
     override suspend fun extract(
@@ -709,7 +704,6 @@ class ExcelFormatExtractor : FormatExtractor {
 class EpubFormatExtractor : FormatExtractor {
     override val mimeTypes = setOf("application/epub+zip")
     override val extensions = setOf("epub")
-    override val tag = "ebook epub"
     override val itemType = ItemType.EPUB
 
     override suspend fun extract(

@@ -112,6 +112,17 @@ data class VaultItemFts(
     val ocrText: String
 )
 
+/** What tagging an item again reads of it ([com.amar.vault.indexing.AutoTagUpkeep]). */
+data class TextForTagging(
+    val rowId: Long,
+    val id: String,
+    val ocrText: String,
+    val tags: String,
+    val itemType: ItemType,
+    val pageNum: Int,
+    val qrPayload: String?,
+)
+
 /** What the keyword engine is filled from when the app starts ([com.amar.vault.retrieval.KeywordText]). */
 data class VaultItemSearchData(
     val id: String,
@@ -186,6 +197,28 @@ interface VaultDao {
 
     @Query("SELECT * FROM vault_items WHERE pHash = :hash LIMIT 1")
     suspend fun findByPHash(hash: Long): VaultItem?
+
+    // ── Tagging what is stored again (AutoTagUpkeep) ──
+
+    /** Whole items after [afterRowId], in rowid order: the next batch to tag again. */
+    @Query("""
+        SELECT rowid AS rowId, id, ocrText, tags, itemType, pageNum, qrPayload FROM vault_items
+        WHERE parentDocumentId IS NULL AND rowid > :afterRowId ORDER BY rowid LIMIT :limit
+    """)
+    suspend fun wholeItemsForTagging(afterRowId: Long, limit: Int): List<TextForTagging>
+
+    /** The pieces of one document, in their order in it. */
+    @Query("""
+        SELECT rowid AS rowId, id, ocrText, tags, itemType, pageNum, qrPayload FROM vault_items
+        WHERE parentDocumentId = :documentId ORDER BY chunkIndex
+    """)
+    suspend fun piecesForTagging(documentId: String): List<TextForTagging>
+
+    @Query("UPDATE vault_items SET tags = :tags WHERE id IN (:ids)")
+    suspend fun setTags(ids: List<String>, tags: String)
+
+    @Query("UPDATE vault_items SET ocrText = :text, tags = :tags WHERE id = :id")
+    suspend fun setTextAndTags(id: String, text: String, tags: String)
 
     @Query("SELECT * FROM vault_items WHERE timestamp > :since ORDER BY timestamp DESC")
     suspend fun getItemsSince(since: Long): List<VaultItem>

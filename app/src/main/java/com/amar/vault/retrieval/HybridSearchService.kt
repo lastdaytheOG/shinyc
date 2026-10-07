@@ -47,13 +47,6 @@ class HybridSearchService(
         val NOT_A_WORD = Regex("[^\\p{L}\\p{M}\\p{N}]+")
         /** More than a query has words: the scan lane's sort key is `words said * this + words`. */
         const val SAID_RADIX = 1024
-        /**
-         * What stands between a row's page and its tags, and after them, in [RowText]. This is
-         * how the two were stored as one text before database version 14; kept for now so that
-         * every word boundary the lanes see is where it was.
-         */
-        const val TAGS_OPEN = "\n["
-        const val TAGS_CLOSE = "]"
     }
 
     override suspend fun retrieve(request: RetrievalRequest): RetrievalResult =
@@ -481,7 +474,8 @@ class HybridSearchService(
             fun of(item: VaultItem): RowText {
                 val page = item.ocrText.lowercase()
                 if (item.tags.isEmpty()) return RowText(page, page.length)
-                return RowText(page + TAGS_OPEN + item.tags.lowercase() + TAGS_CLOSE, page.length)
+                // A line break between them: no word runs from the page into the tags.
+                return RowText(page + "\n" + item.tags.lowercase(), page.length)
             }
         }
     }

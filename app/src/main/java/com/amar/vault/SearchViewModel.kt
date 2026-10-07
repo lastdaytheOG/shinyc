@@ -40,7 +40,7 @@ data class SearchHit(
     val similarWord: String? = null,
     /**
      * Set when the item says neither the typed word nor anything like it, and is listed for a
-     * tag the indexer gave it ("receipt" on a page that has "rs" on it): that tag. The card
+     * tag the app gave it ("receipt" on a payment screenshot that says "Paid to"): that tag. The card
      * says so, where the excerpt would have been.
      */
     val filedUnder: String? = null,

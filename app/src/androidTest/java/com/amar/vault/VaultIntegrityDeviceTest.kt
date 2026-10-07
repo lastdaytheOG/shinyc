@@ -43,6 +43,14 @@ class VaultIntegrityDeviceTest {
     }
 
     @Test
+    fun everyItemIsTaggedAsTheRulesWouldTagItNow() = runBlocking {
+        // Whether it was tagged when it was indexed or tagged again since, by rules that are
+        // the current ones: nothing on the device is waiting to be tagged differently.
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        assertEquals(0, com.amar.vault.indexing.AutoTagUpkeep(db, app).countOutOfDate())
+    }
+
+    @Test
     fun everyPieceHasItsDocumentAndEveryDocumentItsCount() = runBlocking {
         assertEquals("pieces that name a document there is no record of", 0, db.vaultDocumentDao().countPiecesWithoutDocument())
         val counted = rows("SELECT parentDocumentId, COUNT(*) FROM vault_items WHERE parentDocumentId IS NOT NULL GROUP BY parentDocumentId") {

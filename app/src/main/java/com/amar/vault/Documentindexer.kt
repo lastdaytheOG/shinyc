@@ -272,7 +272,7 @@ class DocumentIndexer private constructor(private val context: Context) {
                 contentHash = contentHash, pageCount = content.pageCount,
                 chunkCount = pagedChunks.size, addedAt = System.currentTimeMillis(),
             )
-            val chunkItems = pagedChunks.map { chunkRow(document, it, content.tag, totalChunks = pagedChunks.size) }
+            val chunkItems = com.amar.vault.indexing.DocumentRows.of(document, pagedChunks, totalChunks = pagedChunks.size)
 
             // Atomic: the document's record and all its chunk rows persist, or none of it does
             // — via the single Room writer.
@@ -346,12 +346,12 @@ class DocumentIndexer private constructor(private val context: Context) {
         startMs: Long,
         prof: DocProfileRecorder?,
     ): IndexResult {
-        val descriptor = contentExtractor.descriptorFor(mimeType)
+        val itemType = contentExtractor.itemTypeFor(mimeType)
             ?: return IndexResult.Failure(fileName, IndexError.UnsupportedFormat(mimeType))
         val targetId = baseId ?: UUID.randomUUID().toString()
-        prof?.fileType = descriptor.itemType.stored
+        prof?.fileType = itemType.stored
         val document = VaultDocument(
-            id = targetId, uri = uriKey, name = fileName, itemType = descriptor.itemType,
+            id = targetId, uri = uriKey, name = fileName, itemType = itemType,
             contentHash = sourceFingerprint, pageCount = null, chunkCount = 0,
             addedAt = System.currentTimeMillis(),
         )
@@ -363,8 +363,9 @@ class DocumentIndexer private constructor(private val context: Context) {
         progress?.emit(IndexProgress(fileName, IndexProgress.Phase.EXTRACTING))
         var committed = 0
         val onBatch: suspend (List<PagedChunk>) -> Unit = { pageChunks ->
-            // The size of the document is unknown while streaming: totalChunks stays 0.
-            val rows = pageChunks.map { chunkRow(document, it, descriptor.tag, totalChunks = 0) }
+            // The size of the document is unknown while streaming: totalChunks stays 0. A batch
+            // is one page of a PDF, and the page is what its pieces are tagged by.
+            val rows = com.amar.vault.indexing.DocumentRows.of(document, pageChunks, totalChunks = 0)
             // Commit this page: Room rows (→ FTS searchable) then BM25 (→ lexical searchable).
             persister.appendDocumentChunks(targetId, rows)
             bm25Updater.update(
@@ -427,30 +428,11 @@ class DocumentIndexer private constructor(private val context: Context) {
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // Chunk-row building helpers — Tags, Language, Utilities
-    // (Text extraction now lives in com.amar.vault.indexing.DocumentContentExtractor
-    //  and the per-format com.amar.vault.indexing.FormatExtractor registry.)
+    // Language, Utilities
+    // (Text extraction lives in com.amar.vault.indexing.DocumentContentExtractor and the
+    //  per-format com.amar.vault.indexing.FormatExtractor registry; the rows a document is
+    //  stored as, and their tags, in com.amar.vault.indexing.DocumentRows and AutoTags.)
     // ════════════════════════════════════════════════════════════════════════
-
-    object TagEngine {
-        private val CONTENT_RULES = listOf(
-            listOf("invoice", "bill", "receipt") to listOf("invoice", "billing", "receipt"),
-            listOf("contract", "agreement", "terms and conditions") to listOf("contract", "agreement", "legal"),
-            listOf("₹", "$", "€", "amount", "total", "subtotal", "payment") to listOf("financial", "payment", "monetary"),
-            listOf("resume", "curriculum vitae", "cv", "work experience") to listOf("resume", "cv", "career"),
-            listOf("confidential", "private", "restricted") to listOf("confidential", "sensitive"),
-            listOf("meeting", "minutes", "agenda", "attendees") to listOf("meeting", "minutes", "notes"),
-            listOf("report", "analysis", "findings", "summary") to listOf("report", "analysis"),
-            listOf("prescription", "diagnosis", "patient", "mg", "dosage") to listOf("medical", "health"),
-            listOf("marks", "grade", "semester", "exam", "cgpa", "gpa") to listOf("academic", "education"),
-            listOf("tax", "gst", "pan", "itr", "tds") to listOf("tax", "government"),
-        )
-        fun generate(text: String, familyTag: String): List<String> {
-            val lower = text.lowercase(); val tags = mutableListOf(familyTag)
-            for ((kw, et) in CONTENT_RULES) { if (kw.any { it in lower }) tags.addAll(et) }
-            return tags.distinct()
-        }
-    }
 
     object LanguageDetector {
         private data class Script(val code: String, val range: IntRange)
@@ -463,25 +445,6 @@ class DocumentIndexer private constructor(private val context: Context) {
             return if (dom.value >= text.length * 0.15) dom.key else "en"
         }
     }
-
-    /** The row for one piece of [document]. Its tags are worked out from its own text. */
-    private fun chunkRow(document: VaultDocument, piece: PagedChunk, familyTag: String, totalChunks: Int) = VaultItem(
-        id          = "${document.id}_chunk${piece.chunkIndex}",
-        uri         = document.uri,
-        ocrText     = piece.text,
-        lang        = LanguageDetector.detect(piece.text),
-        itemType    = document.itemType,
-        pageNum     = piece.pdfPage ?: piece.chunkIndex,
-        sourceFile  = document.name,
-        timestamp   = System.currentTimeMillis(),
-        pHash       = 0L,
-        tags        = TagEngine.generate(piece.text, familyTag).joinToString(" "),
-        contentHash = document.contentHash,
-        // Explicit ownership (Task 2) — the id string is a key, not a schema.
-        parentDocumentId = document.id,
-        chunkIndex       = piece.chunkIndex,
-        totalChunks      = totalChunks,
-    )
 
     private fun resolveFileName(uri: Uri) = runCatching {
         context.contentResolver.query(uri, null, null, null, null)?.use { c ->

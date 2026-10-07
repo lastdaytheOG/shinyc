@@ -2,7 +2,6 @@ package com.amar.vault
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.net.Uri
 import com.amar.vault.indexing.IndexingProfiler
 import com.amar.vault.indexing.ProfilerStage
 import com.amar.vault.indexing.timedStage
@@ -117,36 +116,17 @@ class IndexingPipeline private constructor(private val context: Context) {
             return@withContext
         }
 
-        val smartTags = generateSmartTags(ocrText)
-
-        // Also append QR content as searchable text so "upi" or "paytm" finds it
-        val qrSearchText = qrPayloads.joinToString(" ") { payload ->
-            // Extract readable parts from UPI URLs for search
-            if (payload.startsWith("upi://")) {
-                val params = Uri.parse(payload)
-                listOfNotNull(
-                    params.getQueryParameter("pn"),  // payee name
-                    params.getQueryParameter("pa"),  // UPI ID
-                    "upi payment qr scanner"
-                ).joinToString(" ")
-            } else {
-                "$payload qr scanner barcode"
-            }
-        }
-
-        val combinedText = if (ocrText.isNotBlank() && qrSearchText.isNotBlank()) {
-            "$ocrText\n$qrSearchText"
-        } else if (qrSearchText.isNotBlank()) {
-            qrSearchText
-        } else {
-            ocrText
-        }
+        // What a code on the picture says is part of what was read off it: a payee's name, a
+        // web address. It is the last line of the text, in words and nothing added to them.
+        val codeText = com.amar.vault.indexing.QrText.readable(qrPayloads)
+        val combinedText = listOf(ocrText, codeText).filter { it.isNotBlank() }.joinToString("\n")
 
         // What was read is the text; the tags and what the QR codes hold each have their own
         // column, so nothing that reads the text has to cut them off it again.
         val item = shellItem.copy(
             ocrText = combinedText,
-            tags = smartTags,
+            // From the text as it is stored, so that tagging it again later gives the same.
+            tags = com.amar.vault.indexing.AutoTags.of(combinedText, shellItem.itemType, qrPayloads),
             qrPayload = QrPayloads.join(qrPayloads),
             lang = detectLang(ocrText),
             pHash = hash,
@@ -206,21 +186,6 @@ class IndexingPipeline private constructor(private val context: Context) {
         IndexMetrics.recordDuration(IndexMetrics.Timing.INDEX_TOTAL, totalMs)
         prof?.let { IndexingProfiler.publish(it.build(totalMs, "success:searchable")) }
         VaultLog.v("IndexTiming", "Total: ${totalMs}ms | vector deferred")
-    }
-
-    private fun generateSmartTags(ocrText: String): String {
-        val tags      = mutableListOf<String>()
-        val textLower = ocrText.lowercase()
-        val wordCount = ocrText.trim().split("\\s+".toRegex()).size
-        val hasUrl    = textLower.contains("http") || textLower.contains("www.") || textLower.contains("upi://")
-        if (wordCount <= 3 && hasUrl) tags.add("qr code scanner barcode")
-        val hasAmount = textLower.contains("₹") || textLower.contains("rs") || textLower.contains("total") || textLower.contains("amount")
-        if (hasAmount) tags.add("receipt payment bill invoice")
-        val hasOtp = textLower.contains("otp") || textLower.contains("one time")
-        if (hasOtp) tags.add("otp verification code")
-        val hasPhone = Regex("[6-9]\\d{9}").containsMatchIn(ocrText)
-        if (hasPhone) tags.add("contact phone number call")
-        return tags.joinToString(" ")
     }
 
     private fun detectLang(text: String): String {
