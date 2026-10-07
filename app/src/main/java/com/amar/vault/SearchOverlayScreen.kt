@@ -252,7 +252,7 @@ fun SearchOverlayScreen(
                 ) {
                     items(mappedResults, key = { it.row.stashId }) { hit ->
                         val item = hit.row
-                        val isImage = remember(item) { SearchFilter.isImage(item.itemType, item.mimeType, item.uri) }
+                        val isImage = item.itemType.isImage
                         val isDocument = remember(item) {
                             !isImage && (ContentSpecies.classify(item) == ContentSpecies.PDF ||
                                 ContentSpecies.isOfficeDocument(item.itemType, item.mimeType, item.uri))

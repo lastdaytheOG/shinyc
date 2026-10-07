@@ -19,9 +19,10 @@ class SearchFilterTest {
     // read as what that name meant.
     private val cameraPhoto = item(ItemType.fromFormer("camera"), uri = "content://media/external/images/media/41")
     private val whatsAppPicture = item(ItemType.fromFormer("whatsapp"), uri = "content://media/external/images/media/42")
-    // A picture stored as something else is told by where it is kept.
-    private val pictureOfAnUnlistedType = item(ItemType.FILE, uri = "content://media/external/images/media/43")
-    private val pictureFile = item(ItemType.FILE, uri = "/storage/emulated/0/DCIM/IMG_0001.HEIC")
+    // A picture that reached the vault under some other name is stored as the picture it is:
+    // where it is kept says so when it is stored, and the chip goes by its type alone.
+    private val pictureOfAnUnlistedType = "content://media/external/images/media/43".let { item(ItemType.fromFormer("telegram", uri = it), uri = it) }
+    private val pictureFile = "/storage/emulated/0/DCIM/IMG_0001.HEIC".let { item(ItemType.fromFormer("DOCUMENT", uri = it), uri = it) }
     private val linkToAPicture = item(ItemType.LINK, uri = "https://example.org/poster.png")
     private val pdfPage = item(ItemType.PDF, text = "fine of ₹ 50000 and the distance travelled", parent = "doc")
     private val sharedPdf = item(ItemType.PDF, uri = "/data/user/0/app/files/shared_imports/a.pdf", mime = "application/pdf")

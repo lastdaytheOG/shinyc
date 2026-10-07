@@ -125,3 +125,8 @@ __pycache__/
 # Copies of real vault databases used to try upgrades and compare search (local only)
 # ==============================
 tools/db-fixtures/
+
+# ==============================
+# Phone screenshots and what they say, used to measure text reading (local only)
+# ==============================
+tools/phone-screenshots/

@@ -50,12 +50,9 @@ enum class ItemType(val stored: String) {
          * named after its site.
          */
         private val FORMER_NAMES: Map<String, ItemType> = mapOf(
-            "camera" to PHOTO, "whatsapp" to PHOTO, "dev_manual" to PHOTO, "image" to PHOTO,
+            "camera" to PHOTO, "whatsapp" to PHOTO, "dev_manual" to PHOTO,
             "youtube" to LINK, "reddit" to LINK, "article" to LINK,
         )
-
-        /** How a screenshot's file is told: its name says so. */
-        private fun isNamedScreenshot(sourceFile: String) = sourceFile.contains("screenshot", ignoreCase = true)
 
         /**
          * The type of an item stored under a former name: one of today's names in either case
@@ -70,7 +67,8 @@ enum class ItemType(val stored: String) {
             name: String, mimeType: String? = null, uri: String = "", sourceFile: String = "",
         ): ItemType {
             val lowered = name.trim().lowercase()
-            if (lowered == "image" && isNamedScreenshot(sourceFile)) return SCREENSHOT
+            // A shared picture was an "IMAGE" whether or not it was a screenshot.
+            if (lowered == "image") return PictureKind.of(sourceFile)
             BY_STORED[lowered]?.let { return it }
             FORMER_NAMES[lowered]?.let { return it }
 
@@ -83,8 +81,7 @@ enum class ItemType(val stored: String) {
                 "wordprocessingml" in mime || named(".docx") -> WORD
                 "spreadsheetml" in mime || named(".xlsx") -> EXCEL
                 "epub" in mime || named(".epub") -> EPUB
-                mime.startsWith("image/") || (where.startsWith("content://media/") && "/images/" in where) ->
-                    if (isNamedScreenshot(sourceFile)) SCREENSHOT else PHOTO
+                PictureKind.isPicture(mimeType, uri, sourceFile) -> PictureKind.of(sourceFile)
                 mime.startsWith("video/") -> VIDEO
                 mime.startsWith("audio/") -> AUDIO
                 where.startsWith("http://") || where.startsWith("https://") -> LINK

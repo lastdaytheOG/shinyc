@@ -113,7 +113,7 @@ class BulkScanWorker @dagger.assisted.AssistedInject constructor(
                             val bitmap = BitmapFactory.decodeStream(stream)
                             stream.close()
                             if (bitmap != null) {
-                                pipeline.indexBitmap(bitmap, photoUri.toString(), ItemType.PHOTO)
+                                pipeline.indexBitmap(bitmap, photoUri.toString())
                                 bitmap.recycle()
                                 indexed++
                             } else {

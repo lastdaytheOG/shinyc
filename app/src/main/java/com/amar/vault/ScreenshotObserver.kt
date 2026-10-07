@@ -18,7 +18,6 @@ import java.util.concurrent.PriorityBlockingQueue
 data class IndexJob(
     val uri: Uri,
     val timestamp: Long,
-    val isRealtime: Boolean
 )
 
 class ScreenshotObserver(
@@ -75,14 +74,7 @@ class ScreenshotObserver(
 
             delay(writeDelay)
 
-            val isScreenshot = isScreenshotUri(context, uri)
-            priorityQueue.offer(
-                IndexJob(
-                    uri        = uri,
-                    timestamp  = System.currentTimeMillis(),
-                    isRealtime = isScreenshot
-                )
-            )
+            priorityQueue.offer(IndexJob(uri = uri, timestamp = System.currentTimeMillis()))
             drainQueue()
         }
     }
@@ -104,11 +96,8 @@ class ScreenshotObserver(
                     if (bmp != null) {
                         // ELITE FIX: Removed redundant pHash calculation.
                         // We now let IndexingPipeline handle hashing entirely!
-                        IndexingPipeline.getInstance(context).indexBitmap(
-                            bmp,
-                            job.uri.toString(),
-                            if (job.isRealtime) ItemType.SCREENSHOT else ItemType.PHOTO
-                        )
+                        // Whether it is a screenshot or a photo is the pipeline's to say (PictureKind).
+                        IndexingPipeline.getInstance(context).indexBitmap(bmp, job.uri.toString())
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
@@ -126,47 +115,5 @@ class ScreenshotObserver(
                 drainQueue()
             }
         }
-    }
-
-    private fun isScreenshotUri(context: Context, uri: Uri): Boolean {
-        return try {
-            val projection = arrayOf(
-                MediaStore.Images.Media.RELATIVE_PATH,
-                MediaStore.Images.Media.DISPLAY_NAME
-            )
-            val cursor = context.contentResolver.query(
-                uri, projection, null, null, null
-            )
-            cursor?.use {
-                if (it.moveToFirst()) {
-                    val path = it.getString(
-                        it.getColumnIndexOrThrow(MediaStore.Images.Media.RELATIVE_PATH)
-                    )?.lowercase() ?: ""
-                    val name = it.getString(
-                        it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
-                    )?.lowercase() ?: ""
-                    isScreenshotPath(path) || isScreenshotName(name)
-                } else false
-            } ?: false
-        } catch (e: Exception) { false }
-    }
-
-    private fun isScreenshotPath(path: String): Boolean =
-        SCREENSHOT_PATHS.any { path.contains(it, ignoreCase = true) }
-
-    private fun isScreenshotName(name: String): Boolean =
-        SCREENSHOT_NAME_PATTERNS.any { name.contains(it, ignoreCase = true) }
-
-    companion object {
-        private val SCREENSHOT_PATHS = listOf(
-            "pictures/screenshots",
-            "dcim/screenshots",
-            "screenshots",
-        )
-        private val SCREENSHOT_NAME_PATTERNS = listOf(
-            "screenshot",
-            "screen_shot",
-            "screen-shot",
-        )
     }
 }

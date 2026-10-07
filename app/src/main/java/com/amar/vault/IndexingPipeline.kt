@@ -32,6 +32,8 @@ class IndexingPipeline private constructor(private val context: Context) {
 
     // Phase 2B stages (pure/stateless helpers held as fields; each independently testable).
     private val imageContentExtractor = com.amar.vault.indexing.ImageContentExtractor(context)
+    private val pictureLocator = com.amar.vault.indexing.PictureLocator(context)
+    private val beingRead = com.amar.vault.indexing.BeingRead()
     private val duplicateDetector = com.amar.vault.indexing.DuplicateDetector(dao)
     private val metadataStage = com.amar.vault.indexing.MetadataStage()
     private val chunker: com.amar.vault.indexing.Chunker = com.amar.vault.indexing.WordWindowChunker()
@@ -48,17 +50,31 @@ class IndexingPipeline private constructor(private val context: Context) {
     suspend fun indexBitmap(
         bitmap: Bitmap,
         uri: String,
-        itemType: ItemType = ItemType.SCREENSHOT,
         baseId: String? = null
-    ) = withContext(Dispatchers.Default) {
+    ) {
+        // Two watchers report a new picture at the same moment: it is read once (BeingRead).
+        val read = beingRead.once(baseId ?: uri) { readAndStore(bitmap, uri, baseId) }
+        if (!read) IndexMetrics.increment(IndexMetrics.Event.INDEX_SKIPPED_DUP)
+    }
+
+    private suspend fun readAndStore(
+        bitmap: Bitmap,
+        uri: String,
+        baseId: String?
+    ): Unit = withContext(Dispatchers.Default) {
 
         val t0 = System.currentTimeMillis()
+
+        val duplicateTarget = baseId?.let { dao.getByIds(listOf(it)).firstOrNull() }
+
+        // Whether it is a screenshot or a photo is decided here, for every caller, by its file
+        // and folder (PictureKind). A row already stored as a picture keeps what it is.
+        val itemType = duplicateTarget?.itemType?.takeIf { it.isImage }
+            ?: PictureKind.of(pictureLocator.facts(uri, knownName = duplicateTarget?.sourceFile.orEmpty()))
 
         // Shadow-only planner observation. Disabled by default and intentionally before no
         // existing decision; it cannot alter dedup, OCR, persistence, or vector behaviour.
         PlannerShadowRegistry.observeImage(uri, itemType.stored, bitmap.width, bitmap.height)
-
-        val duplicateTarget = baseId?.let { dao.getByIds(listOf(it)).firstOrNull() }
 
         // Image dedup = perceptual hash; the pHash is also stored on the item below.
         val (hash, isDuplicate) = duplicateDetector.imageVerdict(bitmap)
@@ -144,7 +160,7 @@ class IndexingPipeline private constructor(private val context: Context) {
         }
         // ── Extract metadata + classification (pure computation — no DB writes yet) ──
         val metaStartTime = System.currentTimeMillis()
-        val (metadataList, reviewItemsList) = metadataStage.extract(targetId, ocrText, itemType)
+        val (metadataList, reviewItemsList) = metadataStage.extract(targetId, ocrText, item.itemType)
         val metaTime = System.currentTimeMillis() - metaStartTime
         IndexMetrics.recordDuration(IndexMetrics.Timing.META_EXTRACT, metaTime)
         prof?.stageMs(ProfilerStage.META, metaTime)
