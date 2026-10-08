@@ -219,21 +219,37 @@ object AcronymDictionary {
     fun expansionOf(acronym: String): String? = MAP[acronym.trim().uppercase()]
 
     /** Result of the single token scan: the trimmed query and its per-token expansions. */
-    private class Scan(val trimmed: String, val expansions: List<String>)
+    private class Scan(val trimmed: String, val expansions: List<String>, val tokens: List<String>)
 
     /**
      * The one and only place acronym expansion is computed. Both [expand] and [analyze]
      * delegate here, so there is exactly one scan of the query against the dictionary.
      */
-    private fun scan(query: String): Scan {
+    private fun scan(query: String, plain: Set<String> = emptySet()): Scan {
         val trimmed = query.trim()
-        if (trimmed.isEmpty()) return Scan(trimmed, emptyList())
+        if (trimmed.isEmpty()) return Scan(trimmed, emptyList(), emptyList())
         val expansions = ArrayList<String>()
+        val tokens = ArrayList<String>()
         for (token in trimmed.split(WHITESPACE)) {
-            MAP[token.uppercase()]?.let { expansions.add(it) }
+            if (token.lowercase() in plain) continue
+            MAP[token.uppercase()]?.let { expansions.add(it); tokens.add(token) }
         }
-        return Scan(trimmed, expansions)
+        return Scan(trimmed, expansions, tokens)
     }
+
+    /**
+     * The abbreviations in [query] and what each is taken to stand for, as readings to show:
+     * "OTP = one time password". [asWords] are the keys of readings the user has taken back.
+     */
+    fun understoodIn(query: String, asWords: Set<String> = emptySet()): List<Understood> =
+        scan(query, plainOf(asWords)).let { s ->
+            s.tokens.zip(s.expansions).distinctBy { it.first.lowercase() }.map { (token, meaning) ->
+                Understood(Understood.Kind.MEANING, token, "${token.uppercase()} = ${meaning.lowercase()}")
+            }
+        }
+
+    /** The abbreviations to leave as they are, from the keys of readings taken back. */
+    fun plainOf(asWords: Set<String>): Set<String> = Understood.wordsOf(asWords, Understood.Kind.MEANING)
 
     /**
      * Structured expansion — the Sprint 4B.1 entry point retrieval uses. Produces an
@@ -241,8 +257,8 @@ object AcronymDictionary {
      * Sprint 4B `expand()` string, and whose [ExpandedQuery.gateTerms] reproduce the old
      * gate word set. Expansion happens once (a single [scan]).
      */
-    fun analyze(query: String): ExpandedQuery {
-        val s = scan(query)
+    fun analyze(query: String, plain: Set<String> = emptySet()): ExpandedQuery {
+        val s = scan(query, plain)
         val hasAcronym = s.expansions.isNotEmpty()
         // First term reproduces expand()'s leading phrase exactly: the trimmed query when
         // an acronym is present, else the original string verbatim (the 4B no-op path).
@@ -257,6 +273,8 @@ object AcronymDictionary {
             expandedTerms = terms,
             gateTerms = gate,
             containsKnownAcronym = hasAcronym,
+            meanings = s.expansions.map { it.lowercase() },
+            abbreviations = s.tokens,
         )
     }
 

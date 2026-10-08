@@ -46,7 +46,12 @@ data class QueryPlan(
     val strict: List<MetadataConstraint>,
     val preferred: List<MetadataConstraint>,
     val sortIntent: SortOrder? = null,
-    val limit: Int? = null
+    val limit: Int? = null,
+    /**
+     * Everything read into the query that is more than a word to look for — the period, the
+     * order, the amount — for the screen to show and the user to take back.
+     */
+    val understood: List<Understood> = emptyList(),
 )
 
 object QueryPlanner {
@@ -56,16 +61,21 @@ object QueryPlanner {
      *
      * [forResultList]: the text was typed into the search box, not asked as a question — see
      * [TemporalParser.parse] for what that changes.
+     *
+     * [asWords]: the keys of readings ([Understood.key]) the user has taken back; the words
+     * they were read from are left in the query as plain words.
      */
-    fun parse(query: String, forResultList: Boolean = false): QueryPlan {
+    fun parse(query: String, forResultList: Boolean = false, asWords: Set<String> = emptySet()): QueryPlan {
         var q = query.trim()
         val strict = mutableListOf<MetadataConstraint>()
         val preferred = mutableListOf<MetadataConstraint>()
+        val understood = mutableListOf<Understood>()
 
         // 1. Temporal Parsing (STRICT)
-        val temporalResult = TemporalParser.parse(q, wordsFirst = forResultList)
+        val temporalResult = TemporalParser.parse(q, wordsFirst = forResultList, asWords = asWords)
         if (temporalResult.confidence >= 0.5f) {
             q = temporalResult.cleanedQuery
+            understood += temporalResult.readings
             val intent = temporalResult.intent
             val timeRange = intent?.timeRange
             if (timeRange != null) {
@@ -86,6 +96,7 @@ object QueryPlanner {
         // 2. Amount Parsing (STRICT)
         val amountRegex = Regex("(above|greater than|>)\\s*(?:₹|rs\\.?|inr)?\\s*([\\d,]+(?:\\.\\d{2})?)", RegexOption.IGNORE_CASE)
         val amountMatch = amountRegex.find(q)
+            ?.takeIf { Understood.key(Understood.Kind.AMOUNT, it.value) !in asWords }
         if (amountMatch != null) {
             val amountStr = amountMatch.groupValues[2].replace(",", "")
             val amount = amountStr.toDoubleOrNull()
@@ -97,6 +108,7 @@ object QueryPlanner {
                         operator = ConstraintOperator.GREATER_THAN
                     )
                 )
+                understood += Understood(Understood.Kind.AMOUNT, amountMatch.value.trim(), "Over ₹$amountStr")
                 q = q.replace(amountMatch.value, "").trim()
             }
         }
@@ -155,7 +167,8 @@ object QueryPlanner {
             strict = strict,
             preferred = preferred,
             sortIntent = if (temporalResult.confidence >= 0.5f) temporalResult.intent?.sort else null,
-            limit = if (temporalResult.confidence >= 0.5f) temporalResult.intent?.limit else null
+            limit = if (temporalResult.confidence >= 0.5f) temporalResult.intent?.limit else null,
+            understood = understood,
         )
     }
 }

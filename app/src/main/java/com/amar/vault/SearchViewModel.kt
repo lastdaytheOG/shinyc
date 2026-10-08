@@ -426,6 +426,35 @@ class SearchViewModel @Inject constructor(
     private val refreshRequests = MutableStateFlow(0)
 
     /**
+     * What was read into the query in the box beyond words to look for — a period, an order,
+     * a filter, what an abbreviation stands for — for the screen to show, each with a way to
+     * take it back ([takeBack]).
+     */
+    val understood = MutableStateFlow<List<Understood>>(emptyList())
+
+    /**
+     * Said above the list when it is not what the query's reading asked for: the period left
+     * nothing and the words were searched instead, or a filter hides every result.
+     */
+    val readingNote = MutableStateFlow<String?>(null)
+
+    /** The keys of the readings the user has taken back for the query in the box. */
+    private val readAsWords = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * Takes one reading back. A filter that was written out (`type:pdf`) is taken out of the
+     * box, there being nothing else it could mean; any other reading leaves the box as it is
+     * and has its words looked for as words.
+     */
+    fun takeBack(reading: Understood) {
+        if (reading.kind == Understood.Kind.FILTER) {
+            updateQuery(query.value.replace(reading.typedAs, " ").replace(Regex("\\s+"), " ").trim())
+        } else {
+            readAsWords.update { it + reading.key }
+        }
+    }
+
+    /**
      * Runs the query in the box again. The search screen calls this when it opens: the box keeps
      * its text between visits, and without this the list stayed as it was before whatever was
      * imported in between — "I indexed it, searched again, and it still isn't there".
@@ -434,12 +463,13 @@ class SearchViewModel @Inject constructor(
 
     /** The result list with, for each document, the page and words the query was found on. */
     @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
-    val searchHits: StateFlow<List<SearchHit>> = combine(query, activeFilter, refreshRequests) { q, filter, refresh ->
-        Triple(q, filter, refresh)
+    val searchHits: StateFlow<List<SearchHit>> = combine(query, activeFilter, refreshRequests, readAsWords) { q, filter, refresh, asWords ->
+        Triple(q, filter, refresh to asWords)
     }
         .debounce(250)
         .distinctUntilChanged()
-        .transformLatest { (q, chip, _) ->
+        .transformLatest { (q, chip, more) ->
+            val asWords = more.second
             // Update suggestions whenever query changes (if we wanted to do it instantly, we could put this in an onEach before debounce, but this is fine)
             if (q.isBlank()) {
                 recentSearches.value = com.amar.vault.search.core.HistoryManager.getRecentSearches()
@@ -454,10 +484,13 @@ class SearchViewModel @Inject constructor(
 
             if (effectiveQuery.isBlank() && !ops.hasAny) {
                 isSearchLoading.value = false
+                understood.value = emptyList()
+                readingNote.value = null
                 emit(emptyList())
                 return@transformLatest
             }
             isSearchLoading.value = true
+            readingNote.value = null
             // True once any result list for this query is on screen — a later-stage failure must
             // not wipe results the user is already looking at.
             var painted = false
@@ -476,16 +509,27 @@ class SearchViewModel @Inject constructor(
                 // returned nothing and saved-row reuse silently degraded to synthetic wrappers.
                 val savedByVaultId = db.stashItemDao().getStashItemsByType("SAVED").first()
                     .associateBy { it.vaultItemId }
-                val queryWords = queryWordsOf(effectiveQuery)
+                val request = com.amar.vault.retrieval.RetrievalRequest.forResultList(effectiveQuery, asWords)
+                val meanings = AcronymDictionary.understoodIn(request.query, asWords)
+                val read = request.plan?.understood.orEmpty()
+                understood.value = ops.understood + read + meanings
+                // A card shows the words it is listed for: the typed ones, and what an
+                // abbreviation stands for when that is what the page says.
+                val queryWords = queryWordsOf(effectiveQuery) +
+                    AcronymDictionary.analyze(request.query, request.plainAbbreviations).meanings
                 // The chip is asked inside the engine, before its caps: filtered afterwards, a
                 // vault with more documents than the list is long would show no images at all.
                 val only: ((VaultItem) -> Boolean)? = if (chip == SearchFilter.ALL) null else { item ->
                     SearchFilter.accepts(chip, item, savedByVaultId[item.id] ?: item.parentDocumentId?.let(savedByVaultId::get))
                 }
                 // Operators refine (narrow) the ranked results — never re-rank or bypass.
+                // How many results the filters written into the query hide, when they hide all.
+                var hiddenByFilters = 0
                 suspend fun toRows(items: List<VaultItem>): List<SearchHit> {
                     val base = items.map { vi -> savedByVaultId[vi.id] ?: vi.toStashWrapper() }
                     val kept = if (ops.hasAny) applyOperators(base, ops) else base
+                    hiddenByFilters = if (kept.isEmpty() && base.isNotEmpty())
+                        oneCardPerDocument(base, items, savedByVaultId, queryWords).size else 0
                     return oneCardPerDocument(kept, items, savedByVaultId, queryWords)
                 }
                 if (effectiveQuery.isBlank()) {
@@ -500,14 +544,23 @@ class SearchViewModel @Inject constructor(
                     // Progressive retrieval: keyword hits paint as soon as the native BM25 lane
                     // returns; the substring/fuzzy and semantic stages then replace the list in
                     // place. The FINAL stage is the same ranking retrieve() returns.
-                    retrievalService.retrieveProgressive(
-                        com.amar.vault.retrieval.RetrievalRequest.forResultList(effectiveQuery, only)
-                    ).collect { update ->
+                    retrievalService.retrieveProgressive(request.copy(only = only)).collect { update ->
                         val rows = toRows(update.result.items)
                         val isFinal = update.stage == com.amar.vault.retrieval.RetrievalStage.FINAL
                         // An early stage that the operators narrow to nothing is not "no results"
                         // yet — keep the skeleton until a later stage or FINAL decides.
                         if (rows.isEmpty() && !isFinal) return@collect
+                        if (isFinal) {
+                            // A period or an amount that left nothing is no longer in force:
+                            // its chip goes, and the screen says what is shown instead.
+                            val dropped = if (update.result.filterDropped) read.filter { it.narrows } else emptyList()
+                            understood.value = ops.understood + (read - dropped.toSet()) + meanings
+                            readingNote.value = when {
+                                dropped.isNotEmpty() -> ReadingWords.droppedBecauseEmpty(dropped)
+                                hiddenByFilters > 0 -> ReadingWords.hiddenByFilters(hiddenByFilters, ops.understood)
+                                else -> null
+                            }
+                        }
                         similarSpellingsOnly.value = update.result.similarSpellingsOnly
                         emit(rows)
                         painted = true
@@ -815,7 +868,17 @@ class SearchViewModel @Inject constructor(
             try {
                 // 2. Classify and route query, then retrieve context
                 val routed = QueryRouter.route(q)
-                val plan = QueryPlanner.parse(routed.cleanedQuery)
+                // The question is read once, here, and the reading is kept. It used to be read
+                // by the router, which took the date and order words out, and then again from
+                // what was left — where there was no date or order to find. "Bills from last
+                // month" was answered from a search for "bills from", over every month.
+                //
+                // An order word the vault says as part of a phrase ("last working day") is
+                // one of the words asked about, not an order.
+                val asWords = OrderWordsInPhrases.asWords(q) { phrase ->
+                    runCatching { db.vaultDao().anyTextMatches("\"$phrase*\"") }.getOrDefault(false)
+                }
+                val plan = QueryPlanner.parse(q, asWords = asWords)
                 // Page-level hits: the answer's source passages are the best pages, which may
                 // well be several pages of one document.
                 val searchResults = retrievalService.retrieve(
@@ -824,6 +887,9 @@ class SearchViewModel @Inject constructor(
                         tuning = com.amar.vault.retrieval.RetrievalTuning(onePerDocument = false),
                     )
                 ).items
+                // Nothing in the period asked about: say that, and what was read as the period.
+                // An answer is not made up from other months, nor by the model from nothing.
+                val nothingInPeriod = if (searchResults.isEmpty()) ReadingWords.nothingInPeriod(plan.understood) else null
                 val sources = searchResults.take(3)
 
                 // 3. Resolve cards if applicable
@@ -845,7 +911,7 @@ class SearchViewModel @Inject constructor(
                 }
 
                 // 4. Invoke appropriate engine based on QueryRouter classification tier
-                val finalAnswer = when (routed.tier) {
+                val answered = if (nothingInPeriod != null) nothingInPeriod else when (routed.tier) {
                     QueryRouter.QueryTier.TIER0_REGEX -> {
                         val answer = buildFallbackAnswer(q, searchResults)
                         "⚡ $answer"
@@ -869,6 +935,11 @@ class SearchViewModel @Inject constructor(
                         }
                     }
                 }
+
+                // What was read into the question is said with the answer, with the way to
+                // have the words taken as words instead.
+                val finalAnswer = if (nothingInPeriod != null) answered
+                else listOfNotNull(answered, ReadingWords.forAnAnswer(plan.understood)).joinToString("\n\n")
 
                 // Check degradation after potential generation
                 val activeModel = modelDao.getEnabledModel()
@@ -909,6 +980,9 @@ class SearchViewModel @Inject constructor(
 
     fun updateQuery(newQuery: String, plan: QueryPlan? = null) {
         queryPlan.value = plan
+        // A reading that was taken back stays taken back while its words are still in the box.
+        val lowered = newQuery.lowercase()
+        readAsWords.update { keys -> keys.filterTo(HashSet()) { lowered.contains(it.substringAfter(':')) } }
         query.value = newQuery 
     }
 

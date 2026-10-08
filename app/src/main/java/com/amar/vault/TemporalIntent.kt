@@ -5,7 +5,9 @@ data class TemporalParseResult(
     val intent: TemporalIntent?,
     val confidence: Float,
     /** The year and month words the range was read from ("2024", "march"), as typed. */
-    val calendarTerms: List<String> = emptyList()
+    val calendarTerms: List<String> = emptyList(),
+    /** Each period and order that was read, with the words it was read from, in the order found. */
+    val readings: List<Understood> = emptyList(),
 )
 
 data class TemporalIntent(

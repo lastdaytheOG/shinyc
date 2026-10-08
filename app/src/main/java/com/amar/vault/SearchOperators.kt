@@ -22,6 +22,8 @@ data class ParsedOperators(
     val category: String? = null,
     /** Human-readable chips for the UI, in the order parsed. */
     val chips: List<String> = emptyList(),
+    /** The same filters as readings the screen can show and the user can take out. */
+    val understood: List<Understood> = emptyList(),
 ) {
     val hasAny: Boolean
         get() = itemTypes.isNotEmpty() || after != null || before != null ||
@@ -54,11 +56,13 @@ object SearchOperators {
         var entity: String? = null
         var category: String? = null
         val chips = mutableListOf<String>()
+        val understood = mutableListOf<Understood>()
 
         var cleaned = raw
         for (m in OP_REGEX.findAll(raw)) {
             val key = m.groupValues[1].lowercase()
             val value = m.groupValues[2]
+            val chipsBefore = chips.size
             val recognized = when (key) {
                 "type", "ext" -> typeAliases[value.lowercase()]?.let { itemTypes.addAll(it); chips.add("$key:$value"); true } ?: false
                 "after" -> parseDateStart(value)?.let { after = it; chips.add("after:$value"); true } ?: false
@@ -70,6 +74,7 @@ object SearchOperators {
                 else -> false
             }
             if (recognized) cleaned = cleaned.replace(m.value, " ")
+            if (chips.size > chipsBefore) understood += Understood(Understood.Kind.FILTER, m.value, labelOf(key, value))
         }
 
         return ParsedOperators(
@@ -82,7 +87,28 @@ object SearchOperators {
             entity = entity,
             category = category,
             chips = chips,
+            understood = understood,
         )
+    }
+
+    /** What a filter means, in words: `type:pdf` is "PDFs only". */
+    private fun labelOf(key: String, value: String): String = when (key) {
+        "type", "ext" -> when (value.lowercase()) {
+            "pdf" -> "PDFs only"
+            "image", "img" -> "Pictures only"
+            "photo" -> "Photos only"
+            "screenshot" -> "Screenshots only"
+            "doc", "docx", "word" -> "Word files only"
+            "xls", "xlsx", "excel" -> "Excel files only"
+            "epub", "book" -> "Books only"
+            else -> "Text only"
+        }
+        "after" -> "After $value"
+        "before" -> "Before $value"
+        "has" -> "With text on it"
+        "source" -> "From $value"
+        "entity" -> "About $value"
+        else -> "In folder $value"
     }
 
     /** Parses yyyy / yyyy-MM / yyyy-MM-dd to the start-of-period epoch millis (null if unparseable). */

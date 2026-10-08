@@ -77,6 +77,8 @@ fun SearchOverlayScreen(
     val recentSearches by viewModel.recentSearches.collectAsState()
     val searchSuggestions by viewModel.searchSuggestions.collectAsState()
     val similarSpellingsOnly by viewModel.similarSpellingsOnly.collectAsState()
+    val understood by viewModel.understood.collectAsState()
+    val readingNote by viewModel.readingNote.collectAsState()
 
     // Detailed overlay for search results spatial continuity
     var activeDetailItem by remember { mutableStateOf<StashItemWithVaultItem?>(null) }
@@ -161,9 +163,9 @@ fun SearchOverlayScreen(
                 )
             }
 
-            // Advanced-search operator chips (parsed from the query — presentation only).
-            val parsedOps = remember(queryText) { SearchOperators.parse(queryText) }
-            if (parsedOps.hasAny) {
+            // What the app read into the query beyond words to look for. Each chip says the
+            // words it was read from and what they were read as; a tap takes that reading back.
+            if (understood.isNotEmpty() && queryText.isNotBlank()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -172,22 +174,35 @@ fun SearchOverlayScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    parsedOps.chips.forEach { chip ->
-                        Text(
-                            text = chip,
-                            fontSize = 12.sp,
-                            color = CharcoalSoft,
+                    understood.forEach { reading ->
+                        Row(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(CreamLight)
                                 .border(1.dp, CreamDark, RoundedCornerShape(12.dp))
-                                .padding(horizontal = 10.dp, vertical = 4.dp)
-                        )
-                    }
-                    TextButton(onClick = { viewModel.updateQuery(parsedOps.cleanedQuery) }) {
-                        Text("Clear filters", fontSize = 12.sp, color = WarmBrown)
+                                .clickable(onClickLabel = "Remove this reading") { viewModel.takeBack(reading) }
+                                .padding(start = 10.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(text = reading.chip, fontSize = 12.sp, color = CharcoalSoft)
+                            Icon(
+                                imageVector = Icons.Default.Clear,
+                                contentDescription = "Remove: ${reading.label}",
+                                tint = WarmBrown,
+                                modifier = Modifier.padding(start = 4.dp).size(14.dp)
+                            )
+                        }
                     }
                 }
+            }
+            readingNote?.takeIf { queryText.isNotBlank() }?.let { note ->
+                Text(
+                    text = note,
+                    color = WarmBrownDark,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                )
             }
 
             // Quick Filters

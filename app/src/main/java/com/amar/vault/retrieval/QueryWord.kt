@@ -8,19 +8,27 @@ package com.amar.vault.retrieval
  * Punctuation inside a word (`node.js`, `2026-27`) is part of the word and is left alone.
  * Expects the word in lower case, like the text it is compared with.
  */
-internal class QueryWord(val typed: String) {
+internal class QueryWord private constructor(val typed: String, private val phrase: Regex?) {
+
+    constructor(typed: String) : this(typed, null)
 
     /** [typed] without the punctuation at its ends; [typed] itself when that leaves no word. */
-    val bare: String = typed.replace(EDGE_PUNCTUATION, "").takeIf { it.length >= 2 } ?: typed
+    val bare: String = if (phrase != null) typed
+    else typed.replace(EDGE_PUNCTUATION, "").takeIf { it.length >= 2 } ?: typed
 
     private val hasBare = bare != typed
+    /** The first word of a phrase: a text without it cannot have the phrase. */
+    private val firstOfPhrase = if (phrase != null) typed.substringBefore(' ') else ""
 
     fun isIn(loweredText: String): Boolean =
-        loweredText.contains(typed) || (hasBare && loweredText.contains(bare))
+        if (phrase != null) loweredText.contains(firstOfPhrase) && phrase.containsMatchIn(loweredText)
+        else loweredText.contains(typed) || (hasBare && loweredText.contains(bare))
 
     /** Whether it is in [loweredText] before position [end] — on the page, not among its tags. */
     fun isIn(loweredText: String, end: Int): Boolean =
-        endsBy(loweredText, typed, end) || (hasBare && endsBy(loweredText, bare, end))
+        if (phrase != null) {
+            loweredText.contains(firstOfPhrase) && (phrase.find(loweredText)?.let { it.range.last < end } ?: false)
+        } else endsBy(loweredText, typed, end) || (hasBare && endsBy(loweredText, bare, end))
 
     private fun endsBy(text: String, word: String, end: Int): Boolean {
         val at = text.indexOf(word)
@@ -31,6 +39,18 @@ internal class QueryWord(val typed: String) {
         // A combining mark is part of a word: most Devanagari words end in one.
         private val EDGE_PUNCTUATION = Regex("^[^\\p{L}\\p{M}\\p{N}]+|[^\\p{L}\\p{M}\\p{N}]+$")
         private val WHITESPACE = Regex("\\s+")
+
+        /**
+         * Several words that count only when they stand together, in this order: what an
+         * abbreviation stands for ("one time password"). Between them there may be a space, a
+         * line break or a hyphen ("one-time password"); nothing else. Taken a word at a time,
+         * such a meaning listed every page that says "one" or "time".
+         */
+        fun phrase(loweredPhrase: String): QueryWord {
+            val words = loweredPhrase.trim().split(WHITESPACE).filter { it.isNotEmpty() }
+            val pattern = words.joinToString("[\\s\\-]+") { Regex.escape(it) }
+            return QueryWord(words.joinToString(" "), Regex("(?<![\\p{L}\\p{M}\\p{N}])$pattern"))
+        }
 
         /** The words of [loweredQuery], in the order typed. */
         fun of(loweredQuery: String): List<QueryWord> =

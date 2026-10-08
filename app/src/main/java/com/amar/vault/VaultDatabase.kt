@@ -189,6 +189,13 @@ interface VaultDao {
     """)
     fun searchFts(query: String): Flow<List<VaultItem>>
 
+    /**
+     * Whether any stored text matches [match], a full-text expression: `"last work*"` asks for
+     * the word "last" followed directly by a word beginning "work".
+     */
+    @Query("SELECT EXISTS(SELECT 1 FROM vault_fts WHERE vault_fts MATCH :match)")
+    suspend fun anyTextMatches(match: String): Boolean
+
     @Query("SELECT * FROM vault_items WHERE id IN (:ids)")
     suspend fun getByIds(ids: List<String>): List<VaultItem>
     @Query("DELETE FROM vault_items")

@@ -83,9 +83,14 @@ class HybridSearchService(
         val result = execute(request, onStage)
         val plan = request.plan
         if (result.items.isNotEmpty() || !request.tuning.relaxEmptyFilter ||
-            plan == null || plan.strict.isEmpty() || request.query.isBlank()) return result
-        VaultLog.d("HybridSearch", "filter matched nothing — searching the text without it")
-        return execute(request.copy(plan = plan.copy(strict = emptyList())), onStage)
+            plan == null || plan.strict.isEmpty()) return result
+        // With the words the filter was read from put back: for "last month" typed on its own
+        // they are all there is to look for, and the list was simply empty.
+        val words = request.wordsIfFilterEmpty ?: request.query
+        if (words.isBlank()) return result
+        VaultLog.d("HybridSearch", "filter matched nothing — searching the words without it")
+        return execute(request.copy(query = words, plan = plan.copy(strict = emptyList())), onStage)
+            .copy(filterDropped = true)
     }
 
     /**
@@ -114,9 +119,12 @@ class HybridSearchService(
         // recognized acronym the expanded/joined forms equal the original, so normal/Hindi/
         // PDF/screenshot queries are unchanged (behaviour identical to Sprint 4B — this is a
         // representation change, not a behaviour change).
-        val expanded = com.amar.vault.AcronymDictionary.analyze(q)
+        val expanded = com.amar.vault.AcronymDictionary.analyze(q, request.plainAbbreviations)
         val expandedQuery = expanded.joined()                 // BM25 + semantic embed
-        val expandedLower = expandedQuery.lowercase().trim()  // substring + fuzzy lanes
+        val expandedLower = expandedQuery.lowercase().trim()  // typo help for every word (legacy)
+        // What an abbreviation stands for is looked for as a phrase. Its words one at a time
+        // listed, for "otp", every page that says "one" or "time", with nothing on its card.
+        val meanings = expanded.meanings.map(QueryWord::phrase)
         if (expanded.containsKnownAcronym) {
             VaultLog.d("HybridSearch",
                 "acronym-expand q='${VaultLog.redact(expanded.originalQuery)}' -> " +
@@ -130,7 +138,7 @@ class HybridSearchService(
         // is the phrase "last working days".
         val barePhrase = typedWords.joinToString(" ") { it.bare }
         // The parts of words typed with punctuation inside them ("node.js" is "node" and "js").
-        val bareWords = expanded.gateTerms.flatMap { it.split(NOT_A_WORD) }.filter { it.length >= 2 }.toSet()
+        val bareWords = typedWords.flatMap { it.typed.split(NOT_A_WORD) }.filter { it.length >= 2 }.toSet()
         val wordOrder = typedWords.flatMap { it.typed.split(NOT_A_WORD) }.filter { it.isNotEmpty() }
             .takeIf { tuning.wordOrderBonus && it.size >= 2 }?.let(::WordsInOrder)
 
@@ -226,7 +234,7 @@ class HybridSearchService(
         }
 
         val substringDeferred = async(Dispatchers.IO) {
-            substringLane(loweredBaseDeferred.await(), expandedLower, budget.substring, tuning.onePerDocument,
+            substringLane(loweredBaseDeferred.await(), qLower, meanings, budget.substring, tuning.onePerDocument,
                 tuning.pageWordsBeforeTags)
         }
         // A typed word that is in the vault as typed needs no typo help: its look-alikes are
@@ -258,7 +266,7 @@ class HybridSearchService(
         // What a row with none of the query's words in it may stay for (see [Gate]). The scan
         // decides which typed words are missing from the vault; until it has, the keyword
         // stage shows only rows that do have a query word, rather than flash look-alikes.
-        val gateWords = expanded.gateTerms.map(::QueryWord)
+        val gateWords = typedWords.distinctBy { it.typed } + meanings
         fun gate(missingWords: List<String>) = Gate(
             gateWords, barePhrase, bareWords, wordOrder, legacyTypoHelp, tuning.pageWordsBeforeTags,
             nearMissing = missingWords.filter { it.length >= 3 }.takeIf { it.isNotEmpty() }
@@ -525,10 +533,11 @@ class HybridSearchService(
      * ([firstPerDocumentByItsPage]).
      */
     private fun substringLane(
-        items: List<Candidate>, qLower: String, limit: Int, onePerDocument: Boolean, pageFirst: Boolean,
+        items: List<Candidate>, qLower: String, meanings: List<QueryWord>, limit: Int, onePerDocument: Boolean,
+        pageFirst: Boolean,
     ): SubstringScan {
         if (qLower.length < 2) return SubstringScan(emptyList(), emptySet())
-        val words = QueryWord.of(qLower)
+        val words = QueryWord.of(qLower) + meanings
         val found = BooleanArray(words.size)
         // Same result set and order as the previous filter → sortedByDescending → take:
         // any-word match to qualify, stable sort by match count descending, first [limit].
@@ -674,8 +683,8 @@ class HybridSearchService(
     /**
      * Decides whether a fused row is a result, and what it earns for how its words match.
      *
-     * [words] are the words a row is looked at for: the typed ones plus acronym expansions
-     * ([ExpandedQuery.gateTerms]; for a query with no acronym, exactly the typed words).
+     * [words] are what a row is looked at for: the typed words and, for an abbreviation, what
+     * it stands for as a phrase ([QueryWord.phrase]).
      * [barePhrase] and [bareWords] are the query without the punctuation typed onto and into
      * its words.
      *
