@@ -146,6 +146,49 @@ class DocumentRecordTest {
     }
 
     @Test
+    fun aDocumentCutShortIsCarriedOnAfterItsLastWholePage() = runBlocking {
+        // One piece to a page here: piece i is on page i + 1.
+        val scan = document("scan", "h1")
+        persister.beginDocument(scan)
+        persister.appendDocumentChunks("scan", pieces(scan, 0..1))
+        // Page 3 was written; the app was stopped before that was noted down.
+        persister.appendDocumentChunks("scan", pieces(scan, 2..2))
+
+        val (halfWritten, nextPiece) = persister.resumeDocument("scan", lastPageDone = 2)
+
+        assertEquals("page 3 will be read again, so what is stored of it goes", listOf("scan_chunk2"), halfWritten)
+        assertEquals("the next piece carries on the numbering", 2, nextPiece)
+        assertEquals(listOf("scan_chunk0", "scan_chunk1"), storedPieces("scan"))
+        assertEquals(2, db.vaultDocumentDao().getById("scan")!!.chunkCount)
+
+        // Carried on: pages 3 and 4 are appended, and nothing is there twice.
+        persister.appendDocumentChunks("scan", pieces(scan, 2..3))
+        assertEquals(listOf("scan_chunk0", "scan_chunk1", "scan_chunk2", "scan_chunk3"), storedPieces("scan"))
+        assertEquals(4, db.vaultDocumentDao().getById("scan")!!.chunkCount)
+    }
+
+    @Test
+    fun carryingOnADocumentWithNothingHalfWrittenRemovesNothing() = runBlocking {
+        val scan = document("scan", "h1")
+        persister.beginDocument(scan)
+        persister.appendDocumentChunks("scan", pieces(scan, 0..4))
+
+        assertEquals(emptyList<String>() to 5, persister.resumeDocument("scan", lastPageDone = 5))
+        assertEquals(5, storedPieces("scan").size)
+    }
+
+    @Test
+    fun startingADocumentAgainThrewAwayThePagesAlreadyRead() = runBlocking {
+        // The control for the two tests above: all there was before a reading could be carried on.
+        val scan = document("scan", "h1")
+        persister.beginDocument(scan)
+        persister.appendDocumentChunks("scan", pieces(scan, 0..4))
+
+        assertEquals(5, persister.beginDocument(scan).size)
+        assertEquals(emptyList<String>(), storedPieces("scan"))
+    }
+
+    @Test
     fun theSavedItemOfASharedDocumentIsNotOneOfItsPieces() = runBlocking {
         // The saved item has the document's id and its hash, and a Saved entry hangs off it.
         val saved = VaultItem(

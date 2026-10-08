@@ -98,6 +98,11 @@ class AmarApplication : Application(), Configuration.Provider {
             // 4d. Read the text of documents that were shared in before sharing indexed them.
             SavedDocumentRepairWorker.enqueue(applicationContext)
 
+            // 4e. Carry on reading documents whose reading was cut short when the app last
+            //     stopped. WorkManager starts its own work again; this covers what it lost.
+            runCatching { com.amar.vault.indexing.DocumentImportQueue.get(applicationContext).carryOn() }
+                .onFailure { VaultLog.e("AmarApp", "Unfinished documents were not picked up again", it) }
+
             // 5. Schedule nightly job
             NightlyIndexWorker.schedule(applicationContext)
 

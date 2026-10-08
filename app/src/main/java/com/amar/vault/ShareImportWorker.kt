@@ -15,7 +15,6 @@ class ShareImportWorker @dagger.assisted.AssistedInject constructor(
     @dagger.assisted.Assisted params: WorkerParameters,
     private val db: VaultDatabase,
     private val indexingPipeline: IndexingPipeline,
-    private val documentIndexer: DocumentIndexer,
     private val bm25: com.amar.vault.retrieval.Bm25Index,
 ) : CoroutineWorker(context, params) {
 
@@ -48,7 +47,6 @@ class ShareImportWorker @dagger.assisted.AssistedInject constructor(
                     val mime = attachment.mimeType.lowercase()
                     val uriStr = attachment.localPath ?: attachment.originalUri ?: ""
                     val localPath = attachment.localPath
-                    var documentFailure: IndexResult.Failure? = null
 
                     if (mime.startsWith("image/")) {
                         val file = File(attachment.localPath ?: "")
@@ -65,8 +63,12 @@ class ShareImportWorker @dagger.assisted.AssistedInject constructor(
                     } else if (attachment.attachmentType == "TEXT") {
                         bm25.addDocument(vaultItem.id, com.amar.vault.retrieval.KeywordText.of(vaultItem))
                     } else if (localPath != null) {
-                        // Null for a file that is not a document the indexer reads (video, audio, …).
-                        documentFailure = documentIndexer.indexSavedDocument(vaultItem, localPath) as? IndexResult.Failure
+                        // A document's text is read by the import queue, not here: this worker is
+                        // stopped after ten minutes, and a long scan read here was begun again
+                        // from its first page every time. Nothing is queued for a file that is
+                        // not a document the app reads (video, audio, …).
+                        com.amar.vault.indexing.DocumentImportQueue.get(applicationContext)
+                            .addShared(vaultItem, localPath)
                     }
                     // Videos, audio, general files skip heavy OCR/indexing for now, but are "COMPLETE"
 
@@ -78,9 +80,6 @@ class ShareImportWorker @dagger.assisted.AssistedInject constructor(
                             db.stashItemDao().updateThumbnailPath(stashItem.id, thumbPath)
                         }
                     }
-
-                    // Raised only now, so a document whose text could not be read keeps its thumbnail.
-                    documentFailure?.let { error("Text of ${it.fileName} was not indexed: ${it.error}") }
                 }
 
                 attachmentDao.updateStatus(attachment.id, AttachmentStatus.COMPLETE)

@@ -212,6 +212,26 @@ interface VaultDao {
     @Query("SELECT id FROM vault_items WHERE parentDocumentId = :documentId")
     suspend fun chunkIdsOfDocument(documentId: String): List<String>
 
+    /** The ids of the chunk rows [deleteChunksAfterPage] removes. */
+    @Query("SELECT id FROM vault_items WHERE parentDocumentId = :documentId AND pageNum > :page")
+    suspend fun chunkIdsAfterPage(documentId: String, page: Int): List<String>
+
+    /** Removes the pieces of this document that are on a page after [page]. */
+    @Query("DELETE FROM vault_items WHERE parentDocumentId = :documentId AND pageNum > :page")
+    suspend fun deleteChunksAfterPage(documentId: String, page: Int)
+
+    /** The index the document's next piece gets: one more than its last, 0 when it has none. */
+    @Query("SELECT COALESCE(MAX(chunkIndex) + 1, 0) FROM vault_items WHERE parentDocumentId = :documentId")
+    suspend fun nextChunkIndex(documentId: String): Int
+
+    /** How many pieces of this document are stored. */
+    @Query("SELECT COUNT(*) FROM vault_items WHERE parentDocumentId = :documentId")
+    suspend fun countChunksOfDocument(documentId: String): Int
+
+    /** Points every piece of a document at where its file is now. */
+    @Query("UPDATE vault_items SET uri = :uri WHERE parentDocumentId = :documentId")
+    suspend fun setUriOfDocumentChunks(documentId: String, uri: String)
+
     @Query("SELECT * FROM vault_items ORDER BY timestamp DESC")
     fun getAllItems(): Flow<List<VaultItem>>
 
@@ -298,6 +318,13 @@ interface VaultDocumentDao {
     @Query("UPDATE documents SET pageCount = :pageCount WHERE id = :id")
     suspend fun setPageCount(id: String, pageCount: Int)
 
+    /** The documents opened from this address. */
+    @Query("SELECT * FROM documents WHERE uri = :uri")
+    suspend fun getByUri(uri: String): List<VaultDocument>
+
+    @Query("UPDATE documents SET uri = :uri WHERE id = :id")
+    suspend fun setUri(id: String, uri: String)
+
     /** Counts the document's pieces again. */
     @Query("UPDATE documents SET chunkCount = (SELECT COUNT(*) FROM vault_items WHERE parentDocumentId = :id) WHERE id = :id")
     suspend fun refreshChunkCount(id: String)
@@ -366,9 +393,10 @@ interface VaultRelationshipDao {
         ChatMessageEntity::class,
         StashItem::class,
         IngestionSession::class,
-        IngestionAttachment::class
+        IngestionAttachment::class,
+        com.amar.vault.indexing.DocumentImport::class
     ], 
-    version = 14,
+    version = 15,
     exportSchema = true
 )
 @TypeConverters(ItemTypeConverter::class)
@@ -391,6 +419,7 @@ abstract class VaultDatabase : RoomDatabase() {
     abstract fun chatMessageDao(): ChatMessageDao
     abstract fun ingestionSessionDao(): IngestionSessionDao
     abstract fun ingestionAttachmentDao(): IngestionAttachmentDao
+    abstract fun documentImportDao(): com.amar.vault.indexing.DocumentImportDao
  
     companion object {
         @Volatile
@@ -563,14 +592,33 @@ abstract class VaultDatabase : RoomDatabase() {
         }
 
         /**
-         * Every step from version 6 to the current one, in order. [context] is where the last
-         * step leaves its account of what it changed ([MigrationReport]); a test that only
+         * Version 15 adds the list of files the vault was asked to read
+         * ([com.amar.vault.indexing.DocumentImport]). A new table and nothing else: no stored
+         * row is touched.
+         */
+        internal val MIGRATION_14_15 = object : androidx.room.migration.Migration(14, 15) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `document_imports` (`id` TEXT NOT NULL, `uri` TEXT NOT NULL, " +
+                        "`name` TEXT NOT NULL, `mimeType` TEXT NOT NULL, `origin` TEXT NOT NULL, `state` TEXT NOT NULL, " +
+                        "`fingerprint` TEXT, `pagesDone` INTEGER NOT NULL, `pageCount` INTEGER, `pieces` INTEGER NOT NULL, " +
+                        "`attempts` INTEGER NOT NULL, `pagesSkipped` INTEGER NOT NULL, `failure` TEXT, `failureDetail` TEXT, `addedAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`id`))"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_document_imports_state` ON `document_imports` (`state`)")
+            }
+        }
+
+        /**
+         * Every step from version 6 to the current one, in order. [context] is where the step to
+         * version 14 leaves its account of what it changed ([MigrationReport]); a test that only
          * wants the steps passes none.
          */
         internal fun migrations(context: Context? = null): Array<androidx.room.migration.Migration> = arrayOf(
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
             MIGRATION_11_12, MIGRATION_12_13,
             Migration13To14 { report -> context?.let { MigrationReport.save(it, report) } },
+            MIGRATION_14_15,
         )
 
         fun get(context: Context): VaultDatabase {

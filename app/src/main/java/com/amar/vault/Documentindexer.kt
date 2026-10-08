@@ -35,6 +35,24 @@ sealed interface IndexError {
     data class StorageFailed(val cause: Throwable) : IndexError
 }
 
+/**
+ * Where a reading stands, kept somewhere that outlives the process
+ * ([com.amar.vault.indexing.DocumentImport]). With it a document whose reading was cut short
+ * is carried on from the page it reached; without it every reading starts at the first page.
+ */
+interface ReadingLog {
+    /**
+     * The last page an earlier reading of the file with this fingerprint finished, with every
+     * page before it; 0 when there was none, or when it was of another file.
+     */
+    suspend fun pagesDone(fingerprint: String?): Int
+    /** Reading has begun, or begun again, after [pagesDone] pages with [pieces] pieces stored. */
+    suspend fun reading(fingerprint: String?, pagesDone: Int, pieces: Int)
+    suspend fun pageCount(pages: Int)
+    /** [page] and every page before it are stored; the document has [pieces] pieces so far. */
+    suspend fun pageDone(page: Int, pieces: Int)
+}
+
 data class IndexProgress(
     val fileName: String,
     val phase: Phase,
@@ -108,38 +126,16 @@ class DocumentIndexer private constructor(private val context: Context) {
      */
     suspend fun indexDocument(
         uri: Uri, mimeType: String, baseId: String? = null, displayName: String? = null,
-    ): IndexResult = indexDocumentWithProgress(uri, mimeType, baseId, displayName).first
+        log: ReadingLog? = null,
+    ): IndexResult = indexDocumentWithProgress(uri, mimeType, baseId, displayName, log).first
 
     suspend fun indexDocumentWithProgress(
         uri: Uri, mimeType: String, baseId: String? = null, displayName: String? = null,
+        log: ReadingLog? = null,
     ): Pair<IndexResult, Flow<IndexProgress>> {
         val flow = MutableSharedFlow<IndexProgress>(replay = 1, extraBufferCapacity = 64)
-        val result = withContext(Dispatchers.IO) { doIndex(uri, mimeType, flow, baseId, displayName) }
+        val result = withContext(Dispatchers.IO) { doIndex(uri, mimeType, flow, baseId, displayName, log) }
         return result to flow.asSharedFlow()
-    }
-
-    /**
-     * Indexes the text of a saved item's own file copy, as chunk rows that belong to that item.
-     * Returns null when the file is not a document this indexer reads.
-     *
-     * Capture stores that copy as a bare path, and this indexer opens its source through
-     * ContentResolver, which cannot open a path that carries no scheme. Handed the bare path,
-     * every shared document was marked complete with none of its text read.
-     */
-    suspend fun indexSavedDocument(item: VaultItem, localPath: String = item.uri): IndexResult? {
-        val name = item.sourceFile.ifBlank { item.title.orEmpty() }
-        val mimeType = resolveMimeType(item.mimeType, name) ?: return null
-        return indexDocument(Uri.fromFile(java.io.File(localPath)), mimeType, baseId = item.id, displayName = name)
-    }
-
-    fun indexBatch(
-        documents: List<Pair<Uri, String>>,
-        concurrency: Int = 3,
-    ): Flow<IndexResult> = channelFlow {
-        val sem = Semaphore(concurrency)
-        documents.forEach { (uri, mime) ->
-            launch(Dispatchers.IO) { sem.withPermit { send(doIndex(uri, mime)) } }
-        }
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -151,6 +147,7 @@ class DocumentIndexer private constructor(private val context: Context) {
         progress: MutableSharedFlow<IndexProgress>? = null,
         baseId: String? = null,
         displayName: String? = null,
+        log: ReadingLog? = null,
     ): IndexResult {
         val fileName = displayName?.takeIf { it.isNotBlank() } ?: resolveFileName(uri)
         val startMs = System.currentTimeMillis()
@@ -201,12 +198,13 @@ class DocumentIndexer private constructor(private val context: Context) {
                 com.amar.vault.indexing.AdaptivePdfOcrControl.progressivePdfIndexing
             ) {
                 return doIndexStreaming(
-                    uri, mimeType, fileName, uriKey, sourceFingerprint, baseId, progress, startMs, prof,
+                    uri, mimeType, fileName, uriKey, sourceFingerprint, baseId, progress, startMs, prof, log,
                 )
             }
 
             // ── 1. Extract pages (single read — no double read) ─────────
             progress?.emit(IndexProgress(fileName, IndexProgress.Phase.EXTRACTING))
+            log?.reading(sourceFingerprint, pagesDone = 0, pieces = 0)
 
             val tExtract = System.currentTimeMillis()
             val content = runCatching {
@@ -215,6 +213,8 @@ class DocumentIndexer private constructor(private val context: Context) {
                     else withContext(prof) { contentExtractor.extract(context, uri, mimeType) }
                 }
             }.getOrElse {
+                // A reading that was stopped is not a file that could not be read.
+                if (it is CancellationException) throw it
                 prof?.let { p ->
                     p.stageMs(ProfilerStage.EXTRACT, System.currentTimeMillis() - tExtract)
                     IndexingProfiler.publish(p.build(System.currentTimeMillis() - startMs, "failed:extraction"))
@@ -336,6 +336,11 @@ class DocumentIndexer private constructor(private val context: Context) {
      * skipped by the reuse-cache pre-check in [doIndex]; here we delete any prior rows for this
      * exact source (a crashed partial index) and stream fresh. Rerun self-heals: on failure the
      * fingerprint is never cached as complete, so the next run deletes the partial rows and retries.
+     *
+     * With a [log], a reading that was cut short is carried on instead: the pages the log says
+     * are done stay as they are and reading starts at the next one. That is what lets a scan of
+     * hundreds of pages finish at all when the system stops background work every ten minutes;
+     * started from page 1 each time, it never got past the pages ten minutes can read.
      */
     private suspend fun doIndexStreaming(
         uri: Uri,
@@ -347,6 +352,7 @@ class DocumentIndexer private constructor(private val context: Context) {
         progress: MutableSharedFlow<IndexProgress>?,
         startMs: Long,
         prof: DocProfileRecorder?,
+        log: ReadingLog? = null,
     ): IndexResult {
         val itemType = contentExtractor.itemTypeFor(mimeType)
             ?: return IndexResult.Failure(fileName, IndexError.UnsupportedFormat(mimeType))
@@ -358,12 +364,26 @@ class DocumentIndexer private constructor(private val context: Context) {
             addedAt = System.currentTimeMillis(),
         )
 
-        // Clears any prior (partial) rows for this exact source, and records the document
-        // before its first page, so that no page is ever stored without it.
-        bm25.removeDocuments(persister.beginDocument(document))
+        // An earlier reading of this very file, under this id, that was cut short: its pages
+        // are kept. Both the log and what is stored have to say so.
+        val pagesDone = log?.pagesDone(sourceFingerprint) ?: 0
+        val begun = if (pagesDone > 0) db.vaultDocumentDao().getById(targetId) else null
+        var committed = 0
+        val from = if (begun != null && begun.contentHash == sourceFingerprint) {
+            val (halfWritten, nextChunk) = persister.resumeDocument(targetId, pagesDone)
+            bm25.removeDocuments(halfWritten)
+            committed = dao.countChunksOfDocument(targetId)
+            Log.d(TAG, "Carrying on $fileName after page $pagesDone ($committed pieces stored)")
+            com.amar.vault.indexing.ReadFrom(page = pagesDone + 1, chunkIndex = nextChunk)
+        } else {
+            // Clears any prior (partial) rows for this exact source, and records the document
+            // before its first page, so that no page is ever stored without it.
+            bm25.removeDocuments(persister.beginDocument(document))
+            com.amar.vault.indexing.ReadFrom.START
+        }
+        log?.reading(sourceFingerprint, pagesDone = from.page - 1, pieces = committed)
 
         progress?.emit(IndexProgress(fileName, IndexProgress.Phase.EXTRACTING))
-        var committed = 0
         val onBatch: suspend (List<PagedChunk>) -> Unit = { pageChunks ->
             // The size of the document is unknown while streaming: totalChunks stays 0. A batch
             // is one page of a PDF, and the page is what its pieces are tagged by.
@@ -381,7 +401,11 @@ class DocumentIndexer private constructor(private val context: Context) {
             committed += rows.size
             progress?.emit(IndexProgress(fileName, IndexProgress.Phase.STORING, committed, committed))
         }
-        val onPageCount: suspend (Int) -> Unit = { persister.recordPageCount(targetId, it) }
+        val onPageCount: suspend (Int) -> Unit = {
+            persister.recordPageCount(targetId, it)
+            log?.pageCount(it)
+        }
+        val onPageDone: suspend (Int) -> Unit = { page -> log?.pageDone(page, committed) }
         // Stored when no text could be read at all — a scan the OCR found nothing in, or a file
         // that would not open. With no row the document could not be found even by its name.
         // Such a file is not recorded as complete, so importing it again reads it again.
@@ -392,12 +416,15 @@ class DocumentIndexer private constructor(private val context: Context) {
             // coroutine-context element (exactly as the batch path does), so PdfFormatExtractor
             // attributes its per-page/sub-stage timings to this document. Null → plain call.
             IndexMetrics.timed(IndexMetrics.Timing.DOC_EXTRACT) {
-                if (prof == null) contentExtractor.extractStreaming(context, uri, mimeType, onPageCount, onBatch)
-                else withContext(prof) { contentExtractor.extractStreaming(context, uri, mimeType, onPageCount, onBatch) }
+                if (prof == null) contentExtractor.extractStreaming(context, uri, mimeType, onPageCount, from, onPageDone, onBatch)
+                else withContext(prof) { contentExtractor.extractStreaming(context, uri, mimeType, onPageCount, from, onPageDone, onBatch) }
             }
         } catch (ce: CancellationException) {
             throw ce
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            // An OutOfMemoryError too: a file too big for the phone is something to say, not a
+            // reason for the app to stop.
+            if (e !is Exception && e !is OutOfMemoryError) throw e
             prof?.let { p ->
                 p.stageMs(ProfilerStage.EXTRACT, System.currentTimeMillis() - tExtract)
                 IndexingProfiler.publish(p.build(System.currentTimeMillis() - startMs, "failed:extraction"))

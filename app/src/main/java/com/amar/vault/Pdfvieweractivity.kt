@@ -11,7 +11,9 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -33,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.amar.vault.indexing.DocumentRelink
 import com.amar.vault.ui.components.search.withQueryWordsMarked
 import com.amar.vault.ui.theme.CharcoalSoft
 import com.amar.vault.ui.theme.Cream
@@ -104,7 +107,9 @@ class PdfViewerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val uriString = intent.getStringExtra(EXTRA_URI) ?: run { finish(); return }
+        // A list of results that was on screen before the file was found again still holds
+        // the address it had then.
+        val uriString = DocumentRelink.currentAddress(intent.getStringExtra(EXTRA_URI) ?: run { finish(); return })
         val uri = Uri.parse(uriString)
         val requestedPage = intent.getIntExtra(EXTRA_PAGE, 0)
         val searchQuery = intent.getStringExtra(EXTRA_SEARCH_QUERY) ?: ""
@@ -134,6 +139,24 @@ class PdfViewerActivity : ComponentActivity() {
 
 private fun pdfPositionKey(uri: String): String = "page_${uri.hashCode()}"
 
+/** What the viewer says when the file it was asked to show is not there. */
+internal object FileGoneWords {
+    const val GONE =
+        "This file is no longer where it was when you added it: it was moved, renamed or deleted. " +
+            "Its text can still be searched. Show the app where the file is now and it opens again."
+
+    /** For a file the vault has no document for, which cannot be found again from here. */
+    const val GONE_ADD_AGAIN =
+        "This file is no longer where it was when you added it: it was moved, renamed or deleted. " +
+            "Add it again from Import documents."
+
+    const val CANNOT_READ = "That file could not be read. Choose the file you added."
+
+    fun anotherFile(name: String): String =
+        "That is a different file: its contents are not the ones stored" +
+            (if (name.isBlank()) "." else " for \"$name\".") + " Choose the file you added."
+}
+
 // ════════════════════════════════════════════════════════════════════════════════
 // Composable viewer
 // ════════════════════════════════════════════════════════════════════════════════
@@ -156,6 +179,32 @@ private fun PdfViewerScreen(
     var pageCount by remember { mutableIntStateOf(0) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
+    // Where the file is opened from: the address it was added at, until that leads nowhere
+    // and the user shows where the file is now.
+    var openFrom by remember { mutableStateOf(uri) }
+    // True when the file is gone from a document the vault knows, which can then be found again.
+    var canFind by remember { mutableStateOf(false) }
+    var findNote by remember { mutableStateOf<String?>(null) }
+    val finder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { picked: Uri? ->
+        if (picked == null) return@rememberLauncherForActivityResult
+        findNote = "Checking the file…"
+        scope.launch {
+            val outcomes = withContext(Dispatchers.IO) {
+                val relink = DocumentRelink.get(context)
+                relink.documentsAt(openFrom.toString()).map { relink.relink(it, picked) }
+            }
+            when {
+                outcomes.any { it is DocumentRelink.Outcome.Found } -> {
+                    findNote = null
+                    openFrom = picked
+                }
+                outcomes.any { it is DocumentRelink.Outcome.CannotRead } ->
+                    findNote = FileGoneWords.CANNOT_READ
+                else -> findNote = FileGoneWords.anotherFile(fileName)
+            }
+        }
+    }
+
     // The list starts ON the requested page (targetPage is 1-indexed, the list 0-indexed):
     // arriving from a search result must show that page at once, not page 1 and then a scroll
     // through every page before it.
@@ -165,10 +214,12 @@ private fun PdfViewerScreen(
     val renderLock = remember { Mutex() }
 
     // Open the PDF
-    LaunchedEffect(uri) {
+    LaunchedEffect(openFrom) {
+        errorMessage = null
+        canFind = false
         withContext(Dispatchers.IO) {
             try {
-                val fd = context.contentResolver.openFileDescriptor(uri, "r")
+                val fd = context.contentResolver.openFileDescriptor(openFrom, "r")
                     ?: throw IllegalStateException("Cannot open PDF")
                 val pdfRenderer = PdfRenderer(fd)
                 // The count first: the list is built the moment the renderer is set, and a list
@@ -179,10 +230,15 @@ private fun PdfViewerScreen(
                 errorMessage = when (e) {
                     // A document added with the picker stays where it was; the vault holds its
                     // text and a link to it, and the link breaks if the file goes away.
-                    is SecurityException, is java.io.FileNotFoundException ->
-                        "This file can no longer be opened from where it was added. It may have " +
-                            "been moved or deleted. Add it again from Import documents."
-                    else -> "Failed to open PDF: ${e.message}"
+                    is SecurityException, is java.io.FileNotFoundException -> {
+                        canFind = runCatching {
+                            DocumentRelink.get(context).documentsAt(openFrom.toString()).isNotEmpty()
+                        }.getOrDefault(false)
+                        if (canFind) FileGoneWords.GONE else FileGoneWords.GONE_ADD_AGAIN
+                    }
+                    is java.io.IOException, is IllegalArgumentException ->
+                        "This file is damaged or is not a PDF, so it cannot be shown. Its text can still be searched."
+                    else -> "The file could not be opened: ${e.message}"
                 }
             }
         }
@@ -247,13 +303,25 @@ private fun PdfViewerScreen(
             val spaceAfterLastPage = maxHeight * 0.4f
             when {
                 errorMessage != null -> {
-                    Text(
-                        text = errorMessage!!,
-                        color = PdfColor,
+                    Column(
                         modifier = Modifier
                             .align(Alignment.Center)
                             .padding(32.dp),
-                    )
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(text = errorMessage!!, color = PdfColor)
+                        if (canFind) {
+                            Spacer(Modifier.height(16.dp))
+                            Button(
+                                onClick = { finder.launch(arrayOf("application/pdf")) },
+                                colors = ButtonDefaults.buttonColors(containerColor = WarmBrownDark),
+                            ) { Text("Find the file", color = Cream) }
+                        }
+                        findNote?.let { note ->
+                            Spacer(Modifier.height(12.dp))
+                            Text(text = note, color = WarmBrownDark, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
                 }
 
                 renderer == null -> {
@@ -297,7 +365,7 @@ private fun PdfViewerScreen(
                     LaunchedEffect(currentPage.value) {
                         context.getSharedPreferences("amar_pdf_positions", Context.MODE_PRIVATE)
                             .edit()
-                            .putInt(pdfPositionKey(uri.toString()), currentPage.value)
+                            .putInt(pdfPositionKey(openFrom.toString()), currentPage.value)
                             .apply()
                     }
 
