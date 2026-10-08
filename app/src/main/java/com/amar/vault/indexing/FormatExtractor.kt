@@ -26,6 +26,15 @@ import java.io.InputStream
 data class PagedChunk(val text: String, val pdfPage: Int?, val chunkIndex: Int)
 
 /**
+ * Where a reading starts: the first page to read, and the index its first piece is given.
+ * [START] for a file read from its beginning; anything else carries on a reading that was cut
+ * short, whose earlier pages are stored already.
+ */
+data class ReadFrom(val page: Int = 1, val chunkIndex: Int = 0) {
+    companion object { val START = ReadFrom() }
+}
+
+/**
  * A single document-format handler — the validated extensibility point.
  *
  * Adding a future format = add one `FormatExtractor` to [DocumentFormatRegistry.DEFAULT];
@@ -61,18 +70,28 @@ interface FormatExtractor {
      * Default: one batch = the full [extract] result — identical externally-visible output, no
      * incrementality. Overridden by [PdfFormatExtractor] to emit one batch per page. Whole-document
      * formats (Word/Excel/EPUB) have nothing to stream and keep the default.
+     *
+     * A format with pages starts at [from] and tells [onPageDone] each page it has finished, in
+     * order, after that page's batch (a page without words has no batch, and is still told).
+     * What a reading from page N emits is exactly what a reading from page 1 emits from page N
+     * on. A format without pages is read whole and tells nothing.
      */
     suspend fun extractStreaming(
         context: Context,
         uri: Uri,
         chunker: Chunker,
         onPageCount: suspend (Int) -> Unit = {},
+        from: ReadFrom = ReadFrom.START,
+        onPageDone: suspend (Int) -> Unit = {},
         onBatch: suspend (List<PagedChunk>) -> Unit,
     ) {
         val all = extract(context, uri, chunker, onPageCount)
         if (all.isNotEmpty()) onBatch(all)
     }
 }
+
+/** What is thrown for a PDF that opens and has no pages; [ImportFailure] knows it by these words. */
+internal const val NO_PAGES = "the PDF has no pages: it is cut short or damaged"
 
 internal fun openDocStream(context: Context, uri: Uri): InputStream =
     context.contentResolver.openInputStream(uri) ?: throw IllegalStateException("Cannot open $uri")
@@ -185,6 +204,9 @@ class PdfFormatExtractor : FormatExtractor {
             doc.use {
                 try {
                 val pageCount = doc.numberOfPages
+                // PDFBox opens a file that was cut off part-way and finds no page in it. That is
+                // a damaged file, and has to be said as one, not as "a file with no words".
+                if (pageCount == 0) throw java.io.IOException(NO_PAGES)
                 prof?.pageCount = pageCount
                 onPageCount(pageCount)
                 // Per-page final text, 1-indexed. Written by the strip/render producer
@@ -428,6 +450,8 @@ class PdfFormatExtractor : FormatExtractor {
         uri: Uri,
         chunker: Chunker,
         onPageCount: suspend (Int) -> Unit,
+        from: ReadFrom,
+        onPageDone: suspend (Int) -> Unit,
         onBatch: suspend (List<PagedChunk>) -> Unit,
     ) {
         // Sprint P6.1 — observation-only instrumentation, mirroring [extract]. Before this, the
@@ -446,7 +470,7 @@ class PdfFormatExtractor : FormatExtractor {
         var nfcNs = 0L
         var trustNs = 0L
         var chunkNs = 0L
-        var chunkIdx = 0
+        var chunkIdx = from.chunkIndex
 
         val tOpen = System.nanoTime()
         val stream = openDocStream(context, uri)
@@ -462,8 +486,13 @@ class PdfFormatExtractor : FormatExtractor {
             doc.use {
                 try {
                 val pageCount = doc.numberOfPages
+                // PDFBox opens a file that was cut off part-way and finds no page in it. That is
+                // a damaged file, and has to be said as one, not as "a file with no words".
+                if (pageCount == 0) throw java.io.IOException(NO_PAGES)
                 prof?.pageCount = pageCount
                 onPageCount(pageCount)
+                // The pages before this one are stored already (a reading that was cut short).
+                val firstPage = from.page.coerceIn(1, pageCount + 1)
 
                 // Final per-page text, 1-indexed. null = not yet ready. Written by the producer
                 // (trusted / blank / render-fail pages) and by OCR consumers (fallback pages) at
@@ -490,7 +519,7 @@ class PdfFormatExtractor : FormatExtractor {
                     // Because every write to pageTexts[p] is followed by an emitReadyPages() call,
                     // the globally-last such call (last mutex acquisition) sees all pages ready and
                     // drains to pageCount+1 — so no trailing emit is needed after the scope joins.
-                    var nextToEmit = 1
+                    var nextToEmit = firstPage
                     suspend fun emitReadyPages() = emitMutex.withLock {
                         while (nextToEmit <= pageCount) {
                             val text = pageTexts[nextToEmit] ?: break
@@ -500,6 +529,7 @@ class PdfFormatExtractor : FormatExtractor {
                                 chunkNs += System.nanoTime() - tChunk
                                 if (batch.isNotEmpty()) onBatch(batch)
                             }
+                            onPageDone(nextToEmit)
                             nextToEmit++
                         }
                     }
@@ -558,7 +588,7 @@ class PdfFormatExtractor : FormatExtractor {
 
                         val stripper = PDFTextStripper()
                         var renderer: PDFRenderer? = null // built once, only if some page needs OCR
-                        for (page in 1..pageCount) {
+                        for (page in firstPage..pageCount) {
                             // Strip THIS page only (scan-dominant skips stripping) so a text page 1 is
                             // ready in ms while later pages' strip/render overlaps earlier pages' OCR.
                             val raw = if (scanDominant) "" else {

@@ -64,17 +64,21 @@ class DocumentContentExtractor(
      * Sprint P6 — progressive extraction. Streams chunk batches (per page for PDFs) to [onBatch]
      * so the caller commits them to the index incrementally. Metadata (tag/itemType) is available
      * up front via [descriptorFor]; this call only drives the batch emission, and tells
-     * [onPageCount] how many pages a paged file has before the first batch.
+     * [onPageCount] how many pages a paged file has before the first batch. [from] and
+     * [onPageDone] are for carrying on a reading that was cut short
+     * ([FormatExtractor.extractStreaming]).
      */
     suspend fun extractStreaming(
         context: Context,
         uri: Uri,
         mimeType: String,
         onPageCount: suspend (Int) -> Unit = {},
+        from: ReadFrom = ReadFrom.START,
+        onPageDone: suspend (Int) -> Unit = {},
         onBatch: suspend (List<PagedChunk>) -> Unit,
     ) {
         val extractor = registry.extractorFor(mimeType)
             ?: error("Unsupported mime type '$mimeType' — call isSupported() before extractStreaming()")
-        extractor.extractStreaming(context, uri, chunker, onPageCount, onBatch)
+        extractor.extractStreaming(context, uri, chunker, onPageCount, from, onPageDone, onBatch)
     }
 }

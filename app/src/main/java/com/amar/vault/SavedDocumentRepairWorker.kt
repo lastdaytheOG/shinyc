@@ -26,7 +26,6 @@ class SavedDocumentRepairWorker @dagger.assisted.AssistedInject constructor(
     @dagger.assisted.Assisted context: Context,
     @dagger.assisted.Assisted params: WorkerParameters,
     private val db: VaultDatabase,
-    private val documentIndexer: DocumentIndexer,
 ) : CoroutineWorker(context, params) {
 
     companion object {
@@ -50,9 +49,10 @@ class SavedDocumentRepairWorker @dagger.assisted.AssistedInject constructor(
 
         for (item in db.vaultDao().getStandaloneLocalFiles()) {
             if (item.id in attempted || !File(item.uri).isFile) continue
-            // Null: not a document (a shared photo or video is a local file too).
-            val result = documentIndexer.indexSavedDocument(item) ?: continue
-            VaultLog.i(TAG, "${item.id}: ${result::class.simpleName}")
+            // False: not a document (a shared photo or video is a local file too). The reading
+            // itself is the import queue's, which can carry on a long one that is cut short.
+            if (!com.amar.vault.indexing.DocumentImportQueue.get(applicationContext).addShared(item)) continue
+            VaultLog.i(TAG, "${item.id}: queued to be read")
             attempted += item.id
             prefs.edit().putStringSet(KEY_ATTEMPTED, attempted.toSet()).apply()
         }

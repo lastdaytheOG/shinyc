@@ -117,6 +117,22 @@ class IndexPersister(private val db: VaultDatabase) {
             removed.filter { it !in stored }
         }
 
+    /**
+     * Document path, page by page: carries on a document that was begun and cut short. Pieces
+     * on a page after [lastPageDone] belong to a page that was being written when it stopped;
+     * they go, so that the page is not stored twice. Returns their ids and the index the next
+     * piece gets.
+     */
+    suspend fun resumeDocument(documentId: String, lastPageDone: Int): Pair<List<String>, Int> =
+        db.withTransaction {
+            val removed = vaultDao.chunkIdsAfterPage(documentId, lastPageDone)
+            if (removed.isNotEmpty()) {
+                vaultDao.deleteChunksAfterPage(documentId, lastPageDone)
+                documentDao.refreshChunkCount(documentId)
+            }
+            removed to vaultDao.nextChunkIndex(documentId)
+        }
+
     /** Document path: how many pages the file turned out to have. */
     suspend fun recordPageCount(documentId: String, pageCount: Int) {
         documentDao.setPageCount(documentId, pageCount)
