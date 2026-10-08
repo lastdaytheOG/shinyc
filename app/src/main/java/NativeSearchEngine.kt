@@ -1,48 +1,68 @@
 package com.amar.vault
 
+import com.amar.vault.retrieval.KeywordWords
+
 /**
- * Kotlin interface to the native C++ BM25 Search Engine.
+ * One native keyword engine (`SearchEngine.cpp`), owned by this object: made with it, and
+ * freed by [close]. The app has one for as long as it runs
+ * ([com.amar.vault.retrieval.NativeBm25Index]); a test can make one of its own.
  *
- * Lifecycle:
- *   1. Call [initEngine] at app startup or ViewModel init.
- *   2. Feed documents via [addDocument].
- *   3. Query via [search].
- *   4. Call [destroyEngine] in onDestroy() — MANDATORY to prevent C++ heap leaks.
+ * Text and queries are passed as they are. The native side cuts them into words, by the table
+ * [KeywordWords] gives it when the library is loaded — so what a word is, is decided in
+ * Kotlin, and the cutting is done where it is fast.
  */
-class NativeSearchEngine {
+class NativeSearchEngine : AutoCloseable {
     companion object {
         init {
             System.loadLibrary("amar_search_engine")
+            nativeInstallWords(KeywordWords.table)
         }
+
+        /** The most ids one search returns (`SearchEngine::MAX_RESULTS`). */
+        const val MAX_RESULTS = 300
+
+        /** The words of [text] as the engine is given them, a space between them: for tests. */
+        fun wordsOf(text: String): String = nativeWords(text)
+
+        @JvmStatic private external fun nativeInstallWords(table: CharArray)
+        @JvmStatic private external fun nativeWords(text: String): String
     }
 
-    // --- Lifecycle ---
+    /** What the engine holds: for Developer Tools and tests. */
+    data class Stats(val items: Long, val words: Long, val entries: Long, val removedKept: Long)
 
-    /** Allocate the C++ engine on the native heap. Idempotent (safe to call twice). */
-    external fun initEngine()
+    private var handle: Long = nativeCreate()
 
-    /** Free the C++ engine. MUST be called in onDestroy(). */
-    external fun destroyEngine()
+    /** Adds an item, or replaces it when [docId] is already there: the words of [text] and of [more]. */
+    @Synchronized
+    fun add(docId: String, text: String, more: String = "") = nativeAdd(open(), docId, text, more)
 
-    // --- Data Feeding ---
+    /** False when there was no such item. */
+    @Synchronized
+    fun remove(docId: String): Boolean = nativeRemove(open(), docId)
 
-    /**
-     * Index a document. If [docId] already exists, it will be re-indexed.
-     * @param docId  Unique identifier (e.g., VaultItem.id).
-     * @param text   Combined searchable text (OCR + tags + type).
-     */
-    external fun addDocument(docId: String, text: String)
+    /** Item ids, best first: at most [limit], and never more than [MAX_RESULTS]. */
+    fun search(query: String, limit: Int = MAX_RESULTS): Array<String> = nativeSearch(open(), query, limit)
 
-    // --- Querying ---
+    @Synchronized
+    fun clear() = nativeClear(open())
 
-    /**
-     * Search for documents matching [query].
-     * @return Array of docIds ranked by BM25 relevance (max 50 results).
-     */
-    external fun search(query: String): Array<String>
+    fun stats(): Stats = nativeStats(open()).let { Stats(it[0], it[1], it[2], it[3]) }
 
-    // --- Maintenance ---
+    /** Frees the engine. Nothing may be using it; it cannot be used afterwards. */
+    @Synchronized
+    override fun close() {
+        if (handle != 0L) nativeDestroy(handle)
+        handle = 0L
+    }
 
-    /** Clear all indexed documents from memory. Engine remains alive. */
-    external fun clear()
+    private fun open(): Long = handle.also { check(it != 0L) { "the keyword engine was closed" } }
+
+    private external fun nativeCreate(): Long
+    private external fun nativeDestroy(handle: Long)
+    private external fun nativeAdd(handle: Long, docId: String, text: String, more: String)
+    private external fun nativeRemove(handle: Long, docId: String): Boolean
+    private external fun nativeSearch(handle: Long, query: String, limit: Int): Array<String>
+    private external fun nativeClear(handle: Long)
+    private external fun nativeStats(handle: Long): LongArray
 }

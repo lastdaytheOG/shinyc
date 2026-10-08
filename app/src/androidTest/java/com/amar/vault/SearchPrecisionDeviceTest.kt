@@ -52,8 +52,9 @@ class SearchPrecisionDeviceTest {
     // The words are made up where they need to be in no other document on the device.
     private val corpus = listOf(
         page("newsletter", 1, "This week in Zylaude Code: build your own mods, a wrap-up allowance", "Gmail - This week in Zylaude Code.pdf"),
-        // Every three-letter piece of "vrendaxa", and not the word. Seeded before the page that
-        // says it, which is the order the engine breaks a tie in.
+        // Every three-letter piece of "vrendaxa", and not the word: what the engine used to
+        // name for it. Seeded before the page that says it, which is the order the engine
+        // breaks a tie in.
         page("book", 3, "vren enda daxa", "Operating Systems 9th edition.pdf"),
         page("book", 7, "and my Nicolette Avi To Vrendaxan and Ellen, and Barbara, Anne and Harold", "Operating Systems 9th edition.pdf"),
         // All three words of "zlast zorking zays", no two of them together.
@@ -82,7 +83,13 @@ class SearchPrecisionDeviceTest {
     fun remove() = runBlocking {
         services.database().openHelper.writableDatabase
             .execSQL("DELETE FROM vault_items WHERE id LIKE '$PREFIX%'")
+        services.bm25Index().removeDocuments(corpus.map { it.id })
     }
+
+    /** This test's pages the engine itself names for [typed], as `document:page`, best first. */
+    private fun engineNames(typed: String): List<String> = services.lexicalRetriever().bm25(typed, 300)
+        .mapNotNull { id -> corpus.firstOrNull { it.id == id } }
+        .map { "${it.parentDocumentId?.removePrefix(PREFIX) ?: it.id.removePrefix(PREFIX)}:${it.pageNum}" }
 
     /** This test's documents and pictures listed for [typed], best first. */
     private fun typed(typed: String, chip: String = SearchFilter.ALL): List<String> = runBlocking {
@@ -124,10 +131,14 @@ class SearchPrecisionDeviceTest {
     @Test
     fun aDocumentIsNamedByThePageThatSaysTheWord() {
         assertEquals(7, pageOf("book", "vrendaxa"))
-        // The control: the engine itself names the page that only has the pieces, and with
-        // both rules off that is the page the document is listed by.
+        // Until the engine was rewritten, the control here was that the engine itself named
+        // page 3, which only has the pieces, and that with both rules off the document was
+        // listed by it. The engine no longer names that page at all: it finds the word inside
+        // "Vrendaxan" on page 7. So with both rules off the page is 7 as well, and the rules
+        // have their control in the test below, which the engine still gets wrong by itself.
+        assertEquals(listOf("book:7"), engineNames("vrendaxa"))
         val before = RetrievalTuning(typoHelpOnlyForMissingWords = false, pageWordsBeforeTags = false)
-        assertEquals(3, pageOf("book", "vrendaxa", before))
+        assertEquals(7, pageOf("book", "vrendaxa", before))
     }
 
     @Test
@@ -155,12 +166,19 @@ class SearchPrecisionDeviceTest {
 
     @Test
     fun aMisspeltWordListsNearSpellingsAndNotWhatOnlySharesPiecesWithIt() {
-        // The engine names a page for sharing enough three-letter pieces with a word it does
-        // not know, wherever on the page they are. That is a candidate, not a spelling.
+        // "zylab" and "laudx" share four of the six three-letter pieces of "zylaudde" and are
+        // no spelling of it.
         val listed = typed("zylaudde")
         assertFalse("got $listed", "notes" in listed)
+        // Until the engine was rewritten it named that page, and the control here was that the
+        // list had it whenever the rule was off. It no longer does — the page is not even a
+        // candidate — so with the rule off it is not listed either. What the engine names for
+        // a word nobody has is the near spellings of it, as the rest of the app counts them.
+        val named = engineNames("zylaudde")
+        assertFalse("the engine names $named", "notes:2" in named)
+        assertTrue("the engine names $named", "newsletter:1" in named)
         val before = typedBefore("zylaudde", RetrievalTuning(typoHelpOnlyForMissingWords = false))
-        assertTrue("the control — the engine does name it: $before", "notes" in before)
+        assertFalse("got $before", "notes" in before)
     }
 
     @Test

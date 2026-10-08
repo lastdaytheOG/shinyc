@@ -96,6 +96,47 @@ class HybridSearchDocumentTest {
     )
 
     @Test
+    fun aDocumentFoundByItsNameIsListedByAPageThatSaysTheWord() = runBlocking {
+        // A shared PDF is the saved file — a row with no text, called what the file is called —
+        // and a row for each piece of its text. All of them carry the name, so by a word of
+        // the name they all match, and the keyword engine ranks the shortest first: the saved
+        // file, or a page that does not say the word, as happened on the emulator's vault with
+        // "kritagyata" and with "pdf".
+        val saved = VaultItem(
+            id = "handbook", uri = "/files/shared_imports/handbook.pdf", ocrText = "", lang = "en",
+            itemType = ItemType.PDF, sourceFile = "Kritagyata handbook.pdf", timestamp = 5L, sharedAt = 5L,
+            title = "Kritagyata handbook.pdf",
+        )
+        val pages = listOf(
+            chunk("handbook", 0, "Contents", file = "Kritagyata handbook.pdf"),
+            chunk("handbook", 1, "Govt of Assam handbook on Kritagyata", file = "Kritagyata handbook.pdf"),
+            chunk("handbook", 2, "Chapter two", file = "Kritagyata handbook.pdf"),
+        )
+        val corpus = listOf(saved) + pages
+        val engineOrder = listOf("handbook", "handbook_chunk0", "handbook_chunk2", "handbook_chunk1")
+
+        val listed = service(corpus, engineOrder).retrieve(RetrievalRequest.forResultList("kritagyata")).items
+        assertEquals("the document once, by the page that says the word", listOf("handbook_chunk1"), listed.map { it.id })
+
+        // The control: with the rules that tell a page from a name off, the document is listed
+        // by whichever row the engine named first.
+        val before = RetrievalTuning(typoHelpOnlyForMissingWords = false, pageWordsBeforeTags = false)
+        val asBefore = service(corpus, engineOrder).retrieve(RetrievalRequest("kritagyata", tuning = before)).items
+        assertEquals(listOf("handbook"), asBefore.map { it.id })
+    }
+
+    @Test
+    fun aDocumentWhoseNameAloneHasTheWordIsStillListed() = runBlocking {
+        // No page says it: the document is found by its name, by the row the engine names.
+        val pages = listOf(
+            chunk("card", 0, "Unique Identification Authority of India", file = "Aadhaar_Card.pdf"),
+            chunk("card", 1, "Address and date of birth", file = "Aadhaar_Card.pdf"),
+        )
+        val listed = service(pages, listOf("card_chunk1", "card_chunk0")).retrieve(RetrievalRequest.forResultList("aadhaar")).items
+        assertEquals(listOf("card_chunk1"), listed.map { it.id })
+    }
+
+    @Test
     fun aPdfIsFoundByItsFileName() = runBlocking {
         // Nothing in the keyword index and no page says "aadhaar": only the file name does.
         val result = service(named).retrieve(RetrievalRequest("aadhaar card"))

@@ -22,6 +22,10 @@ import com.amar.vault.VaultMetadata
  *    never stored without the record of the document it names.
  *  - [deletePartialByContentHash] is a delete of its own: a crash between it and the
  *    re-insert self-heals on the next idempotent retry.
+ *
+ * The three calls that remove a document's pieces return the ids of the rows they removed, for
+ * the caller to take out of the keyword engine too. Until the engine could forget an item,
+ * the pages of a document that was read again stayed in it until the app was restarted.
  */
 class IndexPersister(private val db: VaultDatabase) {
 
@@ -87,11 +91,10 @@ class IndexPersister(private val db: VaultDatabase) {
      * earlier attempt at this file, or of an earlier version of it under the same id, is
      * removed, and the document is recorded with no pieces yet. If indexing is cut short the
      * record stays, with as many pieces as were stored; reading the file again starts here
-     * again.
+     * again. Returns the ids of the pieces removed.
      */
-    suspend fun beginDocument(document: VaultDocument) {
+    suspend fun beginDocument(document: VaultDocument): List<String> =
         db.withTransaction { replaceDocument(document) }
-    }
 
     /** Document path, page by page: the next pieces of a document that was begun. */
     suspend fun appendDocumentChunks(documentId: String, items: List<VaultItem>) {
@@ -101,14 +104,18 @@ class IndexPersister(private val db: VaultDatabase) {
         }
     }
 
-    /** Document path, all at once: the record of [document] and all its pieces, or none of it. */
-    suspend fun persistDocument(document: VaultDocument, items: List<VaultItem>) {
+    /**
+     * Document path, all at once: the record of [document] and all its pieces, or none of it.
+     * Returns the ids of the pieces that were there before and are not among [items].
+     */
+    suspend fun persistDocument(document: VaultDocument, items: List<VaultItem>): List<String> =
         db.withTransaction {
-            replaceDocument(document)
+            val removed = replaceDocument(document)
             vaultDao.insertAll(items)
             documentDao.refreshChunkCount(document.id)
+            val stored = items.mapTo(HashSet()) { it.id }
+            removed.filter { it !in stored }
         }
-    }
 
     /** Document path: how many pages the file turned out to have. */
     suspend fun recordPageCount(documentId: String, pageCount: Int) {
@@ -117,19 +124,23 @@ class IndexPersister(private val db: VaultDatabase) {
 
     /**
      * Document partial-repair: drop the incomplete rows, and the record of the document they
-     * belonged to, before re-indexing.
+     * belonged to, before re-indexing. Returns the ids of the rows dropped.
      */
-    suspend fun deletePartialByContentHash(contentHash: String) {
+    suspend fun deletePartialByContentHash(contentHash: String): List<String> =
         db.withTransaction {
+            val removed = vaultDao.chunkIdsByContentHash(contentHash)
             vaultDao.deleteChunksByContentHash(contentHash)
             documentDao.deleteByContentHash(contentHash)
+            removed
         }
-    }
 
-    private suspend fun replaceDocument(document: VaultDocument) {
+    private suspend fun replaceDocument(document: VaultDocument): List<String> {
+        val removed = (vaultDao.chunkIdsByContentHash(document.contentHash) +
+            vaultDao.chunkIdsOfDocument(document.id)).distinct()
         vaultDao.deleteChunksByContentHash(document.contentHash)
         vaultDao.deleteChunksOfDocument(document.id)
         documentDao.deleteByContentHash(document.contentHash)
         documentDao.upsert(document.copy(chunkCount = 0))
+        return removed
     }
 }

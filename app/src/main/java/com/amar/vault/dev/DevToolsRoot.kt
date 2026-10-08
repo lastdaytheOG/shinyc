@@ -11,6 +11,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.amar.vault.MigrationReport
+import com.amar.vault.retrieval.Bm25Index
+import com.amar.vault.retrieval.KeywordIndexFill
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
 import com.amar.vault.indexing.AutoTagUpkeep
 import com.amar.vault.indexing.PictureTypeUpkeep
 import java.text.SimpleDateFormat
@@ -54,10 +60,41 @@ private fun DevToolsHub(onExit: () -> Unit, onNavigate: (DevRoute) -> Unit) {
         DevNavCard("Benchmarks", "Run evaluation suites · regression vs baseline · reports", "📊") { onNavigate(DevRoute.BENCHMARKS) }
         DevNavCard("Golden Queries", "Type a real query · mark the right answers · scored by Benchmarks", "🎯") { onNavigate(DevRoute.GOLDEN_QUERIES) }
         Spacer(Modifier.height(8.dp))
+        KeywordIndexNote()
         UpkeepNote("Pictures looked at again", PictureTypeUpkeep.lastReport(LocalContext.current))
         UpkeepNote("Tags worked out again", AutoTagUpkeep.lastReport(LocalContext.current))
         DatabaseUpgradeNote()
     }
+}
+
+/**
+ * What the keyword engine holds and how long filling it took when the app was opened. It is
+ * built again at every start, on data nobody else can see, so its own account is shown where
+ * it can be read out.
+ */
+@Composable
+private fun KeywordIndexNote() {
+    val context = LocalContext.current
+    val services = remember {
+        EntryPointAccessors.fromApplication(context.applicationContext, KeywordIndexEntryPoint::class.java)
+    }
+    val fill = services.keywordIndexFill().lastReport
+    val size = remember(fill) { runCatching { services.bm25Index().size() }.getOrNull() }
+    val lines = listOfNotNull(
+        size?.let { "${it.items} items, ${it.words} different words" },
+        if (fill == null) "still being filled, or the fill failed"
+        else "filled when the app opened: ${fill.items} items in ${fill.totalMs} ms " +
+            "(reading ${fill.readMs} ms, indexing ${fill.indexMs} ms, side by side)",
+    )
+    DevSectionLabel("Keyword index")
+    DevCard { DevMono(lines.joinToString(System.lineSeparator())) }
+}
+
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+internal interface KeywordIndexEntryPoint {
+    fun keywordIndexFill(): KeywordIndexFill
+    fun bm25Index(): Bm25Index
 }
 
 /** When a pass over everything stored last ran, and what it did; nothing when it never has. */

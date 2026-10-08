@@ -17,6 +17,7 @@ class AmarApplication : Application(), Configuration.Provider {
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     @Inject lateinit var bm25Index: com.amar.vault.retrieval.Bm25Index
+    @Inject lateinit var keywordIndexFill: com.amar.vault.retrieval.KeywordIndexFill
 
     // WorkManager uses the Hilt factory so @HiltWorker workers get constructor injection.
     @Inject lateinit var workerFactory: HiltWorkerFactory
@@ -25,6 +26,10 @@ class AmarApplication : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+
+        // The keyword engine is filled from the database first and alongside everything
+        // below: it needs nothing of the embedding model, and a search waits for it.
+        val keywordFill = keywordIndexFill.start(scope)
 
         scope.launch {
             // 1–2. Copy the ONNX embedding model to storage and load it. The model is
@@ -47,26 +52,22 @@ class AmarApplication : Application(), Configuration.Provider {
             VectorSearchManager.getInstance(applicationContext).initialize()
             android.util.Log.d("AmarApp", "VectorSearchManager initialized")
 
-            // 4. Initialize native C++ BM25 search engine + hydrate from Room
+            // 4. The keyword engine, filled from Room (started above).
             withContext(Dispatchers.IO) {
-                // bm25Index (Hilt @Singleton) constructs + initEngine()s the native engine.
                 val database = VaultDatabase.get(applicationContext)
-                val items = database.vaultDao().getAllSearchableData()
-
-                items.forEach { item ->
-                    bm25Index.addDocument(item.id, com.amar.vault.retrieval.KeywordText.of(item))
-                }
-
-                VaultLog.i("AmarApp", "BM25 hydrated: ${items.size} docs")
+                val filled = keywordFill.await()
 
                 // 4b. Intelligent reconciliation — runs ONLY when justified (interrupted
-                //     indexing / explicit dirty flag / DB version change). Reuses the id set
-                //     already loaded for BM25 hydration, so it costs no extra query. BM25 is
-                //     already reconciled by this full rehydrate; this heals the HNSW mappings.
+                //     indexing / explicit dirty flag / DB version change). Reuses the ids the
+                //     fill read, so it costs no extra query. The keyword engine is already
+                //     reconciled by being filled afresh; this heals the HNSW mappings.
                 val health = IndexHealthState(applicationContext)
-                if (health.shouldReconcile(IndexHealthState.CURRENT_DB_VERSION)) {
+                if (filled == null) {
+                    // The fill failed and has said so; without its ids there is nothing to
+                    // reconcile against. The next start tries again.
+                } else if (health.shouldReconcile(IndexHealthState.CURRENT_DB_VERSION)) {
                     IndexMetrics.increment(IndexMetrics.Event.RECONCILE_RUN)
-                    val validIds = items.map { it.id }.toSet()
+                    val validIds = filled.ids.toSet()
                     val pruned = VectorSearchManager.getInstance(applicationContext).reconcile(validIds)
                     VaultLog.i("AmarApp", "Reconciliation pruned $pruned orphan vector mapping(s)")
                     health.markReconciled(IndexHealthState.CURRENT_DB_VERSION)

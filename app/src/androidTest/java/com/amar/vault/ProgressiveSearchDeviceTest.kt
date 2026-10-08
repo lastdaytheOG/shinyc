@@ -79,6 +79,7 @@ class ProgressiveSearchDeviceTest {
     fun removeCorpus() = runBlocking {
         services.database().openHelper.writableDatabase
             .execSQL("DELETE FROM vault_items WHERE id LIKE '$PREFIX%'")
+        services.bm25Index().removeDocuments((0 until CHUNKS).map { "$PREFIX${"%05d".format(it)}" })
     }
 
     @Test
