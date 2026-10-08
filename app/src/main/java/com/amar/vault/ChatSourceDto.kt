@@ -34,7 +34,12 @@ data class ChatSourceDto(
     val sharedAt: Long? = null,
     val originalUri: String? = null,
     val title: String? = null,
-    val mimeType: String? = null
+    val mimeType: String? = null,
+    /**
+     * The document a page belongs to. Without it a stored source no longer knew it was a page
+     * of a PDF, and could only be opened at the document's first page.
+     */
+    val parentDocumentId: String? = null,
 ) {
     fun toVaultItem(): VaultItem {
         // A source saved before database version 14 has its tags glued onto its text and its
@@ -57,6 +62,7 @@ data class ChatSourceDto(
             originalUri = originalUri,
             title = title,
             mimeType = mimeType,
+            parentDocumentId = parentDocumentId,
             qrPayload = QrPayloads.join(parts.qrPayloads),
         )
     }
@@ -78,7 +84,8 @@ data class ChatSourceDto(
             sharedAt = item.sharedAt,
             originalUri = item.originalUri,
             title = item.title,
-            mimeType = item.mimeType
+            mimeType = item.mimeType,
+            parentDocumentId = item.parentDocumentId,
         )
     }
 }
