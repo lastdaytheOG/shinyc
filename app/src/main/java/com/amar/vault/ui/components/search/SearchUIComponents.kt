@@ -418,16 +418,15 @@ private fun FiledUnderLine(tag: String, whatItLacks: String) {
     )
 }
 
-/** [text] with every occurrence of each word of [query] picked out. */
+/**
+ * [text] with the words [query] found picked out: each word of it wherever it stands, and the
+ * same word in another form ("Day" for "days") — see [com.amar.vault.MatchMarks].
+ */
 internal fun withQueryWordsMarked(text: String, query: String) = buildAnnotatedString {
     append(text)
     val marked = SpanStyle(fontWeight = FontWeight.Bold, color = CharcoalSoft, background = CreamDark)
-    for (word in queryWordsOf(query)) {
-        var at = text.indexOf(word, ignoreCase = true)
-        while (at >= 0) {
-            addStyle(marked, at, at + word.length)
-            at = text.indexOf(word, at + word.length, ignoreCase = true)
-        }
+    for (range in com.amar.vault.MatchMarks.ranges(text, queryWordsOf(query))) {
+        addStyle(marked, range.first, range.last + 1)
     }
 }
 

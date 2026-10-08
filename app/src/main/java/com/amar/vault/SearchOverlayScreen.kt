@@ -77,9 +77,13 @@ fun SearchOverlayScreen(
     val recentSearches by viewModel.recentSearches.collectAsState()
     val searchSuggestions by viewModel.searchSuggestions.collectAsState()
     val similarSpellingsOnly by viewModel.similarSpellingsOnly.collectAsState()
+    val understood by viewModel.understood.collectAsState()
+    val readingNote by viewModel.readingNote.collectAsState()
 
     // Detailed overlay for search results spatial continuity
     var activeDetailItem by remember { mutableStateOf<StashItemWithVaultItem?>(null) }
+    // The result the user has asked to take out of the vault, until they confirm or cancel.
+    var toRemove by remember { mutableStateOf<StashItemWithVaultItem?>(null) }
     
     // Each result is the card to show plus, for a document, the page and words that matched.
     val mappedResults = resultsList
@@ -161,9 +165,9 @@ fun SearchOverlayScreen(
                 )
             }
 
-            // Advanced-search operator chips (parsed from the query — presentation only).
-            val parsedOps = remember(queryText) { SearchOperators.parse(queryText) }
-            if (parsedOps.hasAny) {
+            // What the app read into the query beyond words to look for. Each chip says the
+            // words it was read from and what they were read as; a tap takes that reading back.
+            if (understood.isNotEmpty() && queryText.isNotBlank()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -172,22 +176,35 @@ fun SearchOverlayScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    parsedOps.chips.forEach { chip ->
-                        Text(
-                            text = chip,
-                            fontSize = 12.sp,
-                            color = CharcoalSoft,
+                    understood.forEach { reading ->
+                        Row(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(CreamLight)
                                 .border(1.dp, CreamDark, RoundedCornerShape(12.dp))
-                                .padding(horizontal = 10.dp, vertical = 4.dp)
-                        )
-                    }
-                    TextButton(onClick = { viewModel.updateQuery(parsedOps.cleanedQuery) }) {
-                        Text("Clear filters", fontSize = 12.sp, color = WarmBrown)
+                                .clickable(onClickLabel = "Remove this reading") { viewModel.takeBack(reading) }
+                                .padding(start = 10.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(text = reading.chip, fontSize = 12.sp, color = CharcoalSoft)
+                            Icon(
+                                imageVector = Icons.Default.Clear,
+                                contentDescription = "Remove: ${reading.label}",
+                                tint = WarmBrown,
+                                modifier = Modifier.padding(start = 4.dp).size(14.dp)
+                            )
+                        }
                     }
                 }
+            }
+            readingNote?.takeIf { queryText.isNotBlank() }?.let { note ->
+                Text(
+                    text = note,
+                    color = WarmBrownDark,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                )
             }
 
             // Quick Filters
@@ -315,12 +332,19 @@ fun SearchOverlayScreen(
 
         // Expanded detail view overlay for spatial continuity inside search
         activeDetailItem?.let { originalItem ->
+            // A result that was never saved to a folder: a page of a document, a picture.
+            val isSaved = !originalItem.stashId.startsWith("search_")
             CollectibleDetailView(
                 item = originalItem,
+                isSaved = isSaved,
                 onBack = { activeDetailItem = null },
                 onDelete = {
-                    viewModel.deleteSavedItem(originalItem.stashId)
-                    activeDetailItem = null
+                    if (isSaved) {
+                        viewModel.deleteSavedItem(originalItem.stashId)
+                        activeDetailItem = null
+                    } else {
+                        toRemove = originalItem
+                    }
                 },
                 onFavoriteToggle = {
                     viewModel.toggleSavedFavorite(originalItem.stashId, !originalItem.isFavorite)
@@ -330,6 +354,27 @@ fun SearchOverlayScreen(
                 },
                 modifier = Modifier
                     .fillMaxSize()
+            )
+        }
+
+        toRemove?.let { item ->
+            val isDocument = item.parentDocumentId != null
+            val name = item.title ?: item.sourceFile.substringAfterLast('/').ifBlank { if (isDocument) "this document" else "this picture" }
+            AlertDialog(
+                onDismissRequest = { toRemove = null },
+                containerColor = CreamLight,
+                title = { Text(com.amar.vault.indexing.RemovalWords.question(name, isDocument), color = CharcoalSoft, fontSize = 18.sp, fontWeight = FontWeight.Bold) },
+                text = { Text(com.amar.vault.indexing.RemovalWords.whatHappens(isDocument), color = WarmBrownDark, fontSize = 14.sp, lineHeight = 20.sp) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        toRemove = null
+                        activeDetailItem = null
+                        viewModel.removeFromVault(item)
+                    }) { Text("Remove", color = Color(0xFFD32F2F), fontWeight = FontWeight.Bold) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { toRemove = null }) { Text("Keep", color = WarmBrownDark) }
+                },
             )
         }
     }

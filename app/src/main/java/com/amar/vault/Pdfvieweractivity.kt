@@ -15,6 +15,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -26,7 +27,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -49,6 +55,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
 /**
@@ -139,6 +146,38 @@ class PdfViewerActivity : ComponentActivity() {
 
 private fun pdfPositionKey(uri: String): String = "page_${uri.hashCode()}"
 
+/** The marker drawn over a found word on a page: see-through, so the word stays readable. */
+private val MatchMarker = Color(0x66FFD54F)
+
+/** Reads the words off a rendered page, with where each one is. */
+private object PageReader {
+    private val latin by lazy {
+        com.google.mlkit.vision.text.TextRecognition.getClient(
+            com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS
+        )
+    }
+    private val devanagari by lazy {
+        com.google.mlkit.vision.text.TextRecognition.getClient(
+            com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions.Builder().build()
+        )
+    }
+
+    /** [lookingFor] decides the reader: the Devanagari one when the words sought are in that script. */
+    suspend fun words(page: Bitmap, lookingFor: String): List<WordOnPage> {
+        val client = if (lookingFor.any { it in '\u0900'..'\u097F' }) devanagari else latin
+        val found = client.process(com.google.mlkit.vision.common.InputImage.fromBitmap(page, 0)).await()
+        var line = 0
+        return found.textBlocks.flatMap { it.lines }.flatMap { onLine ->
+            val number = line++
+            onLine.elements.mapNotNull { word ->
+                word.boundingBox?.let { box ->
+                    WordOnPage(word.text, box.left.toFloat(), box.top.toFloat(), box.right.toFloat(), box.bottom.toFloat(), number)
+                }
+            }
+        }
+    }
+}
+
 /** What the viewer says when the file it was asked to show is not there. */
 internal object FileGoneWords {
     const val GONE =
@@ -212,6 +251,8 @@ private fun PdfViewerScreen(
     // PdfRenderer allows one open page at a time. Pages that come on screen together used to
     // render at once, and the one that lost was left as a spinner for good.
     val renderLock = remember { Mutex() }
+    // Set once the words a search found have been brought into view on the page it opened on.
+    var broughtIntoView by remember { mutableStateOf(false) }
 
     // Open the PDF
     LaunchedEffect(openFrom) {
@@ -309,7 +350,8 @@ private fun PdfViewerScreen(
                             .padding(32.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Text(text = errorMessage!!, color = PdfColor)
+                        // Said calmly: a file that was moved is not something that went wrong in the app.
+                        Text(text = errorMessage!!, color = CharcoalSoft, fontSize = 15.sp, lineHeight = 22.sp)
                         if (canFind) {
                             Spacer(Modifier.height(16.dp))
                             Button(
@@ -346,6 +388,18 @@ private fun PdfViewerScreen(
                                 isTargetPage = pageIndex == targetPage - 1,
                                 searchQuery = searchQuery,
                                 matchText = matchText,
+                                onMatchAt = { yInCard ->
+                                    // Once, and only if the words are not already in plain sight:
+                                    // a page is taller than the screen, and a match low on it was
+                                    // below the fold with nothing to say so.
+                                    if (!broughtIntoView) {
+                                        broughtIntoView = true
+                                        val layout = listState.layoutInfo
+                                        val viewport = layout.viewportEndOffset - layout.viewportStartOffset
+                                        val wanted = (yInCard - viewport * 0.35f).toInt()
+                                        if (wanted > 0) scope.launch { listState.animateScrollToItem(pageIndex, wanted) }
+                                    }
+                                },
                             )
                         }
                     }
@@ -401,10 +455,31 @@ private fun PdfPageCard(
     isTargetPage: Boolean,
     searchQuery: String,
     matchText: String,
+    /** Told where the match is, in pixels down from the top of this card, once it is found. */
+    onMatchAt: (Float) -> Unit = {},
 ) {
     // The page a search opened on is marked only when the search found words on it.
     val isMatch = isTargetPage && searchQuery.isNotBlank()
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
+    // Where the words are on the page itself. The page is a picture here, whether the PDF has a
+    // text layer or is a scan, so the words are read off the picture, with their places.
+    var match by remember { mutableStateOf(PageMatch.NONE) }
+    var pictureTop by remember { mutableFloatStateOf(0f) }
+    var pictureHeight by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(bitmap, isMatch) {
+        val page = bitmap ?: return@LaunchedEffect
+        if (!isMatch) return@LaunchedEffect
+        match = withContext(Dispatchers.Default) {
+            runCatching {
+                PageMatches.locate(PageReader.words(page, searchQuery + " " + matchText), queryWordsOf(searchQuery), matchText)
+            }.getOrDefault(PageMatch.NONE)
+        }
+    }
+    LaunchedEffect(match, pictureHeight) {
+        val focus = match.focus ?: return@LaunchedEffect
+        val page = bitmap ?: return@LaunchedEffect
+        if (pictureHeight > 0f) onMatchAt(pictureTop + (focus.top + focus.bottom) / 2f / page.height * pictureHeight)
+    }
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
@@ -491,6 +566,10 @@ private fun PdfPageCard(
                         if (bitmap != null) bitmap!!.width.toFloat() / bitmap!!.height
                         else 0.707f // A4 ratio fallback
                     )
+                    .onGloballyPositioned {
+                        pictureTop = it.positionInParent().y
+                        pictureHeight = it.size.height.toFloat()
+                    }
                     .pointerInput(Unit) {
                         detectTransformGestures { _, pan, zoom, _ ->
                             scale = (scale * zoom).coerceIn(1f, 4f)
@@ -506,9 +585,8 @@ private fun PdfPageCard(
                 contentAlignment = Alignment.Center,
             ) {
                 if (bitmap != null) {
-                    Image(
-                        bitmap = bitmap!!.asImageBitmap(),
-                        contentDescription = "Page ${pageIndex + 1}",
+                    // The page and the marks on it move and zoom as one.
+                    Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .graphicsLayer(
@@ -517,7 +595,29 @@ private fun PdfPageCard(
                                 translationX = offsetX,
                                 translationY = offsetY,
                             ),
-                    )
+                    ) {
+                        Image(
+                            bitmap = bitmap!!.asImageBitmap(),
+                            contentDescription = "Page ${pageIndex + 1}",
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        if (match.marks.isNotEmpty()) {
+                            val page = bitmap!!
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                val sx = size.width / page.width
+                                val sy = size.height / page.height
+                                val pad = 2.dp.toPx()
+                                for (word in match.marks) {
+                                    drawRoundRect(
+                                        color = MatchMarker,
+                                        topLeft = Offset(word.left * sx - pad, word.top * sy - pad),
+                                        size = Size((word.right - word.left) * sx + 2 * pad, (word.bottom - word.top) * sy + 2 * pad),
+                                        cornerRadius = CornerRadius(pad, pad),
+                                    )
+                                }
+                            }
+                        }
+                    }
                 } else {
                     CircularProgressIndicator(color = WarmBrown, modifier = Modifier.size(32.dp))
                 }

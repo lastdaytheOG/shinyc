@@ -27,6 +27,14 @@ data class ExpandedQuery(
     val expandedTerms: List<String>,
     val gateTerms: Set<String>,
     val containsKnownAcronym: Boolean,
+    /**
+     * What each recognised abbreviation stands for, lowered: "one time password". A page has
+     * the meaning when it says these words next to each other, in this order; a page that says
+     * "one" somewhere and "time" somewhere else does not.
+     */
+    val meanings: List<String> = emptyList(),
+    /** The abbreviations themselves, as typed, in step with [meanings]. */
+    val abbreviations: List<String> = emptyList(),
 ) {
     /**
      * The single-string form fed to lanes that tokenize internally (BM25, embeddings).

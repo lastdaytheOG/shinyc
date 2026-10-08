@@ -189,6 +189,13 @@ interface VaultDao {
     """)
     fun searchFts(query: String): Flow<List<VaultItem>>
 
+    /**
+     * Whether any stored text matches [match], a full-text expression: `"last work*"` asks for
+     * the word "last" followed directly by a word beginning "work".
+     */
+    @Query("SELECT EXISTS(SELECT 1 FROM vault_fts WHERE vault_fts MATCH :match)")
+    suspend fun anyTextMatches(match: String): Boolean
+
     @Query("SELECT * FROM vault_items WHERE id IN (:ids)")
     suspend fun getByIds(ids: List<String>): List<VaultItem>
     @Query("DELETE FROM vault_items")
@@ -237,6 +244,10 @@ interface VaultDao {
 
     @Query("SELECT COUNT(*) FROM vault_items")
     suspend fun getCount(): Int
+
+    /** How many pictures — screenshots and photos — are in the vault. */
+    @Query("SELECT COUNT(*) FROM vault_items WHERE parentDocumentId IS NULL AND itemType IN ('screenshot', 'photo')")
+    fun observePictureCount(): Flow<Int>
 
     @Query("SELECT EXISTS(SELECT 1 FROM vault_items WHERE pHash = :hash LIMIT 1)")
     suspend fun hashExists(hash: Long): Boolean
@@ -328,6 +339,17 @@ interface VaultDocumentDao {
     /** Counts the document's pieces again. */
     @Query("UPDATE documents SET chunkCount = (SELECT COUNT(*) FROM vault_items WHERE parentDocumentId = :id) WHERE id = :id")
     suspend fun refreshChunkCount(id: String)
+
+    /** Removes the record of this document; its pieces are removed separately. */
+    @Query("DELETE FROM documents WHERE id = :id")
+    suspend fun deleteById(id: String)
+
+    @Query("SELECT COUNT(*) FROM documents")
+    fun observeCount(): Flow<Int>
+
+    /** The documents added last, newest first. */
+    @Query("SELECT * FROM documents ORDER BY addedAt DESC LIMIT :limit")
+    fun observeNewest(limit: Int): Flow<List<VaultDocument>>
 
     /** Removes the record of every document with this hash; its pieces are removed separately. */
     @Query("DELETE FROM documents WHERE contentHash = :hash")

@@ -80,6 +80,14 @@ data class RetrievalRequest(
      * outnumbered by another still fills the list when it alone is asked for.
      */
     val only: ((VaultItem) -> Boolean)? = null,
+    /**
+     * What to look for instead when [RetrievalTuning.relaxEmptyFilter] is set and the plan's
+     * period or amount leaves nothing: the query with those words left in, as plain words.
+     * Null: the same [query] without the filter.
+     */
+    val wordsIfFilterEmpty: String? = null,
+    /** Abbreviations, lowered, that are to be looked for as typed and not by what they stand for. */
+    val plainAbbreviations: Set<String> = emptySet(),
 ) {
     companion object {
         /**
@@ -89,13 +97,28 @@ data class RetrievalRequest(
          * date or amount that matches nothing is dropped rather than leaving it empty; and a
          * word that is as often part of what is being looked for as an instruction ("last",
          * "first") is searched for like any other word.
+         *
+         * [asWords] are the keys of the readings the user has taken back
+         * ([com.amar.vault.Understood.key]): those words are looked for as words.
          */
-        fun forResultList(typed: String, only: ((VaultItem) -> Boolean)? = null): RetrievalRequest {
-            val plan = QueryPlanner.parse(typed, forResultList = true)
+        fun forResultList(typed: String, only: ((VaultItem) -> Boolean)? = null): RetrievalRequest =
+            forResultList(typed, emptySet(), only)
+
+        fun forResultList(
+            typed: String, asWords: Set<String>, only: ((VaultItem) -> Boolean)? = null,
+        ): RetrievalRequest {
+            val plan = QueryPlanner.parse(typed, forResultList = true, asWords = asWords)
+            // The same query with the period and the amount read as words: what is looked for
+            // when they leave nothing. "last month" on its own has no other words at all.
+            val narrowing = plan.understood.filter { it.narrows }.map { it.key }
+            val asPlainWords = if (narrowing.isEmpty()) null
+            else QueryPlanner.parse(typed, forResultList = true, asWords = asWords + narrowing).cleanedQuery
             return RetrievalRequest(
                 plan.cleanedQuery, plan.copy(limit = null),
                 tuning = RetrievalTuning(relaxEmptyFilter = true),
                 only = only,
+                wordsIfFilterEmpty = asPlainWords,
+                plainAbbreviations = com.amar.vault.AcronymDictionary.plainOf(asWords),
             )
         }
     }
@@ -130,6 +153,11 @@ data class RetrievalResult(
      * look-alikes as matches.
      */
     val similarSpellingsOnly: Boolean = false,
+    /**
+     * True when the query's period or amount left nothing and [items] are what its words
+     * found without it. The caller says so: the list is not what the reading asked for.
+     */
+    val filterDropped: Boolean = false,
 )
 
 /**
