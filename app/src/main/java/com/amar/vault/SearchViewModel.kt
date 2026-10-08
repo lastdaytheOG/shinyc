@@ -912,16 +912,24 @@ class SearchViewModel @Inject constructor(
                 val plan = QueryPlanner.parse(q, asWords = asWords)
                 // Page-level hits: the answer's source passages are the best pages, which may
                 // well be several pages of one document.
+                // The pages are looked for by what the question is about. Looked for by every
+                // word of it, the pages that say "is" and "the" most often came first.
+                val about = DirectAnswers.aboutWords(plan.cleanedQuery).joinToString(" ").ifBlank { plan.cleanedQuery }
                 val searchResults = retrievalService.retrieve(
                     com.amar.vault.retrieval.RetrievalRequest(
-                        plan.cleanedQuery, plan,
+                        about, plan,
                         tuning = com.amar.vault.retrieval.RetrievalTuning(onePerDocument = false),
                     )
                 ).items
+                // The answer read straight off those pages, when the question asks for
+                // something written down: no model, and nothing to download.
+                val direct = DirectAnswers.answer(plan.cleanedQuery, searchResults)
                 // Nothing in the period asked about: say that, and what was read as the period.
                 // An answer is not made up from other months, nor by the model from nothing.
                 val nothingInPeriod = if (searchResults.isEmpty()) ReadingWords.nothingInPeriod(plan.understood) else null
-                val sources = searchResults.take(3)
+                // The page the answer was read from is the first source.
+                val sources = (listOfNotNull(searchResults.firstOrNull { it.id == direct?.sourceId }) + searchResults)
+                    .distinctBy { it.id }.take(3)
 
                 // 3. Resolve cards if applicable
                 val aggregator = KnowledgeAggregator(context)
@@ -942,13 +950,18 @@ class SearchViewModel @Inject constructor(
                 }
 
                 // 4. Invoke appropriate engine based on QueryRouter classification tier
-                val answered = if (nothingInPeriod != null) nothingInPeriod else when (routed.tier) {
+                // A question that asks for a sum over many items ("how much did I spend") is
+                // not answered by one fact off one page.
+                val overMany = Regex("(?i)\\b(total|spent|spend|expenses?|kharch|kharcha|sum)\\b").containsMatchIn(q)
+                val answered = if (nothingInPeriod != null) nothingInPeriod
+                else if (direct?.fact != null && !overMany) "⚡ ${direct.text}"
+                else when (routed.tier) {
                     QueryRouter.QueryTier.TIER0_REGEX -> {
-                        val answer = buildFallbackAnswer(q, searchResults)
+                        val answer = buildFallbackAnswer(q, searchResults, direct)
                         "⚡ $answer"
                     }
                     QueryRouter.QueryTier.TIER1_SEARCH -> {
-                        val answer = buildFallbackAnswer(q, searchResults)
+                        val answer = buildFallbackAnswer(q, searchResults, direct)
                         if (searchResults.isEmpty()) {
                             // No search results — let LLM handle it directly as direct chat fallback
                             val chatAnswer = ragService.executeRag(q, emptyList())
@@ -962,7 +975,7 @@ class SearchViewModel @Inject constructor(
                         if (ragAnswer.isNotBlank()) {
                             "🧠 $ragAnswer"
                         } else {
-                            buildFallbackAnswer(q, searchResults)
+                            buildFallbackAnswer(q, searchResults, direct)
                         }
                     }
                 }
@@ -1021,7 +1034,7 @@ class SearchViewModel @Inject constructor(
     // Smart Fallback Smart Answer Builder (formerly in AgenticScreen)
     // ════════════════════════════════════════════════════════════════════════
 
-    private fun buildFallbackAnswer(queryText: String, results: List<VaultItem>): String {
+    private fun buildFallbackAnswer(queryText: String, results: List<VaultItem>, direct: DirectAnswer? = null): String {
         if (results.isEmpty()) {
             return "I couldn't find anything matching \"$queryText\" in your vault."
         }
@@ -1043,7 +1056,9 @@ class SearchViewModel @Inject constructor(
             .any { qLower.contains(it) }
         if (isContactQuery) return buildContactAnswer(allText, results)
 
-        return buildGenericAnswer(qLower, allText, results)
+        // What the best page says about it, in its own words, with where it is — in place of
+        // "Found 3 results" and a line from each.
+        return direct?.text ?: buildGenericAnswer(qLower, allText, results)
     }
 
     private fun buildPaymentAnswer(texts: List<String>, results: List<VaultItem>): String {

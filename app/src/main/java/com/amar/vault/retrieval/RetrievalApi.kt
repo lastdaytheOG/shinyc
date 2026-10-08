@@ -61,6 +61,10 @@ data class RetrievalTuning(
     val wordOrderBonus: Boolean = true,
     /** See [VaultConfig.Retrieval.PAGE_WORDS_BEFORE_TAGS]. */
     val pageWordsBeforeTags: Boolean = VaultConfig.Retrieval.PAGE_WORDS_BEFORE_TAGS,
+    /** See [VaultConfig.Retrieval.NAME_BONUS]; false leaves the bonus out. */
+    val nameBonus: Boolean = true,
+    /** See [VaultConfig.Retrieval.WHOLE_WORDS_FIRST]. */
+    val wholeWordsFirst: Boolean = VaultConfig.Retrieval.WHOLE_WORDS_FIRST,
 )
 
 /**

@@ -235,7 +235,7 @@ class HybridSearchService(
 
         val substringDeferred = async(Dispatchers.IO) {
             substringLane(loweredBaseDeferred.await(), qLower, meanings, budget.substring, tuning.onePerDocument,
-                tuning.pageWordsBeforeTags)
+                tuning.pageWordsBeforeTags, wholeWordsFirst = tuning.wholeWordsFirst)
         }
         // A typed word that is in the vault as typed needs no typo help: its look-alikes are
         // other words ("cloud" for "claude"), not misspellings of it. Null = the previous
@@ -269,6 +269,7 @@ class HybridSearchService(
         val gateWords = typedWords.distinctBy { it.typed } + meanings
         fun gate(missingWords: List<String>) = Gate(
             gateWords, barePhrase, bareWords, wordOrder, legacyTypoHelp, tuning.pageWordsBeforeTags,
+            nameBonus = tuning.nameBonus,
             nearMissing = missingWords.filter { it.length >= 3 }.takeIf { it.isNotEmpty() }
                 ?.let { FuzzyMatcher(it, roots = true) },
         )
@@ -534,7 +535,7 @@ class HybridSearchService(
      */
     private fun substringLane(
         items: List<Candidate>, qLower: String, meanings: List<QueryWord>, limit: Int, onePerDocument: Boolean,
-        pageFirst: Boolean,
+        pageFirst: Boolean, wholeWordsFirst: Boolean = false,
     ): SubstringScan {
         if (qLower.length < 2) return SubstringScan(emptyList(), emptySet())
         val words = QueryWord.of(qLower) + meanings
@@ -546,6 +547,7 @@ class HybridSearchService(
             var hits = 0
             var said = 0
             var onPage = 0
+            var alone = 0
             for (i in words.indices) {
                 val inName = words[i].isIn(c.name)
                 if (!inName && !words[i].isIn(c.text)) continue
@@ -554,9 +556,12 @@ class HybridSearchService(
                 val onThePage = words[i].isIn(c.text, c.pageEnd)
                 if (onThePage) onPage++
                 if (inName || onThePage) said++
+                if (wholeWordsFirst && (words[i].standsAloneIn(c.text, c.pageEnd) || words[i].standsAloneIn(c.name))) alone++
             }
-            // One sort key: the count of words the row says, then the count it has at all.
-            if (hits > 0) matched.add(Matched(c.item, said * SAID_RADIX + hits, onPage))
+            // One sort key: the count of words the row says, then the count it has at all, then
+            // how many of them stand as words of their own. Rows that tie on all of that keep
+            // the order the vault hands them over in, newest first.
+            if (hits > 0) matched.add(Matched(c.item, (said * SAID_RADIX + hits) * SAID_RADIX + alone, onPage))
         }
         matched.sortByDescending { it.key } // stable, like sortedByDescending
         return SubstringScan(
@@ -707,6 +712,7 @@ class HybridSearchService(
         val legacy: Boolean,
         val pageFirst: Boolean,
         val nearMissing: FuzzyMatcher?,
+        val nameBonus: Boolean = true,
     ) {
         /** Where the page ends in a row's lowered text, for the checks below. */
         fun pageEnd(row: RowText): Int = if (pageFirst) row.pageEnd else row.all.length
@@ -827,6 +833,11 @@ class HybridSearchService(
                 }
                 val ratio = said.toDouble() / queryWords.size
                 rrfScores[id] = (rrfScores[id] ?: 0.0) + cfg.WORD_RATIO_BONUS * ratio
+                // A word in what the item is called is worth more than one somewhere on a page.
+                if (gate.nameBonus && name.isNotEmpty()) {
+                    val inName = queryWords.count { it.isIn(name) }
+                    rrfScores[id] = (rrfScores[id] ?: 0.0) + cfg.NAME_BONUS * inName / queryWords.size
+                }
                 gate.wordOrder?.let { order ->
                     val run = maxOf(order.longestRun(page), order.longestRun(name))
                     if (run >= 2) {

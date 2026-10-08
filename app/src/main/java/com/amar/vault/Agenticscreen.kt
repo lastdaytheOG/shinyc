@@ -11,6 +11,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -79,62 +80,10 @@ fun AgenticScreen(
         viewModel.sendAgenticQuery(q)
     }
 
-    if (!isModelReady) {
-        // AI model required block screen
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Cream)
-        ) {
-            Spacer(Modifier.height(54.dp))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(onClick = onBack) {
-                    Text("← Home", color = WarmBrown, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                }
-            }
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                    modifier = Modifier.padding(horizontal = 32.dp)
-                ) {
-                    Text(
-                        text = "AI model required",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = CharcoalSoft
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = "To answer questions on-device, you need to download a local language model first.",
-                        fontSize = 14.sp,
-                        color = WarmBrown,
-                        textAlign = TextAlign.Center,
-                        lineHeight = 20.sp
-                    )
-                    Spacer(Modifier.height(20.dp))
-                    Button(
-                        onClick = onOnboardingClick,
-                        colors = ButtonDefaults.buttonColors(containerColor = CharcoalSoft),
-                        shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
-                    ) {
-                        Text("Download Model", fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-    } else {
+    // Asking needs no language model. This screen used to be blocked until one of 1.6 GB was
+    // downloaded, though a date, an amount or a number is read straight off the page that has
+    // it. With a model, a question that needs putting into words is answered in words too.
+    run {
         var inputText by remember { mutableStateOf("") }
 
         Column(
@@ -231,22 +180,35 @@ fun AgenticScreen(
                                 .fillMaxWidth(),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = "Ask about your vault",
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = WarmBrown,
-                                textAlign = TextAlign.Center
-                            )
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "Ask about your vault",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = WarmBrown,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(Modifier.height(10.dp))
+                                Text(
+                                    text = AskWords.HINT + if (isModelReady) "" else "\n\n" + AskWords.NO_MODEL,
+                                    fontSize = 13.sp,
+                                    lineHeight = 19.sp,
+                                    color = WarmBrownDark,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(horizontal = 24.dp)
+                                )
+                            }
                         }
                     }
                 }
 
-                items(messages) { msg ->
+                itemsIndexed(messages) { index, msg ->
                     if (msg.isUser) {
                         UserBubble(msg.text)
                     } else {
-                        AgentBubble(msg = msg, onOpenItem = onOpenItem)
+                        // The question this answers: its sources open on the words it asked about.
+                        val question = messages.take(index).lastOrNull { it.isUser }?.text.orEmpty()
+                        AgentBubble(msg = msg, question = question, onOpenItem = onOpenItem)
                     }
                 }
 
@@ -335,8 +297,10 @@ private fun UserBubble(text: String) {
 @Composable
 private fun AgentBubble(
     msg: ChatMessage,
+    question: String = "",
     onOpenItem: (String) -> Unit
 ) {
+    val context = LocalContext.current
     Column(modifier = Modifier.fillMaxWidth(0.9f)) {
         Box(
             modifier = Modifier
@@ -368,7 +332,11 @@ private fun AgentBubble(
             )
             Spacer(Modifier.height(6.dp))
             msg.sources.forEach { source ->
-                SourceItemRow(source = source, onOpen = { onOpenItem(source.id) })
+                SourceItemRow(
+                    source = source,
+                    question = question,
+                    onOpen = { if (!AnswerSources.open(context, source, question)) onOpenItem(source.id) },
+                )
                 Spacer(Modifier.height(4.dp))
             }
         }
@@ -378,8 +346,10 @@ private fun AgentBubble(
 @Composable
 private fun SourceItemRow(
     source: VaultItem,
+    question: String = "",
     onOpen: () -> Unit
 ) {
+    val words = remember(source.id, question) { AnswerSources.wordsOn(source, question) }
     val title = source.sourceFile.takeIf { it.isNotBlank() } ?: when (source.itemType) {
         ItemType.SCREENSHOT -> "Screenshot"
         ItemType.PHOTO -> "Photo"
@@ -416,8 +386,20 @@ private fun SourceItemRow(
                     overflow = TextOverflow.Ellipsis
                 )
                 Spacer(Modifier.height(2.dp))
+                // Which page, and the words on it: a source is checked at a glance, or with a tap.
+                words?.let {
+                    Text(
+                        text = it,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp,
+                        color = WarmBrownDark,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(2.dp))
+                }
                 Text(
-                    text = formatRelativeTimeShort(source.timestamp),
+                    text = listOfNotNull(source.pdfPage?.let { "Page $it" }, formatRelativeTimeShort(source.timestamp)).joinToString(" · "),
                     fontSize = 11.sp,
                     color = WarmBrown
                 )
@@ -435,6 +417,47 @@ private fun SourceItemRow(
                 )
             }
         }
+    }
+}
+
+/** What the Ask screen says before anything is asked. */
+internal object AskWords {
+    const val HINT = "Ask for a date, an amount or a number — \u201Cwhen is the last working day\u201D, " +
+        "\u201Chow much did I pay Vikram\u201D. The answer comes with the page it was read from."
+    const val NO_MODEL = "Works without a language model. Downloading one (the gear, top right) adds answers in " +
+        "sentences and summaries."
+}
+
+/** How one of an answer's sources is shown and opened. */
+internal object AnswerSources {
+
+    /** The words on [source] that the [question] is about, with a little around them; null when it says none. */
+    fun wordsOn(source: VaultItem, question: String): String? =
+        MatchExcerpt.of(source.ocrText, DirectAnswers.aboutWords(question))
+
+    /**
+     * Opens [source] where the answer is: a PDF on its page with the words marked, a picture
+     * full screen. False for anything else, which the caller opens its own way. (Before, every
+     * source opened the details screen, and the page had to be found by hand.)
+     */
+    fun open(context: android.content.Context, source: VaultItem, question: String): Boolean {
+        if (source.itemType.isImage) {
+            AmarImageViewerActivity.open(context, source)
+            return true
+        }
+        if (source.itemType != ItemType.PDF || source.uri.startsWith("http", ignoreCase = true)) return false
+        val address = com.amar.vault.indexing.DocumentRelink.currentAddress(source.uri)
+        val uri = com.amar.vault.share.open.ShareContentUri.resolve(context, address) ?: return false
+        val page = source.pdfPage
+        PdfViewerActivity.open(
+            context = context,
+            uri = uri,
+            page = page ?: 0,
+            searchQuery = if (page != null) DirectAnswers.aboutWords(question).joinToString(" ") else "",
+            fileName = source.title ?: source.sourceFile,
+            matchText = wordsOn(source, question).orEmpty(),
+        )
+        return true
     }
 }
 
