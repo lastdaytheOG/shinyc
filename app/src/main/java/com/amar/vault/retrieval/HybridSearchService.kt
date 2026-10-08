@@ -162,6 +162,9 @@ class HybridSearchService(
                 // and its first rows may all be of another.
                 val fetch = if (tuning.onePerDocument || only != null)
                     budget.bm25 * VaultConfig.Retrieval.BM25_DOC_OVERFETCH else budget.bm25
+                // Just after the app is opened the engine is still being filled; the list
+                // must not depend on how soon the query was typed.
+                lexical.awaitReady()
                 hydrateRanked(lexical.bm25(expandedQuery, fetch), tuning).applyStrictFilter()
                     .let { if (tuning.onePerDocument) it.firstPerDocument(budget.bm25) else it }
             } catch (e: Exception) {
@@ -268,12 +271,15 @@ class HybridSearchService(
         // it chose — keyword, substring, typo, then vector, the order they are awaited below.
         //
         // Unless that page has less to show for the query than the page a later keyword lane
-        // names ([Gate.standing]). The engine names a page for sharing three-letter pieces
-        // with a word it does not know as a word; for "brenda" that can as well be a page
-        // that says "break", "current" and "standard" as the one that says "Brendan". Left as
-        // the document's row, it is a result with nothing on it — or, once the gate has looked
-        // at it, no result at all, and the document that says "Brendan" is gone from the list.
-        // It names a page that is only tagged with a word as readily as one that says it, too.
+        // names ([Gate.standing]). The engine indexes a page's tags and its document's name
+        // with its text, and names a page that is only tagged with a word, or only belongs
+        // to a file called by it, as readily as one that says it — sooner, if it is the
+        // shorter page. Left as the document's row, that is a result with nothing on it to
+        // show for the query. (Until the engine was rewritten it also named pages for
+        // sharing three-letter pieces with a word it did not know: for "brenda", a page that
+        // said "break", "current" and "standard". It now looks for the word inside longer
+        // words and then for near spellings, as the lanes below do; this rule stays as the
+        // judge of whatever it names.)
         // A page that says a query word is never swapped for another once it has been shown.
         val documentRow = HashMap<String, VaultItem>()
         val standings = HashMap<String, Int>()
@@ -504,11 +510,19 @@ class HybridSearchService(
     /** The scan lane's rows, and which of the query's words it found anywhere at all. */
     private class SubstringScan(val hits: List<VaultItem>, val wordsFound: Set<String>)
 
+    /** A row the scan lane matched: its sort key, and how many query words are on its page. */
+    private class Matched(val item: VaultItem, val key: Int, val onPage: Int)
+
     /**
      * With [pageFirst], rows are ranked by how many of the query's words they say — on their
      * page or in their name, rather than among their tags — and only then by how many they
      * have counting the tags. So a document's first row here is one that says a word of the
      * query whenever any of its rows does.
+     *
+     * Every row of a document carries the document's name, so by a word of the name they all
+     * rank alike. The document keeps the place of its first row, and is named by the row,
+     * among those that rank with it, with the most of the query's words on the page itself
+     * ([firstPerDocumentByItsPage]).
      */
     private fun substringLane(
         items: List<Candidate>, qLower: String, limit: Int, onePerDocument: Boolean, pageFirst: Boolean,
@@ -518,25 +532,54 @@ class HybridSearchService(
         val found = BooleanArray(words.size)
         // Same result set and order as the previous filter → sortedByDescending → take:
         // any-word match to qualify, stable sort by match count descending, first [limit].
-        val matched = ArrayList<Pair<VaultItem, Int>>()
+        val matched = ArrayList<Matched>()
         for (c in items) {
             var hits = 0
             var said = 0
+            var onPage = 0
             for (i in words.indices) {
                 val inName = words[i].isIn(c.name)
                 if (!inName && !words[i].isIn(c.text)) continue
                 hits++; found[i] = true
-                if (pageFirst && (inName || words[i].isIn(c.text, c.pageEnd))) said++
+                if (!pageFirst) continue
+                val onThePage = words[i].isIn(c.text, c.pageEnd)
+                if (onThePage) onPage++
+                if (inName || onThePage) said++
             }
             // One sort key: the count of words the row says, then the count it has at all.
-            if (hits > 0) matched.add(c.item to said * SAID_RADIX + hits)
+            if (hits > 0) matched.add(Matched(c.item, said * SAID_RADIX + hits, onPage))
         }
-        matched.sortByDescending { it.second } // stable, like sortedByDescending
-        val ranked = matched.map { it.first }
+        matched.sortByDescending { it.key } // stable, like sortedByDescending
         return SubstringScan(
-            hits = if (onePerDocument) ranked.firstPerDocument(limit) else ranked.take(limit),
+            hits = when {
+                !onePerDocument -> matched.take(limit).map { it.item }
+                pageFirst -> firstPerDocumentByItsPage(matched, limit)
+                else -> matched.map { it.item }.firstPerDocument(limit)
+            },
             wordsFound = words.indices.filter { found[it] }.mapTo(HashSet()) { words[it].typed },
         )
+    }
+
+    /**
+     * The first [limit] documents of [ranked], in the order of their first rows, each named by
+     * the row with the most query words on its page among its rows that rank with its first.
+     */
+    private fun firstPerDocumentByItsPage(ranked: List<Matched>, limit: Int): List<VaultItem> {
+        val place = HashMap<String, Int>()
+        val out = ArrayList<Matched>(minOf(ranked.size, limit))
+        for (row in ranked) {
+            val document = documentKey(row.item)
+            val at = place[document]
+            if (at == null) {
+                if (out.size < limit) {
+                    place[document] = out.size
+                    out.add(row)
+                }
+            } else if (row.key == out[at].key && row.onPage > out[at].onPage) {
+                out[at] = row
+            }
+        }
+        return out.map { it.item }
     }
 
     /**
@@ -639,9 +682,10 @@ class HybridSearchService(
      * A row that has none of them stays, with [legacy], whenever a keyword lane named it —
      * the behaviour before typo help was limited to missing words. Without [legacy] it stays
      * only when [nearMissing] finds in it a near spelling of a typed word that is nowhere in
-     * the vault as typed. Being named by the keyword engine is not enough for that: the engine
-     * names a row for sharing a few three-letter pieces with the word, wherever in the row
-     * they are, which is how a calendar came up for "brenda".
+     * the vault as typed. Being named by the keyword engine is not enough for that: what the
+     * engine names is a candidate, and the row itself has to show the word or the near
+     * spelling. (The engine once named a row for sharing a few three-letter pieces with the
+     * word, wherever in the row they were, which is how a calendar came up for "brenda".)
      *
      * With [pageFirst], what a row says — on its page, in its name — is told apart from its
      * tags ([RowText]); without it the tags are read as part of the page.
@@ -665,6 +709,9 @@ class HybridSearchService(
         fun wordsSaid(text: String, pageEnd: Int, name: String): Int =
             words.count { it.isIn(name) || it.isIn(text, pageEnd) }
 
+        /** Whether the page itself says one of them, whatever the row is called. */
+        fun pageSaysAWord(text: String, pageEnd: Int): Boolean = words.any { it.isIn(text, pageEnd) }
+
         fun hasAPartOfAWord(text: String, name: String): Boolean =
             bareWords.any { text.contains(it) || name.contains(it) }
 
@@ -676,14 +723,16 @@ class HybridSearchService(
                 (name.isNotEmpty() && nearMissing.matches(name)))
 
         /**
-         * What a row has to show for the query, most first: it says a word of it (4); it is
-         * tagged with one (3); it says a near spelling of a word the vault does not have (2);
-         * it is tagged with one (1); none of these (0).
+         * What a row has to show for the query, most first: its page says a word of it (5);
+         * only its name does, which every row of a document shares (4); it is tagged with one
+         * (3); it says a near spelling of a word the vault does not have (2); it is tagged
+         * with one (1); none of these (0).
          */
         fun standing(row: RowText, name: String): Int {
             val text = row.all
             val pageEnd = pageEnd(row)
             return when {
+                pageFirst && pageSaysAWord(text, pageEnd) -> 5
                 wordsSaid(text, pageEnd, name) > 0 -> 4
                 wordsIn(text, name) > 0 || hasAPartOfAWord(text, name) -> 3
                 saysANearSpelling(text, pageEnd, name) -> 2

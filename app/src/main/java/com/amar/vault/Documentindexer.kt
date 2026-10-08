@@ -257,7 +257,7 @@ class DocumentIndexer private constructor(private val context: Context) {
                 is com.amar.vault.indexing.DuplicateDetector.DocVerdict.Partial -> {
                     VaultLog.w(TAG, "Repairing partial index (${verdict.existingCount}/${verdict.expectedCount} chunks): $fileName")
                     IndexMetrics.increment(IndexMetrics.Event.DOC_PARTIAL_REPAIR)
-                    persister.deletePartialByContentHash(contentHash)
+                    bm25.removeDocuments(persister.deletePartialByContentHash(contentHash))
                 }
                 is com.amar.vault.indexing.DuplicateDetector.DocVerdict.New -> {
                     // No prior rows for this content — index fresh.
@@ -276,9 +276,11 @@ class DocumentIndexer private constructor(private val context: Context) {
 
             // Atomic: the document's record and all its chunk rows persist, or none of it does
             // — via the single Room writer.
-            prof.timedStage(ProfilerStage.ROOM) {
+            val replaced = prof.timedStage(ProfilerStage.ROOM) {
                 persister.persistDocument(document, chunkItems)
             }
+            // Pages of an earlier reading of this file that are not among the new ones.
+            bm25.removeDocuments(replaced)
 
             // commit-then-index: feed BM25 only after the rows are durably committed.
             // BM25 addDocument is idempotent (re-indexes an existing id), so repairs are safe.
@@ -358,7 +360,7 @@ class DocumentIndexer private constructor(private val context: Context) {
 
         // Clears any prior (partial) rows for this exact source, and records the document
         // before its first page, so that no page is ever stored without it.
-        persister.beginDocument(document)
+        bm25.removeDocuments(persister.beginDocument(document))
 
         progress?.emit(IndexProgress(fileName, IndexProgress.Phase.EXTRACTING))
         var committed = 0

@@ -304,14 +304,15 @@ class IndexingBenchmark(
     }
 
     private fun bm25AddProbe(): MetricValue = try {
-        // Unique nonsense tokens: cannot collide with any real query; the in-memory
-        // entry disappears at next launch (BM25 rehydrates from Room, where no probe row exists).
+        // Unique nonsense tokens: cannot collide with any real query. Taken out again at once.
         val nonce = UUID.randomUUID().toString().replace("-", "")
         val text = (1..50).joinToString(" ") { "zzprobe${nonce}tok$it" }
         val t0 = System.nanoTime()
         bm25.addDocument("benchmark-probe-$nonce", text)
-        MetricValue("probe.bm25Add", (System.nanoTime() - t0) / 1_000_000.0, "ms", false,
-            "one 50-token document into the live native BM25 index (transient until restart)")
+        val elapsed = (System.nanoTime() - t0) / 1_000_000.0
+        bm25.removeDocument("benchmark-probe-$nonce")
+        MetricValue("probe.bm25Add", elapsed, "ms", false,
+            "one 50-token document into the live native BM25 index (removed immediately)")
     } catch (e: Exception) {
         MetricValue("probe.bm25Add", null, "ms", false, "probe failed: ${e.message}")
     }

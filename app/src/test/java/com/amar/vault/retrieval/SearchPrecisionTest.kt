@@ -67,9 +67,13 @@ class SearchPrecisionTest {
     }
 
     /**
-     * Behaves as the native keyword engine does where it matters here: a row is a hit for a
-     * word it has as a whole word; and for a word no row has whole, any row that shares
+     * Behaves as the native keyword engine did when these reports were made: a row is a hit
+     * for a word it has as a whole word; and for a word no row has whole, any row that shares
      * enough three-letter pieces with it — which is how "calendar" came up for "brenda".
+     *
+     * The engine no longer guesses like that (it looks for the word inside longer words, then
+     * for near spellings). This stand-in is kept as it was on purpose: the rules tested here
+     * have to hold whatever the engine names, and this names more than the real one does.
      */
     private class EngineLike(private val all: List<VaultItem>) : LexicalRetriever {
         private fun words(text: String) = text.lowercase().split(Regex("[^a-z0-9]+")).filter { it.isNotEmpty() }

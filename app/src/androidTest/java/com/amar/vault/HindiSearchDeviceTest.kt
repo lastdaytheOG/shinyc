@@ -70,6 +70,7 @@ class HindiSearchDeviceTest {
     fun remove() = runBlocking {
         services.database().openHelper.writableDatabase
             .execSQL("DELETE FROM vault_items WHERE id LIKE '$PREFIX%'")
+        services.bm25Index().removeDocuments(corpus.map { it.id })
     }
 
     private fun VaultItem.asRow() = StashItemWithVaultItem(
@@ -92,6 +93,14 @@ class HindiSearchDeviceTest {
     fun theKeywordEngineKnowsADevanagariWord() {
         val ids = services.lexicalRetriever().bm25("प्रशिक्षण", 300)
         assertTrue("engine hits: $ids", "${PREFIX}syllabus_chunk0" in ids)
+    }
+
+    @Test
+    fun theKeywordEngineKnowsAWordThatEndsAtADanda() {
+        // "जाए।" on the page. The engine used to keep the danda on the word, so it did not
+        // know "जाए" and the page was found by the scan of every row alone.
+        val ids = services.lexicalRetriever().bm25("जाए", 300)
+        assertTrue("engine hits: $ids", "${PREFIX}circular_chunk0" in ids)
     }
 
     @Test

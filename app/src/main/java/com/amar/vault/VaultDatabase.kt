@@ -135,6 +135,7 @@ data class TextForTagging(
 
 /** What the keyword engine is filled from when the app starts ([com.amar.vault.retrieval.KeywordText]). */
 data class VaultItemSearchData(
+    val rowId: Long,
     val id: String,
     val ocrText: String,
     val tags: String,
@@ -193,8 +194,23 @@ interface VaultDao {
     @Query("DELETE FROM vault_items")
     suspend fun deleteAll()
 
-    @Query("SELECT id, ocrText, tags, itemType, sourceFile, title FROM vault_items")
+    @Query("SELECT rowid AS rowId, id, ocrText, tags, itemType, sourceFile, title FROM vault_items ORDER BY rowid")
     suspend fun getAllSearchableData(): List<VaultItemSearchData>
+
+    /** The same, a batch at a time: the rows after [afterRowId], in the order they were stored. */
+    @Query("""
+        SELECT rowid AS rowId, id, ocrText, tags, itemType, sourceFile, title FROM vault_items
+        WHERE rowid > :afterRowId ORDER BY rowid LIMIT :limit
+    """)
+    suspend fun searchableDataAfter(afterRowId: Long, limit: Int): List<VaultItemSearchData>
+
+    /** The ids of the chunk rows [deleteChunksByContentHash] removes. */
+    @Query("SELECT id FROM vault_items WHERE contentHash = :hash AND parentDocumentId IS NOT NULL")
+    suspend fun chunkIdsByContentHash(hash: String): List<String>
+
+    /** The ids of the chunk rows [deleteChunksOfDocument] removes. */
+    @Query("SELECT id FROM vault_items WHERE parentDocumentId = :documentId")
+    suspend fun chunkIdsOfDocument(documentId: String): List<String>
 
     @Query("SELECT * FROM vault_items ORDER BY timestamp DESC")
     fun getAllItems(): Flow<List<VaultItem>>

@@ -13,6 +13,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -123,6 +124,28 @@ class DocumentRecordTest {
     }
 
     @Test
+    fun removingADocumentsPiecesSaysWhichRowsWent() = runBlocking {
+        // The keyword engine is told to forget exactly these. Before it could, the pages of
+        // a document that was read again stayed in it until the app was restarted.
+        val act = document("act", "h1")
+        assertEquals("nothing was stored yet", emptyList<String>(), persister.persistDocument(act, pieces(act, 0..4)))
+
+        // Read again, and shorter: the pages it no longer has are the ones that went.
+        assertEquals(listOf("act_chunk3", "act_chunk4"), persister.persistDocument(act, pieces(act, 0..2)).sorted())
+
+        // Read again page by page: everything stored of it goes first.
+        assertEquals(listOf("act_chunk0", "act_chunk1", "act_chunk2"), persister.beginDocument(act).sorted())
+        persister.appendDocumentChunks("act", pieces(act, 0..1))
+
+        // The same file under another id: found by its hash.
+        val again = document("act-again", "h1")
+        assertEquals(listOf("act_chunk0", "act_chunk1"), persister.beginDocument(again).sorted())
+        persister.appendDocumentChunks("act-again", pieces(again, 0..0))
+        assertEquals(listOf("act-again_chunk0"), persister.deletePartialByContentHash("h1"))
+        assertEquals(emptyList<String>(), persister.deletePartialByContentHash("h1"))
+    }
+
+    @Test
     fun theSavedItemOfASharedDocumentIsNotOneOfItsPieces() = runBlocking {
         // The saved item has the document's id and its hash, and a Saved entry hangs off it.
         val saved = VaultItem(
@@ -133,9 +156,10 @@ class DocumentRecordTest {
         db.stashItemDao().insertOrUpdate(StashItem(id = "stash", vaultItemId = "bill", category = "Bills", savedAt = 1L, sourceApp = ""))
 
         val bill = document("bill", "h1")
-        persister.persistDocument(bill, pieces(bill, 0..2))
-        persister.beginDocument(bill)                 // read again from the start
-        persister.deletePartialByContentHash("h1")    // and repaired
+        val removed = persister.persistDocument(bill, pieces(bill, 0..2)) +
+            persister.beginDocument(bill) +                 // read again from the start
+            persister.deletePartialByContentHash("h1")      // and repaired
+        assertTrue("the saved item is never among the rows removed: $removed", "bill" !in removed)
 
         assertEquals(listOf(saved), db.vaultDao().getAll())
         assertEquals(listOf("stash"), db.stashItemDao().getStashItemsByType("SAVED").first().map { it.stashId })

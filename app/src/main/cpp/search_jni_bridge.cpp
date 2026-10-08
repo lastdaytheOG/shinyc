@@ -2,87 +2,115 @@
 #include <string>
 #include <vector>
 #include "SearchEngine.h"
+#include "WordCutter.h"
 
-// Global engine pointer (per spec — single instance, managed by Kotlin lifecycle).
-SearchEngine* engine = nullptr;
+// Each NativeSearchEngine object on the Kotlin side owns one engine and holds its address.
+// The app has one for its whole life; a test can have one of its own.
+//
+// Text and queries arrive as they are and are cut into words here (WordCutter), by the table
+// the Kotlin side installs when the library is loaded.
+
+namespace {
+
+WordCutter cutter;
+
+SearchEngine* engineAt(jlong handle) { return reinterpret_cast<SearchEngine*>(handle); }
+
+/** The words of a Java string and, when [more] is given, of that one after it. */
+std::u16string wordsOf(JNIEnv* env, jstring string, jstring more = nullptr) {
+    const jsize length = env->GetStringLength(string);
+    const jsize moreLength = more != nullptr ? env->GetStringLength(more) : 0;
+    // A space between the two, so that no word runs from one into the other.
+    std::u16string text(static_cast<size_t>(length) + 1 + static_cast<size_t>(moreLength), u' ');
+    if (length > 0) env->GetStringRegion(string, 0, length, reinterpret_cast<jchar*>(&text[0]));
+    if (moreLength > 0) {
+        env->GetStringRegion(more, 0, moreLength, reinterpret_cast<jchar*>(&text[length + 1]));
+    }
+    cutter.cut(text);
+    return text;
+}
+
+/** An item id. It only has to come back out as it went in, which this form does. */
+std::string idOf(JNIEnv* env, jstring string) {
+    const char* chars = env->GetStringUTFChars(string, nullptr);
+    std::string id(chars);
+    env->ReleaseStringUTFChars(string, chars);
+    return id;
+}
+
+}  // namespace
 
 extern "C" {
 
-// =============================================================================
-// Lifecycle
-// =============================================================================
-
+/** Once, before anything is added: KeywordWords.table. */
 JNIEXPORT void JNICALL
-Java_com_amar_vault_NativeSearchEngine_initEngine(JNIEnv *env, jobject thiz) {
-    if (engine == nullptr) {
-        engine = new SearchEngine();
-    }
+Java_com_amar_vault_NativeSearchEngine_nativeInstallWords(JNIEnv* env, jclass, jcharArray table) {
+    if (env->GetArrayLength(table) != static_cast<jsize>(WordCutter::TABLE_SIZE)) return;
+    jchar* entries = env->GetCharArrayElements(table, nullptr);
+    cutter.install(reinterpret_cast<const char16_t*>(entries));
+    env->ReleaseCharArrayElements(table, entries, JNI_ABORT);
+}
+
+/** The words of [text] as the engine is given them, a space between them: for tests. */
+JNIEXPORT jstring JNICALL
+Java_com_amar_vault_NativeSearchEngine_nativeWords(JNIEnv* env, jclass, jstring text) {
+    const std::u16string words = wordsOf(env, text);
+    return env->NewString(reinterpret_cast<const jchar*>(words.data()), static_cast<jsize>(words.size()));
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_amar_vault_NativeSearchEngine_nativeCreate(JNIEnv*, jobject) {
+    return reinterpret_cast<jlong>(new SearchEngine());
 }
 
 JNIEXPORT void JNICALL
-Java_com_amar_vault_NativeSearchEngine_destroyEngine(JNIEnv *env, jobject thiz) {
-    if (engine != nullptr) {
-        delete engine;
-        engine = nullptr;
-    }
+Java_com_amar_vault_NativeSearchEngine_nativeDestroy(JNIEnv*, jobject, jlong handle) {
+    delete engineAt(handle);
 }
-
-// =============================================================================
-// Data Feeding
-// =============================================================================
 
 JNIEXPORT void JNICALL
-Java_com_amar_vault_NativeSearchEngine_addDocument(JNIEnv *env, jobject thiz,
-                                                          jstring docId, jstring text) {
-    if (engine == nullptr) return;
-
-    const char *c_docId = env->GetStringUTFChars(docId, nullptr);
-    const char *c_text  = env->GetStringUTFChars(text, nullptr);
-
-    engine->addDocument(std::string(c_docId), std::string(c_text));
-
-    env->ReleaseStringUTFChars(docId, c_docId);
-    env->ReleaseStringUTFChars(text, c_text);
+Java_com_amar_vault_NativeSearchEngine_nativeAdd(JNIEnv* env, jobject, jlong handle,
+                                                 jstring docId, jstring text, jstring more) {
+    engineAt(handle)->addDocument(idOf(env, docId), wordsOf(env, text, more));
 }
 
-// =============================================================================
-// Querying
-// =============================================================================
+JNIEXPORT jboolean JNICALL
+Java_com_amar_vault_NativeSearchEngine_nativeRemove(JNIEnv* env, jobject, jlong handle, jstring docId) {
+    return engineAt(handle)->removeDocument(idOf(env, docId)) ? JNI_TRUE : JNI_FALSE;
+}
 
 JNIEXPORT jobjectArray JNICALL
-Java_com_amar_vault_NativeSearchEngine_search(JNIEnv *env, jobject thiz, jstring query) {
+Java_com_amar_vault_NativeSearchEngine_nativeSearch(JNIEnv* env, jobject, jlong handle,
+                                                    jstring query, jint limit) {
+    const std::vector<std::string> ids = engineAt(handle)->search(
+            wordsOf(env, query), limit > 0 ? static_cast<size_t>(limit) : 0);
+
     jclass stringClass = env->FindClass("java/lang/String");
-
-    if (engine == nullptr) {
-        return env->NewObjectArray(0, stringClass, nullptr);
+    jobjectArray result = env->NewObjectArray(static_cast<jsize>(ids.size()), stringClass, nullptr);
+    for (size_t i = 0; i < ids.size(); i++) {
+        jstring id = env->NewStringUTF(ids[i].c_str());
+        env->SetObjectArrayElement(result, static_cast<jsize>(i), id);
+        env->DeleteLocalRef(id);
     }
-
-    const char *c_query = env->GetStringUTFChars(query, nullptr);
-    std::vector<std::string> results = engine->search(std::string(c_query));
-    env->ReleaseStringUTFChars(query, c_query);
-
-    // Convert C++ vector<string> → Java String[]
-    jobjectArray javaResults = env->NewObjectArray(
-            static_cast<jsize>(results.size()), stringClass, nullptr);
-
-    for (size_t i = 0; i < results.size(); i++) {
-        jstring javaString = env->NewStringUTF(results[i].c_str());
-        env->SetObjectArrayElement(javaResults, static_cast<jsize>(i), javaString);
-        env->DeleteLocalRef(javaString);
-    }
-
-    return javaResults;
+    return result;
 }
-
-// =============================================================================
-// Clear
-// =============================================================================
 
 JNIEXPORT void JNICALL
-Java_com_amar_vault_NativeSearchEngine_clear(JNIEnv *env, jobject thiz) {
-    if (engine != nullptr) {
-        engine->clear();
-    }
+Java_com_amar_vault_NativeSearchEngine_nativeClear(JNIEnv*, jobject, jlong handle) {
+    engineAt(handle)->clear();
 }
 
-} // extern "C"
+/** items, words, entries, removed items not yet cleaned out. */
+JNIEXPORT jlongArray JNICALL
+Java_com_amar_vault_NativeSearchEngine_nativeStats(JNIEnv* env, jobject, jlong handle) {
+    const SearchEngine::Stats stats = engineAt(handle)->stats();
+    const jlong values[4] = {
+            static_cast<jlong>(stats.items), static_cast<jlong>(stats.words),
+            static_cast<jlong>(stats.entries), static_cast<jlong>(stats.removedKept),
+    };
+    jlongArray result = env->NewLongArray(4);
+    env->SetLongArrayRegion(result, 0, 4, values);
+    return result;
+}
+
+}  // extern "C"

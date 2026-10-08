@@ -18,6 +18,12 @@ interface LexicalRetriever {
     /** Native BM25 candidate ids (already capped by the engine); bounded to [limit]. */
     fun bm25(query: String, limit: Int): List<String>
 
+    /**
+     * Returns once the engine holds everything that was stored when the app started. Until
+     * then [bm25] answers from part of the vault.
+     */
+    suspend fun awaitReady() {}
+
     /** FTS4 token-match candidate ids. Only used by the candidate-bounded path. */
     suspend fun fts(query: String, limit: Int): List<String>
 }
@@ -25,10 +31,15 @@ interface LexicalRetriever {
 class DefaultLexicalRetriever(
     private val db: VaultDatabase,
     private val bm25Index: Bm25Index,
+    private val fill: KeywordIndexFill? = null,
 ) : LexicalRetriever {
 
     override fun bm25(query: String, limit: Int): List<String> =
-        bm25Index.search(query).take(limit)
+        bm25Index.search(query, limit)
+
+    override suspend fun awaitReady() {
+        fill?.awaitFilled()
+    }
 
     override suspend fun fts(query: String, limit: Int): List<String> = try {
         // FTS4 MATCH; guarded because raw queries can contain characters FTS rejects.

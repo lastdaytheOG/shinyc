@@ -6,6 +6,7 @@ import com.amar.vault.retrieval.BoostConfig
 import com.amar.vault.retrieval.DefaultLexicalRetriever
 import com.amar.vault.retrieval.DefaultSemanticRetriever
 import com.amar.vault.retrieval.HybridSearchService
+import com.amar.vault.retrieval.KeywordIndexFill
 import com.amar.vault.retrieval.LanguageModel
 import com.amar.vault.retrieval.LexicalRetriever
 import com.amar.vault.retrieval.NativeBm25Index
@@ -84,8 +85,13 @@ object VaultModule {
 
     @Provides
     @Singleton
-    fun provideLexicalRetriever(db: VaultDatabase, bm25: Bm25Index): LexicalRetriever =
-        DefaultLexicalRetriever(db, bm25)
+    fun provideKeywordIndexFill(db: VaultDatabase, bm25: Bm25Index): KeywordIndexFill =
+        KeywordIndexFill(db, bm25)
+
+    @Provides
+    @Singleton
+    fun provideLexicalRetriever(db: VaultDatabase, bm25: Bm25Index, fill: KeywordIndexFill): LexicalRetriever =
+        DefaultLexicalRetriever(db, bm25, fill)
 
     @Provides
     @Singleton

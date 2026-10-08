@@ -21,5 +21,30 @@ object KeywordText {
         of(row.ocrText, row.tags, row.itemType, row.sourceFile, row.title)
 
     fun of(text: String, tags: String, type: ItemType, sourceFile: String?, title: String?): String =
-        "$text $tags ${type.stored} ${SearchableName.of(type, sourceFile, title)}"
+        "$text ${besidesTheText(tags, type, SearchableName.of(type, sourceFile, title))}"
+
+    /** What a row is indexed by besides its text: [of] is the text, a space, and this. */
+    private fun besidesTheText(tags: String, type: ItemType, name: String): String =
+        "$tags ${type.stored} $name"
+
+    /**
+     * For many rows one after another, as when the engine is filled at start-up: what each is
+     * indexed by besides its text. The engine takes the two side by side
+     * ([Bm25Index.addDocument]), which saves writing every row's text out again with a few
+     * words on the end; and every piece of a document carries the document's file name, whose
+     * searchable form is worked out here once for each name. Each of the two took longer than
+     * the engine takes to index the row.
+     */
+    class ForManyRows {
+        private val nameOfFile = HashMap<String, String>()
+
+        fun besidesTheText(row: VaultItemSearchData): String {
+            val name = if (row.title != null || !row.itemType.isDocument) {
+                SearchableName.of(row.itemType, row.sourceFile, row.title)
+            } else {
+                nameOfFile.getOrPut(row.sourceFile) { SearchableName.of(row.itemType, row.sourceFile, null) }
+            }
+            return besidesTheText(row.tags, row.itemType, name)
+        }
+    }
 }

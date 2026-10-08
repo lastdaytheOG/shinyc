@@ -4,11 +4,13 @@ import com.amar.vault.ItemType
 import com.amar.vault.VaultItem
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -167,5 +169,40 @@ class HybridSearchProgressiveTest {
         val everyEngineHit = RetrievalTuning(typoHelpOnlyForMissingWords = false)
         assertEquals(listOf("z", "a", "m"), svc.retrieve(RetrievalRequest("budget", tuning = everyEngineHit)).items.ids())
         assertTrue("and by default they are not listed at all", svc.retrieve(RetrievalRequest("budget")).items.isEmpty())
+    }
+
+    /**
+     * The engine as it is just after the app is opened: it answers from what it holds so far
+     * (here, nothing) until [filled] completes. [waits] is whether it says so to the service.
+     */
+    private class FillingLexical(
+        private val filled: CompletableDeferred<Unit>,
+        private val ranked: List<String>,
+        private val waits: Boolean,
+    ) : LexicalRetriever {
+        override fun bm25(query: String, limit: Int) = if (filled.isCompleted) ranked.take(limit) else emptyList()
+        override suspend fun fts(query: String, limit: Int) = emptyList<String>()
+        override suspend fun awaitReady() { if (waits) filled.await() }
+    }
+
+    @Test
+    fun aSearchTypedWhileTheEngineIsBeingFilledWaitsForIt() = runBlocking {
+        // Only the engine names these rows, so the list shows whether it was asked too early.
+        val items = listOf(item("a", "alpha"), item("m", "mike"), item("z", "zulu"))
+        val request = RetrievalRequest("budget", tuning = RetrievalTuning(typoHelpOnlyForMissingWords = false))
+        fun service(filled: CompletableDeferred<Unit>, waits: Boolean) = HybridSearchService(
+            FakeRepository(items), FillingLexical(filled, listOf("z", "a", "m"), waits),
+            FakeSemantic(isReady = false), BoostConfig(),
+        )
+
+        val filled = CompletableDeferred<Unit>()
+        val answer = async(Dispatchers.Default) { service(filled, waits = true).retrieve(request).items.ids() }
+        assertEquals("no answer while the engine is being filled", null, withTimeoutOrNull(300) { answer.await() })
+        filled.complete(Unit)
+        assertEquals(listOf("z", "a", "m"), withTimeout(5_000) { answer.await() })
+
+        // The control: asked without waiting, the same query lists nothing.
+        val early = service(CompletableDeferred(), waits = false).retrieve(request).items.ids()
+        assertEquals(emptyList<String>(), early)
     }
 }

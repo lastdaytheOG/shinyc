@@ -28,8 +28,26 @@ class KeywordTextTest {
     @Test
     fun theTextIsTheSameWhenTheRowIsIndexedAndWhenTheEngineIsFilledAtStartUp() {
         // Start-up reads a narrower row from the database; it must build what indexing built.
-        val atStartUp = VaultItemSearchData(page.id, page.ocrText, page.tags, page.itemType, page.sourceFile, page.title)
+        val atStartUp = VaultItemSearchData(1L, page.id, page.ocrText, page.tags, page.itemType, page.sourceFile, page.title)
         assertEquals(KeywordText.of(page), KeywordText.of(atStartUp))
+    }
+
+    @Test
+    fun theTextIsTheSameWhenADocumentsNameIsWorkedOutOnceForAllItsPages() {
+        val shot = VaultItem(id = "s", uri = "content://media/1", ocrText = "paid rs 250", lang = "en",
+            itemType = ItemType.SCREENSHOT, sourceFile = "Finance_Act-2026.pdf", timestamp = 0L)
+        val rows = listOf(
+            page, page.copy(id = "act_chunk4", ocrText = "another page"),
+            page.copy(id = "other_chunk0", sourceFile = "Other (2).pdf"),
+            page.copy(id = "titled", title = "Its own title"),
+            shot,   // a picture that happens to carry a document's file name is not named by it
+        )
+        // At start-up the engine is given a row's text and the rest side by side.
+        val forMany = KeywordText.ForManyRows()
+        for (row in rows) {
+            val atStartUp = VaultItemSearchData(1L, row.id, row.ocrText, row.tags, row.itemType, row.sourceFile, row.title)
+            assertEquals(row.id, KeywordText.of(row), "${atStartUp.ocrText} ${forMany.besidesTheText(atStartUp)}")
+        }
     }
 
     @Test

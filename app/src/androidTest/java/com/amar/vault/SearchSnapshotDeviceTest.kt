@@ -43,9 +43,10 @@ class SearchSnapshotDeviceTest {
         val mode = InstrumentationRegistry.getArguments().getString("snapshot")
         assumeTrue("run with -e snapshot record|replay", mode == "record" || mode == "replay")
 
+        // The app fills the keyword engine from the database when it starts; a search waits
+        // for that by itself.
         val rows = services.database().vaultDao().getAll()
         assertTrue("nothing is indexed on this device", rows.isNotEmpty())
-        waitForKeywordIndex()
 
         val queriesFile = File(folder, "queries.txt")
         val queries = if (mode == "record") queriesFrom(rows).also { queriesFile.writeText(it.joinToString("\n")) }
@@ -91,31 +92,6 @@ class SearchSnapshotDeviceTest {
         sourceFile = sourceFile, timestamp = timestamp, title = title, mimeType = mimeType,
         tags = tags, parentDocumentId = parentDocumentId,
     )
-
-    /**
-     * The app fills the keyword engine from the database when it starts, in the background.
-     * Waits until the row it adds last can be found by the rarest word it has.
-     */
-    private suspend fun waitForKeywordIndex() {
-        val inOrder = services.database().vaultDao().getAllSearchableData()
-        // Words as the engine cuts them: at spaces and ASCII punctuation. Only plain ones are
-        // used, which it lowercases the same way this does.
-        val wordsByRow = inOrder.associate { row ->
-            row.id to row.ocrText.lowercase().split(ENGINE_SEPARATORS)
-                .filter { it.length >= 4 && it.all { c -> c in 'a'..'z' || c in '0'..'9' } }.toSet()
-        }
-        val frequency = HashMap<String, Int>()
-        wordsByRow.values.forEach { words -> words.forEach { frequency.merge(it, 1, Int::plus) } }
-        val last = inOrder.lastOrNull { wordsByRow.getValue(it.id).isNotEmpty() } ?: return
-        val rarest = wordsByRow.getValue(last.id).minByOrNull { frequency.getValue(it) } ?: return
-        // The engine returns its best 300 rows; a word in fewer rows than that returns them all.
-        assertTrue("no word of the last row is rare enough to tell by", frequency.getValue(rarest) < 250)
-        val deadline = System.currentTimeMillis() + 60_000
-        while (last.id !in services.bm25Index().search(rarest)) {
-            assertTrue("the keyword engine never took in ${last.id}", System.currentTimeMillis() < deadline)
-            Thread.sleep(250)
-        }
-    }
 
     private fun queriesFrom(rows: List<VaultItem>): List<String> {
         val pages = rows.map { it.ocrText }
@@ -164,6 +140,5 @@ class SearchSnapshotDeviceTest {
 
     private companion object {
         val WORD = Regex("[\\p{L}\\p{M}\\p{N}]+")
-        val ENGINE_SEPARATORS = Regex("[\\s\\p{Punct}]+")
     }
 }
