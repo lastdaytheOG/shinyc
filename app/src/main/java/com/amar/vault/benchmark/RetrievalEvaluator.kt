@@ -34,6 +34,17 @@ class RetrievalEvaluator(
         val p1: Double, val p5: Double, val p10: Double,
         val r5: Double, val r10: Double,
         val mrr: Double, val ndcg10: Double,
+        /** Where the first right answer stands in the list, from 1; 0 when none is in it. */
+        val rank: Int = 0,
+        /** What the case is there to test ([BenchmarkCase.kind]). */
+        val kind: String = "",
+        /** What the first result is called, right or wrong. */
+        val top: String = "",
+        /**
+         * Of the first N results, N being how many right answers there are, the share that are
+         * right. 1.0 means nothing wrong stands above or among the right ones.
+         */
+        val rightOnTop: Double = 0.0,
     )
 
     /** Every scorable query's score under one tuning, and how long each retrieval took. */
@@ -55,13 +66,42 @@ class RetrievalEvaluator(
         val latencies = mutableListOf<Long>()
         var skipped = 0
 
-        for (case in retrievalCases) {
+        // What each thing in the vault is called → its id here, for cases that name files.
+        val byName = HashMap<String, String>()
+        val names = HashMap<String, String>()
+        // Every id a result can collapse to: an item's own, or the document it is a page of.
+        val inVault = HashSet<String>()
+        if (retrievalCases.isNotEmpty()) {
+            for (item in repository.allItemsSnapshot()) {
+                val id = item.parentDocumentId ?: item.id
+                inVault += id
+                val name = (if (item.parentDocumentId != null) item.sourceFile else item.title ?: item.sourceFile)
+                if (name.isNotBlank()) { byName.putIfAbsent(name, id); names.putIfAbsent(id, name) }
+            }
+        }
+
+        for (rawCase in retrievalCases) {
+            val named = rawCase.expectedFiles.map { it to byName[it] }
+            val notHere = named.filter { it.second == null }.map { it.first }
+            if (notHere.isNotEmpty()) {
+                skipped++
+                rows.add(mapOf(
+                    "caseId" to rawCase.id, "status" to "SKIPPED",
+                    "reason" to "expected file(s) not in this vault: ${notHere.joinToString()}"
+                ))
+                continue
+            }
+            // A case that names files is scored exactly as one that names ids.
+            val case = if (named.isEmpty()) rawCase else named.mapNotNull { it.second }.let { ids ->
+                rawCase.copy(documentId = ids.first(), expectedResults = ids, expectedRank = ids)
+            }
             val relevant = (case.expectedResults + case.documentId).filter { it.isNotBlank() }.toSet()
             // Scorable only if every expected document actually exists in the corpus —
             // otherwise the case measures the dataset, not retrieval.
-            val present = repository.getByIds(relevant.toList())
-                .map { it.parentDocumentId ?: it.id }.toSet()
-            val missing = relevant - present
+            // A document picked from the phone's files has pages and no row of its own, so
+            // looking its id up as a row found nothing: every golden query about such a
+            // document was skipped as "not indexed" and never scored.
+            val missing = relevant - inVault
             if (missing.isNotEmpty()) {
                 skipped++
                 rows.add(mapOf(
@@ -73,17 +113,27 @@ class RetrievalEvaluator(
 
             for (query in case.queries) {
                 val t0 = System.nanoTime()
-                val result = retrieval.retrieve(RetrievalRequest(query, tuning = tuning))
+                // As the search box sends it: the typed text is read first (a date, an order),
+                // and a date that matches nothing is dropped. Scored as a bare query, the
+                // numbers were for a search the app never runs.
+                val asTyped = RetrievalRequest.forResultList(query)
+                val result = retrieval.retrieve(asTyped.copy(tuning = tuning.copy(relaxEmptyFilter = true)))
                 latencies.add((System.nanoTime() - t0) / 1_000_000)
                 // Collapse chunk hits to unique parent documents, preserving rank order.
                 val ranked = result.items.map { it.parentDocumentId ?: it.id }.distinct()
-                val score = score(case, query, ranked, relevant)
+                val score = score(case, query, ranked, relevant).copy(
+                    rank = ranked.indexOfFirst { it in relevant } + 1,
+                    kind = case.kind,
+                    top = ranked.firstOrNull()?.let { names[it] ?: it }.orEmpty(),
+                    rightOnTop = ranked.take(relevant.size).count { it in relevant }.toDouble() / relevant.size,
+                )
                 scores.add(score)
                 rows.add(mapOf(
                     "caseId" to case.id, "status" to "SCORED", "query" to query,
                     "p1" to fmt(score.p1), "p5" to fmt(score.p5), "p10" to fmt(score.p10),
                     "r5" to fmt(score.r5), "r10" to fmt(score.r10),
                     "mrr" to fmt(score.mrr), "ndcg10" to fmt(score.ndcg10),
+                    "rank" to score.rank.toString(), "kind" to score.kind, "top" to score.top,
                 ))
             }
         }

@@ -1,0 +1,760 @@
+{
+ "name": "starter",
+ "about": "Starter golden queries for the sample vault on the emulator. expectedFiles are file names, most wanted first; they are turned into that device's own ids when the set is scored.",
+ "cases": [
+  {
+   "id": "starter-01-phone-report",
+   "contentType": "PDF",
+   "kind": "phone-report",
+   "queries": [
+    "claude",
+    "Claude",
+    "CLAUDE"
+   ],
+   "expectedFiles": [
+    "Gmail - This week in Claude Code.pdf",
+    "2346"
+   ],
+   "notes": "a result must contain the typed word; capitals make no difference"
+  },
+  {
+   "id": "starter-02-phone-report",
+   "contentType": "PDF",
+   "kind": "phone-report",
+   "queries": [
+    "last working days",
+    "Last Working Days"
+   ],
+   "expectedFiles": [
+    "Academic Calendar (2026-27).pdf",
+    "2350"
+   ],
+   "notes": "the document that says it first"
+  },
+  {
+   "id": "starter-03-phone-report",
+   "contentType": "PDF",
+   "kind": "phone-report",
+   "queries": [
+    "queue"
+   ],
+   "expectedFiles": [
+    "Silberschatz Operating System Concepts 9th.pdf",
+    "BE_ADS_2024-26 Exam 2025-27.pdf",
+    "2337",
+    "Screenshot_shared_2.jpg"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-04-phone-report",
+   "contentType": "SCREENSHOT",
+   "kind": "phone-report",
+   "queries": [
+    "brenda"
+   ],
+   "expectedFiles": [
+    "2349",
+    "Silberschatz Operating System Concepts 9th.pdf"
+   ],
+   "notes": "the screenshot of that search says it; the book says Brendan"
+  },
+  {
+   "id": "starter-05-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "matthew effect"
+   ],
+   "expectedFiles": [
+    "Matthew_Effect_Probe.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-06-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "operating system concepts"
+   ],
+   "expectedFiles": [
+    "Silberschatz Operating System Concepts 9th.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-07-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "working set model"
+   ],
+   "expectedFiles": [
+    "Silberschatz Operating System Concepts 9th.pdf"
+   ],
+   "notes": "the page says Working-Set Model"
+  },
+  {
+   "id": "starter-08-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "towers of hanoi"
+   ],
+   "expectedFiles": [
+    "BE_ADS_2024-26 Exam 2025-27.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-09-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "circular queue"
+   ],
+   "expectedFiles": [
+    "BE_ADS_2024-26 Exam 2025-27.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-10-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "gst invoice"
+   ],
+   "expectedFiles": [
+    "receipt_NB2609211245541479.pdf",
+    "2350"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-11-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "payment receipt"
+   ],
+   "expectedFiles": [
+    "receipt_NB2609211245541479.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-12-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "ministry of law and justice"
+   ],
+   "expectedFiles": [
+    "Law_Ministry_Act_2023.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-13-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "finance act"
+   ],
+   "expectedFiles": [
+    "Law_Ministry_Act_2023.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-14-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "scanning techniques"
+   ],
+   "expectedFiles": [
+    "13.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-15-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "accessible pdf documents"
+   ],
+   "expectedFiles": [
+    "13.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-16-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "pay fixation"
+   ],
+   "expectedFiles": [
+    "Assam_Handbook_Kritagyata.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-17-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "service book"
+   ],
+   "expectedFiles": [
+    "Assam_Handbook_Kritagyata.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-18-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "slash commands"
+   ],
+   "expectedFiles": [
+    "Gmail - This week in Claude Code.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-19-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "usage limits"
+   ],
+   "expectedFiles": [
+    "Gmail - This week in Claude Code.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-20-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "phosphate sugar chains"
+   ],
+   "expectedFiles": [
+    "Nature_DNA_1953.pdf"
+   ],
+   "notes": "the page says phosphate-sugar chains"
+  },
+  {
+   "id": "starter-21-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "parish register of births"
+   ],
+   "expectedFiles": [
+    "Probe parish register.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-22-phrase",
+   "contentType": "PDF",
+   "kind": "phrase",
+   "queries": [
+    "minute book of the society"
+   ],
+   "expectedFiles": [
+    "Probe minute book.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-23-scattered",
+   "contentType": "PDF",
+   "kind": "scattered",
+   "queries": [
+    "first mid term"
+   ],
+   "expectedFiles": [
+    "Academic Calendar (2026-27).pdf"
+   ],
+   "notes": "the 600-page Act says first, mid and term, never together"
+  },
+  {
+   "id": "starter-24-scattered",
+   "contentType": "PDF",
+   "kind": "scattered",
+   "queries": [
+    "commencement of classes"
+   ],
+   "expectedFiles": [
+    "Academic Calendar (2026-27).pdf"
+   ],
+   "notes": "the Act says commencement on dozens of pages"
+  },
+  {
+   "id": "starter-25-scattered",
+   "contentType": "PDF",
+   "kind": "scattered",
+   "queries": [
+    "theory exams"
+   ],
+   "expectedFiles": [
+    "Academic Calendar (2026-27).pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-26-scattered",
+   "contentType": "PDF",
+   "kind": "scattered",
+   "queries": [
+    "confirmation receipt"
+   ],
+   "expectedFiles": [
+    "receipt_NB2609211245541479.pdf",
+    "2350"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-27-scattered",
+   "contentType": "PDF",
+   "kind": "scattered",
+   "queries": [
+    "stacks and queues"
+   ],
+   "expectedFiles": [
+    "BE_ADS_2024-26 Exam 2025-27.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-28-name",
+   "contentType": "PDF",
+   "kind": "name",
+   "queries": [
+    "academic calendar"
+   ],
+   "expectedFiles": [
+    "Academic Calendar (2026-27).pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-29-name",
+   "contentType": "PDF",
+   "kind": "name",
+   "queries": [
+    "silberschatz"
+   ],
+   "expectedFiles": [
+    "Silberschatz Operating System Concepts 9th.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-30-name",
+   "contentType": "PDF",
+   "kind": "name",
+   "queries": [
+    "law ministry act"
+   ],
+   "expectedFiles": [
+    "Law_Ministry_Act_2023.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-31-name",
+   "contentType": "PDF",
+   "kind": "name",
+   "queries": [
+    "assam handbook"
+   ],
+   "expectedFiles": [
+    "Assam_Handbook_Kritagyata.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-32-name",
+   "contentType": "PDF",
+   "kind": "name",
+   "queries": [
+    "nature dna"
+   ],
+   "expectedFiles": [
+    "Nature_DNA_1953.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-33-name",
+   "contentType": "PDF",
+   "kind": "name",
+   "queries": [
+    "kritagyata"
+   ],
+   "expectedFiles": [
+    "Assam_Handbook_Kritagyata.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-34-form",
+   "contentType": "PDF",
+   "kind": "form",
+   "queries": [
+    "queues"
+   ],
+   "expectedFiles": [
+    "BE_ADS_2024-26 Exam 2025-27.pdf",
+    "Silberschatz Operating System Concepts 9th.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-35-form",
+   "contentType": "PDF",
+   "kind": "form",
+   "queries": [
+    "working sets"
+   ],
+   "expectedFiles": [
+    "Silberschatz Operating System Concepts 9th.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-36-form",
+   "contentType": "PDF",
+   "kind": "form",
+   "queries": [
+    "receipts"
+   ],
+   "expectedFiles": [
+    "receipt_NB2609211245541479.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-37-form",
+   "contentType": "PDF",
+   "kind": "form",
+   "queries": [
+    "mid terms"
+   ],
+   "expectedFiles": [
+    "Academic Calendar (2026-27).pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-38-typo",
+   "contentType": "PDF",
+   "kind": "typo",
+   "queries": [
+    "calender"
+   ],
+   "expectedFiles": [
+    "Academic Calendar (2026-27).pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-39-typo",
+   "contentType": "PDF",
+   "kind": "typo",
+   "queries": [
+    "silberschats"
+   ],
+   "expectedFiles": [
+    "Silberschatz Operating System Concepts 9th.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-40-typo",
+   "contentType": "PDF",
+   "kind": "typo",
+   "queries": [
+    "kritagyta"
+   ],
+   "expectedFiles": [
+    "Assam_Handbook_Kritagyata.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-41-typo",
+   "contentType": "PDF",
+   "kind": "typo",
+   "queries": [
+    "acadmic calendar"
+   ],
+   "expectedFiles": [
+    "Academic Calendar (2026-27).pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-42-hindi",
+   "contentType": "PDF",
+   "kind": "hindi",
+   "queries": [
+    "राजभाषा"
+   ],
+   "expectedFiles": [
+    "8.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-43-hindi",
+   "contentType": "PDF",
+   "kind": "hindi",
+   "queries": [
+    "तिमाही प्रगति रिपोर्ट"
+   ],
+   "expectedFiles": [
+    "8.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-44-hindi",
+   "contentType": "PDF",
+   "kind": "hindi",
+   "queries": [
+    "राजनीतिक भूगोल"
+   ],
+   "expectedFiles": [
+    "Share_Probe_One.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-45-hindi",
+   "contentType": "PDF",
+   "kind": "hindi",
+   "queries": [
+    "official language implementation committee"
+   ],
+   "expectedFiles": [
+    "8.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-46-picture",
+   "contentType": "SCREENSHOT",
+   "kind": "picture",
+   "queries": [
+    "vikram traders"
+   ],
+   "expectedFiles": [
+    "probe_pay.png"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-47-picture",
+   "contentType": "SCREENSHOT",
+   "kind": "picture",
+   "queries": [
+    "paneer tikka"
+   ],
+   "expectedFiles": [
+    "probe_bill.png"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-48-picture",
+   "contentType": "SCREENSHOT",
+   "kind": "picture",
+   "queries": [
+    "sourdough"
+   ],
+   "expectedFiles": [
+    "share_probe_bakery.png"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-49-picture",
+   "contentType": "SCREENSHOT",
+   "kind": "picture",
+   "queries": [
+    "quillon stores"
+   ],
+   "expectedFiles": [
+    "share_probe_qr.png"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-50-picture",
+   "contentType": "SCREENSHOT",
+   "kind": "picture",
+   "queries": [
+    "ella ciao"
+   ],
+   "expectedFiles": [
+    "2337"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-51-whole-word",
+   "contentType": "SCREENSHOT",
+   "kind": "whole-word",
+   "queries": [
+    "bill"
+   ],
+   "expectedFiles": [
+    "probe_bill.png",
+    "Law_Ministry_Act_2023.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-52-whole-word",
+   "contentType": "SCREENSHOT",
+   "kind": "whole-word",
+   "queries": [
+    "pay"
+   ],
+   "expectedFiles": [
+    "share_probe_qr.png",
+    "probe_pay.png",
+    "Assam_Handbook_Kritagyata.pdf",
+    "Law_Ministry_Act_2023.pdf"
+   ],
+   "notes": "probe_pay.png is called pay"
+  },
+  {
+   "id": "starter-53-whole-word",
+   "contentType": "PDF",
+   "kind": "whole-word",
+   "queries": [
+    "unit"
+   ],
+   "expectedFiles": [
+    "BE_ADS_2024-26 Exam 2025-27.pdf",
+    "Law_Ministry_Act_2023.pdf",
+    "Nature_DNA_1953.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-54-whole-word",
+   "contentType": "PDF",
+   "kind": "whole-word",
+   "queries": [
+    "rate"
+   ],
+   "expectedFiles": [
+    "Law_Ministry_Act_2023.pdf",
+    "Matthew_Effect_Probe.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-55-whole-word",
+   "contentType": "PDF",
+   "kind": "whole-word",
+   "queries": [
+    "act"
+   ],
+   "expectedFiles": [
+    "Law_Ministry_Act_2023.pdf",
+    "8.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-56-whole-word",
+   "contentType": "PDF",
+   "kind": "whole-word",
+   "queries": [
+    "port"
+   ],
+   "expectedFiles": [
+    "Law_Ministry_Act_2023.pdf",
+    "Matthew_Effect_Probe.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-57-whole-word",
+   "contentType": "PDF",
+   "kind": "whole-word",
+   "queries": [
+    "ink"
+   ],
+   "expectedFiles": [
+    "Assam_Handbook_Kritagyata.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-58-whole-word",
+   "contentType": "PDF",
+   "kind": "whole-word",
+   "queries": [
+    "age"
+   ],
+   "expectedFiles": [
+    "13.pdf",
+    "Law_Ministry_Act_2023.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-59-number",
+   "contentType": "PDF",
+   "kind": "number",
+   "queries": [
+    "probe7045"
+   ],
+   "expectedFiles": [
+    "Probe parish register.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-60-number",
+   "contentType": "PDF",
+   "kind": "number",
+   "queries": [
+    "probe5010"
+   ],
+   "expectedFiles": [
+    "Probe minute book.pdf"
+   ],
+   "notes": ""
+  },
+  {
+   "id": "starter-61-number",
+   "contentType": "SCREENSHOT",
+   "kind": "number",
+   "queries": [
+    "otp 4471"
+   ],
+   "expectedFiles": [
+    "share_probe_qr.png"
+   ],
+   "notes": ""
+  }
+ ]
+}

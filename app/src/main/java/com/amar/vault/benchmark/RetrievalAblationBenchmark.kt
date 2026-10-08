@@ -73,6 +73,14 @@ class RetrievalAblationBenchmark(
                 "no bonus for the query's words standing together in order (behaviour before 2026-10-07)",
             ),
             Variant(
+                "noWholeWordsFirst", RetrievalTuning(wholeWordsFirst = false),
+                "rows that tie are left newest first, whether the word stands alone in them or inside a longer word (behaviour before 2026-10-08)",
+            ),
+            Variant(
+                "noNameBonus", RetrievalTuning(nameBonus = false),
+                "a word in what the file is called scores like a word on any page (behaviour before 2026-10-08)",
+            ),
+            Variant(
                 "semanticHits@0.50", RetrievalTuning(semanticParentHits = true, semanticMinSimilarity = 0.50f),
                 "vector hits count on their own at cosine ≥ 0.50",
             ),

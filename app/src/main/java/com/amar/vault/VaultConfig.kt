@@ -223,5 +223,30 @@ object VaultConfig {
          * variant "tagsAsText" is the previous behaviour.
          */
         const val PAGE_WORDS_BEFORE_TAGS = true
+
+        /**
+         * Added to a row for the query's words that are in what the item is called, in
+         * proportion. Typing a file's name is asking for that file; a screenshot that happens
+         * to show the name stood above the file itself ("silberschatz" listed the book third).
+         *
+         * Scored 2026-10-08 on the starter golden set (64 queries, keyword-only build): with it
+         * the right answer is first for 95.3% of them, without it (the ablation variant
+         * "noNameBonus", the behaviour before) for 92.2%.
+         *
+         */
+        const val NAME_BONUS = 0.04
+
+        /**
+         * Among rows that say equally many of the query's words, the ones in which a word
+         * stands on its own come before the ones that only have its letters inside a longer
+         * word ("Act" before "action"). Rows that tied used to be left in the order the vault
+         * hands them over, newest first.
+         *
+         * Scored 2026-10-08 on the starter golden set: it puts both right answers on top for
+         * "act", where without it (the ablation variant "noWholeWordsFirst") a page that says
+         * "action" stood between them; no other of the 64 queries changes. A score bonus for
+         * the same thing was tried as well, changed nothing on any query, and was not kept.
+         */
+        const val WHOLE_WORDS_FIRST = true
     }
 }

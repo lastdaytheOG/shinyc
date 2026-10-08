@@ -78,8 +78,18 @@ data class BenchmarkCase(
      */
     val stratum: String = "",
     val notes: String = "",
+    /**
+     * The right answers by what the files are called, most wanted first — for a set written
+     * away from the device it is scored on. An item's id is made up on each device, so a set
+     * that names ids only works on the phone it was entered on; a file is called the same
+     * everywhere. Turned into that device's ids when the set is scored.
+     */
+    val expectedFiles: List<String> = emptyList(),
+    /** What the case is there to test ("phrase", "typo", "hindi", …); scores are also given per kind. */
+    val kind: String = "",
 ) {
-    val supportsRetrieval: Boolean get() = queries.isNotEmpty() && expectedResults.isNotEmpty()
+    val supportsRetrieval: Boolean
+        get() = queries.isNotEmpty() && (expectedResults.isNotEmpty() || expectedFiles.isNotEmpty())
     val supportsOcr: Boolean get() = groundTruthText.isNotBlank() && mediaFile.isNotBlank()
 
     companion object {
@@ -95,6 +105,8 @@ data class BenchmarkCase(
             script = json.optString("script"),
             stratum = json.optString("stratum"),
             notes = json.optString("notes"),
+            expectedFiles = json.optJSONArray("expectedFiles").toStringList(),
+            kind = json.optString("kind"),
         )
     }
 }

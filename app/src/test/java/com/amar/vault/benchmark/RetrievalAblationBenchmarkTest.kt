@@ -73,8 +73,10 @@ class RetrievalAblationBenchmarkTest {
         assertEquals(1.0, section.value("semantic.available")!!, 1e-9)
 
         // One warm-up pass with defaults, then each variant's own tuning for both queries.
-        val expected = listOf(RetrievalTuning(), RetrievalTuning()) +
-            RetrievalAblationBenchmark.VARIANTS.flatMap { listOf(it.tuning, it.tuning) }
+        // Each is sent the way the search box sends it: a date that matches nothing is dropped.
+        val expected = (listOf(RetrievalTuning(), RetrievalTuning()) +
+            RetrievalAblationBenchmark.VARIANTS.flatMap { listOf(it.tuning, it.tuning) })
+            .map { it.copy(relaxEmptyFilter = true) }
         assertEquals(expected, retrieval.tunings)
         assertEquals("caches cleared before each variant", RetrievalAblationBenchmark.VARIANTS.size, semantic.cacheClears)
     }

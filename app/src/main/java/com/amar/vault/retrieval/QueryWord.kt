@@ -30,6 +30,32 @@ internal class QueryWord private constructor(val typed: String, private val phra
             loweredText.contains(firstOfPhrase) && (phrase.find(loweredText)?.let { it.range.last < end } ?: false)
         } else endsBy(loweredText, typed, end) || (hasBare && endsBy(loweredText, bare, end))
 
+    /**
+     * Whether it stands in [loweredText] before position [end] as a word of its own: with no
+     * letter, mark or digit on either side of it. "act" stands alone in "the Finance Act" and
+     * does not in "action". A phrase stands alone wherever it is found.
+     */
+    fun standsAloneIn(loweredText: String, end: Int = loweredText.length): Boolean {
+        if (phrase != null) return isIn(loweredText, end)
+        return aloneBefore(loweredText, typed, end) || (hasBare && aloneBefore(loweredText, bare, end))
+    }
+
+    private fun aloneBefore(text: String, word: String, end: Int): Boolean {
+        var at = text.indexOf(word)
+        while (at >= 0 && at + word.length <= end) {
+            val before = at == 0 || !isPartOfAWord(text[at - 1])
+            val after = at + word.length == text.length || !isPartOfAWord(text[at + word.length])
+            if (before && after) return true
+            at = text.indexOf(word, at + 1)
+        }
+        return false
+    }
+
+    private fun isPartOfAWord(c: Char): Boolean = c.isLetterOrDigit() || when (Character.getType(c).toByte()) {
+        Character.NON_SPACING_MARK, Character.COMBINING_SPACING_MARK, Character.ENCLOSING_MARK -> true
+        else -> false
+    }
+
     private fun endsBy(text: String, word: String, end: Int): Boolean {
         val at = text.indexOf(word)
         return at >= 0 && at + word.length <= end
