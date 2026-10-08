@@ -68,7 +68,12 @@ fun CollectibleDetailView(
     onDelete: () -> Unit,
     onFavoriteToggle: () -> Unit,
     onNoteChange: (String) -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /**
+     * False for an item that is in the vault and was never saved to a folder: it has no
+     * favourite to toggle, and what its delete button does is take it out of the vault.
+     */
+    isSaved: Boolean = true,
 ) {
     val context = LocalContext.current
     val species = remember(item) { ContentSpecies.classify(item) }
@@ -111,7 +116,9 @@ fun CollectibleDetailView(
                     IconButton(onClick = { ContentOpenManager.share(context, item) }) {
                         Icon(imageVector = Icons.Default.Share, contentDescription = "Share", tint = WarmBrownDark)
                     }
-                    IconButton(onClick = onFavoriteToggle) {
+                    // A favourite is something a saved item has. On anything else the heart
+                    // was a button that did nothing.
+                    if (isSaved) IconButton(onClick = onFavoriteToggle) {
                         Icon(
                             imageVector = Icons.Default.Favorite,
                             contentDescription = "Favorite",
@@ -212,7 +219,7 @@ fun CollectibleDetailView(
                                 border = BorderStroke(1.dp, Color.Red.copy(alpha = 0.5f)),
                                 shape = RoundedCornerShape(8.dp)
                             ) {
-                                Text("Delete Item", fontWeight = FontWeight.Bold)
+                                Text(if (isSaved) "Delete Item" else "Remove from vault", fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -560,6 +567,8 @@ private fun DetailDefaultMedia(item: StashItemWithVaultItem) {
 private fun DetailMetadataPanel(item: StashItemWithVaultItem, species: ContentSpecies, onNoteChange: (String) -> Unit) {
     val context = LocalContext.current
     var extractedMetadata by remember { mutableStateOf<List<VaultMetadata>>(emptyList()) }
+    // How many pages the document has, as counted when it was read; null when that is not known.
+    var pageCount by remember { mutableStateOf<Int?>(null) }
     var isEditingNote by remember { mutableStateOf(false) }
     var editNoteText by remember { mutableStateOf(item.userNote ?: "") }
 
@@ -567,6 +576,14 @@ private fun DetailMetadataPanel(item: StashItemWithVaultItem, species: ContentSp
         withContext(Dispatchers.IO) {
             val db = VaultDatabase.get(context)
             extractedMetadata = db.vaultMetadataDao().getByItemId(item.vaultItemId)
+            pageCount = db.vaultDocumentDao().getById(item.parentDocumentId ?: item.vaultItemId)?.pageCount
+                // A document read before pages were counted: the file itself knows.
+                ?: if (species != ContentSpecies.PDF) null else runCatching {
+                    val uri = com.amar.vault.share.open.ShareContentUri.resolve(context, item.uri) ?: return@runCatching null
+                    context.contentResolver.openFileDescriptor(uri, "r")?.use { file ->
+                        android.graphics.pdf.PdfRenderer(file).use { it.pageCount }
+                    }
+                }.getOrNull()
         }
     }
 
@@ -632,7 +649,13 @@ private fun DetailMetadataPanel(item: StashItemWithVaultItem, species: ContentSp
             Spacer(Modifier.height(8.dp))
         }
 
-        DetailRow(label = "Source App", value = SourceResolver.getReadableAppName(item.sourceApp, item.uri))
+        // A file added from the phone's own storage came from no app: its address is the
+        // storage provider's, and naming an app from that gave "Com".
+        if (item.sourceApp.isBlank() && !item.uri.startsWith("http", ignoreCase = true)) {
+            DetailRow(label = "Added from", value = "Files on this phone")
+        } else {
+            DetailRow(label = "Source App", value = SourceResolver.getReadableAppName(item.sourceApp, item.uri))
+        }
         DetailRow(label = "Date Collected", value = formatFullTime(item.savedAt))
 
         if (item.category.isNotBlank()) {
@@ -641,14 +664,16 @@ private fun DetailMetadataPanel(item: StashItemWithVaultItem, species: ContentSp
 
         // Render species specific items
         when (species) {
+            // Only what the item itself says. These rows used to fall back on made-up values
+            // — "₹14,999", "10:15", "12 pages" — shown as if they were facts about the item.
             ContentSpecies.PRODUCT -> {
-                DetailRow(label = "Estimated Price", value = extractPrice(item.ocrText) ?: "₹14,999")
+                extractPrice(item.ocrText)?.let { DetailRow(label = "Price", value = it) }
             }
             ContentSpecies.YOUTUBE_VIDEO -> {
-                DetailRow(label = "Video Duration", value = extractDuration(item.ocrText))
+                extractDuration(item.ocrText)?.let { DetailRow(label = "Video Duration", value = it) }
             }
             ContentSpecies.PDF -> {
-                DetailRow(label = "Page Count", value = "12 pages")
+                pageCount?.takeIf { it > 0 }?.let { DetailRow(label = "Page Count", value = if (it == 1) "1 page" else "$it pages") }
                 DetailRow(label = "Format", value = "PDF Document")
             }
             else -> {}
@@ -727,10 +752,10 @@ private fun extractYouTubeVideoId(url: String): String? {
     return regex.find(url)?.groupValues?.getOrNull(1)
 }
 
-private fun extractDuration(ocrText: String): String {
+private fun extractDuration(ocrText: String): String? {
     val regex = Regex("\\b(\\d{1,2}:\\d{2})\\b")
     val match = regex.find(ocrText)
-    return match?.groupValues?.getOrNull(1) ?: "10:15"
+    return match?.groupValues?.getOrNull(1)
 }
 
 private fun extractPrice(ocrText: String): String? {

@@ -691,6 +691,37 @@ class SearchViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Takes [row] out of the vault — the whole document when it is a page of one — and runs
+     * the search again. For a result that is not a Saved entry; [onDone] is told what went.
+     */
+    fun removeFromVault(row: StashItemWithVaultItem, onDone: (String?) -> Unit = {}) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val removal = com.amar.vault.indexing.VaultRemoval(
+                db = db,
+                forgetKeywords = { ids ->
+                    dagger.hilt.android.EntryPointAccessors.fromApplication(
+                        context.applicationContext, com.amar.vault.retrieval.Bm25IndexEntryPoint::class.java
+                    ).bm25Index().removeDocuments(ids)
+                },
+                forgetFile = { hash -> com.amar.vault.indexing.PdfSourceReuseCache.forget(context, hash) },
+                forgetVectors = { id -> vectorSearchManager.removeItem(id) },
+                letGo = { address ->
+                    val uri = android.net.Uri.parse(address)
+                    if (uri.scheme == "content") context.contentResolver.releasePersistableUriPermission(
+                        uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                },
+            )
+            val removed = runCatching {
+                if (row.parentDocumentId != null) removal.removeDocument(row.parentDocumentId)
+                else removal.removeItem(row.vaultItemId)
+            }.onFailure { android.util.Log.e("SearchVM", "Could not remove ${row.vaultItemId}", it) }.getOrNull()
+            refreshSearch()
+            withContext(Dispatchers.Main) { onDone(removed?.name) }
+        }
+    }
+
     fun deleteSavedItem(stashId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             db.stashItemDao().deleteById(stashId)

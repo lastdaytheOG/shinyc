@@ -104,7 +104,11 @@ fun VaultApp() {
                     onPhotosClick = { currentScreen = Screen.PHOTOS },
                     onDocumentsClick = { currentScreen = Screen.DOCUMENTS },
                     onSettingsClick = { currentScreen = Screen.SETTINGS },
-                    onTimelineClick = { currentScreen = Screen.TIMELINE }
+                    onTimelineClick = { currentScreen = Screen.TIMELINE },
+                    onSearch = { words ->
+                        searchViewModel.updateQuery(words)
+                        currentScreen = Screen.SEARCH_OVERLAY
+                    }
                 )
             }
 

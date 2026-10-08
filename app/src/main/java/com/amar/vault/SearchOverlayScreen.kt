@@ -82,6 +82,8 @@ fun SearchOverlayScreen(
 
     // Detailed overlay for search results spatial continuity
     var activeDetailItem by remember { mutableStateOf<StashItemWithVaultItem?>(null) }
+    // The result the user has asked to take out of the vault, until they confirm or cancel.
+    var toRemove by remember { mutableStateOf<StashItemWithVaultItem?>(null) }
     
     // Each result is the card to show plus, for a document, the page and words that matched.
     val mappedResults = resultsList
@@ -330,12 +332,19 @@ fun SearchOverlayScreen(
 
         // Expanded detail view overlay for spatial continuity inside search
         activeDetailItem?.let { originalItem ->
+            // A result that was never saved to a folder: a page of a document, a picture.
+            val isSaved = !originalItem.stashId.startsWith("search_")
             CollectibleDetailView(
                 item = originalItem,
+                isSaved = isSaved,
                 onBack = { activeDetailItem = null },
                 onDelete = {
-                    viewModel.deleteSavedItem(originalItem.stashId)
-                    activeDetailItem = null
+                    if (isSaved) {
+                        viewModel.deleteSavedItem(originalItem.stashId)
+                        activeDetailItem = null
+                    } else {
+                        toRemove = originalItem
+                    }
                 },
                 onFavoriteToggle = {
                     viewModel.toggleSavedFavorite(originalItem.stashId, !originalItem.isFavorite)
@@ -345,6 +354,27 @@ fun SearchOverlayScreen(
                 },
                 modifier = Modifier
                     .fillMaxSize()
+            )
+        }
+
+        toRemove?.let { item ->
+            val isDocument = item.parentDocumentId != null
+            val name = item.title ?: item.sourceFile.substringAfterLast('/').ifBlank { if (isDocument) "this document" else "this picture" }
+            AlertDialog(
+                onDismissRequest = { toRemove = null },
+                containerColor = CreamLight,
+                title = { Text(com.amar.vault.indexing.RemovalWords.question(name, isDocument), color = CharcoalSoft, fontSize = 18.sp, fontWeight = FontWeight.Bold) },
+                text = { Text(com.amar.vault.indexing.RemovalWords.whatHappens(isDocument), color = WarmBrownDark, fontSize = 14.sp, lineHeight = 20.sp) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        toRemove = null
+                        activeDetailItem = null
+                        viewModel.removeFromVault(item)
+                    }) { Text("Remove", color = Color(0xFFD32F2F), fontWeight = FontWeight.Bold) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { toRemove = null }) { Text("Keep", color = WarmBrownDark) }
+                },
             )
         }
     }
