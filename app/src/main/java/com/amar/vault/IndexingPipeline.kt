@@ -46,6 +46,7 @@ class IndexingPipeline private constructor(private val context: Context) {
         ).bm25Index()
     }
     private val bm25Updater by lazy { com.amar.vault.indexing.Bm25IndexUpdater(bm25) }
+    private val photoSearch by lazy { com.amar.vault.photos.photoSearchOf(context) }
 
     suspend fun indexBitmap(
         bitmap: Bitmap,
@@ -110,6 +111,21 @@ class IndexingPipeline private constructor(private val context: Context) {
             persister.persistImageShell(shellItem)
         }
         IndexMetrics.recordDuration(IndexMetrics.Timing.INDEX_FAST_COMMIT, System.currentTimeMillis() - t0)
+
+        // What the picture looks like, for finding it by what is in it (photo search): the only
+        // way a picture with no text on it can be found. The pixels are prepared now, while the
+        // decoded picture is at hand; the model runs beside OCR. Without photo search's models
+        // there is no input size and nothing is done.
+        photoSearch.inputSize?.let { size ->
+            val pixels = com.amar.vault.photos.PhotoPixels.of(bitmap, size)
+            stagedDeepScope.launch {
+                try {
+                    photoSearch.embedPixels(targetId, hash, pixels)
+                } catch (e: Exception) {
+                    VaultLog.w("IndexingPipeline", "Photo vector failed for $targetId: ${e.message}")
+                }
+            }
+        }
 
         val t1      = System.currentTimeMillis()
 

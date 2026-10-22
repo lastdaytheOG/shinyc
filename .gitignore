@@ -11,6 +11,8 @@
 # ==============================
 app/src/main/assets/
 app/src/main/ml/
+# Photo search's full tokenizer table, built by tools/visual-search/build_tokenizer.py for the tests.
+app/src/test/resources/photos/gemma_bpe.bin
 
 # ==============================
 # Android Studio
@@ -46,6 +48,10 @@ keystore.properties
 # Text files
 # ==============================
 *.txt
+# ...but not the native build script: without it a fresh clone cannot build the engines.
+!CMakeLists.txt
+# ...nor the photo resize reference cases PhotoPixelsTest reads.
+!app/src/test/resources/photos/pil_bicubic_cases.txt
 
 # ==============================
 # Logs and debug outputs
@@ -130,3 +136,8 @@ tools/db-fixtures/
 # Phone screenshots and what they say, used to measure text reading (local only)
 # ==============================
 tools/phone-screenshots/
+
+# ==============================
+# Photo search models for local tests (a junction to the benchmark kit; hundreds of MB)
+# ==============================
+tools/visual-search/models/

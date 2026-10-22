@@ -9,6 +9,7 @@ import com.amar.vault.StashItem
 import com.amar.vault.VaultDatabase
 import com.amar.vault.VaultDocument
 import com.amar.vault.VaultItem
+import com.amar.vault.photos.PhotoVector
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -123,6 +124,10 @@ class VaultRemovalTest {
         db.vaultDao().insert(shot)
         db.stashItemDao().insertOrUpdate(StashItem(id = "stash", vaultItemId = "shot", category = "Bills", savedAt = 1L, sourceApp = ""))
         document("act", pages = 1)
+        // What the picture looks like, and what another picture looks like.
+        for (id in listOf("shot", "beach")) {
+            db.photoVectorDao().upsert(PhotoVector(id, "m1", 0L, byteArrayOf(1, 2), 0.01f, 1L))
+        }
 
         assertEquals(VaultRemoval.Removed("Screenshot_1.png", 1), removal.remove(shot))
 
@@ -130,6 +135,7 @@ class VaultRemovalTest {
         assertEquals(listOf("shot"), forgottenKeywords)
         assertEquals(listOf("shot"), forgottenVectors)
         assertEquals(0, db.vaultDao().observePictureCount().first())
+        assertEquals("only the removed picture's", listOf("beach"), db.photoVectorDao().allOf("m1").map { it.itemId })
     }
 
     @Test

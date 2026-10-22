@@ -398,6 +398,54 @@ fun ImageHitCard(
 }
 
 /**
+ * The pictures that look like the query, most alike first: photo search's own list
+ * ([com.amar.vault.SearchViewModel.photoMatches]), above the results that say the query's words.
+ * They are found by what is in them, so the band says that instead of marking a word, and it never
+ * claims a picture says what was typed.
+ */
+@Composable
+fun PhotoBand(
+    photos: List<com.amar.vault.StashItemWithVaultItem>,
+    onOpen: (com.amar.vault.StashItemWithVaultItem) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = "Photos that look like it",
+            color = CharcoalSoft,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            text = "Found by what is in the picture, not by a word on it",
+            color = WarmBrown,
+            fontSize = 12.sp,
+        )
+        Spacer(Modifier.height(8.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(photos, key = { it.vaultItemId }) { item ->
+                Image(
+                    painter = rememberAsyncImagePainter(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(item.thumbnailPath?.takeIf { it.isNotBlank() } ?: item.uri)
+                            .size(256)
+                            .crossfade(true)
+                            .build()
+                    ),
+                    contentDescription = "Photo",
+                    modifier = Modifier
+                        .size(96.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(CreamDark)
+                        .clickable { onOpen(item) },
+                    contentScale = ContentScale.Crop,
+                )
+            }
+        }
+    }
+}
+
+/**
  * Why an item is in the list when it does not say the typed word: the app filed it under a tag
  * that does ([SearchHit.filedUnder]).
  */

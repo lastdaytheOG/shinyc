@@ -15,7 +15,12 @@ plugins {
 //   -PabiOnly=<abi>     package one ABI only: arm64-v8a (phones) or x86_64 (emulator).
 //   -PphoneApk          no model + arm64-v8a only — the APK to hand to someone with a real
 //                       phone. Measured 2026-10-04: 775 MB → 126 MB.
+//   -PphotoSearchModels carry photo search's models (tools/visual-search/models/apk/photo-search)
+//                       in the APK; the app copies them to files/photo-search the first time.
+//                       Without it there is no photo search until the models are put on the
+//                       device, and everything else works as before.
 val phoneApk: Boolean = providers.gradleProperty("phoneApk").isPresent
+val photoSearchModels: Boolean = providers.gradleProperty("photoSearchModels").isPresent
 val noEmbeddingModel: Boolean = phoneApk || providers.gradleProperty("noEmbeddingModel").isPresent
 val abiOnly: String? = if (phoneApk) "arm64-v8a" else providers.gradleProperty("abiOnly").orNull
 
@@ -67,12 +72,18 @@ android {
         buildConfig = true
     }
 
+    if (photoSearchModels) {
+        sourceSets.getByName("main").assets.srcDir("../tools/visual-search/models/apk")
+    }
+
     androidResources {
         noCompress += listOf("onnx", "tflite", "bin", "litertlm", "task", "gguf")
         if (noEmbeddingModel) {
-            // AAPT's default ignore list plus the embedding model.
+            // AAPT's default ignore list plus the embedding model, its tokenizer (only the model
+            // reads it) and a SentencePiece file nothing reads: 7.1 MB of the APK.
             ignoreAssetsPattern =
-                "!.svn:!.git:!.ds_store:!*.scc:.*:<dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~:!bge-m3-ocr-int4.onnx"
+                "!.svn:!.git:!.ds_store:!*.scc:.*:<dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~:!bge-m3-ocr-int4.onnx" +
+                    ":!tokenizer.json:!sentencepiece.bpe.model"
         }
     }
 
@@ -214,7 +225,9 @@ dependencies {
     // bump metadata requirements again.
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.10.2")
 
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+    // 1.31: photo search's text model needs opset 21 and the newer quantised ops
+    // (GatherBlockQuantized, MatMulNBits); the API the embedding engine uses is unchanged.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.0")
 
     // =========================================================================
     // CONNECTIVITY / P2P
@@ -242,6 +255,8 @@ dependencies {
     testImplementation("androidx.test:core:1.5.0")
     testImplementation("androidx.test.ext:junit:1.1.5")
     testImplementation("androidx.room:room-testing:$room")
+    // The desktop build of the same ONNX Runtime, so unit tests can run photo search's models.
+    testImplementation("com.microsoft.onnxruntime:onnxruntime:1.31.0")
 
     // =========================================================================
     // INSTRUMENTED TESTS

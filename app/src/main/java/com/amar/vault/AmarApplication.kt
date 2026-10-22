@@ -103,6 +103,15 @@ class AmarApplication : Application(), Configuration.Provider {
             runCatching { com.amar.vault.indexing.DocumentImportQueue.get(applicationContext).carryOn() }
                 .onFailure { VaultLog.e("AmarApp", "Unfinished documents were not picked up again", it) }
 
+            // 4f. Give pictures stored before photo search (or while its models were missing) the
+            //     vector it finds them by. Nothing to do, and nothing enqueued, without its models.
+            runCatching {
+                val photos = com.amar.vault.photos.photoSearchOf(applicationContext)
+                if (photos.isReady && photos.install() && photos.pending() > 0) {
+                    com.amar.vault.photos.PhotoBackfillWorker.enqueue(applicationContext)
+                }
+            }.onFailure { VaultLog.e("AmarApp", "Photo search backfill was not started", it) }
+
             // 5. Schedule nightly job
             NightlyIndexWorker.schedule(applicationContext)
 

@@ -6,6 +6,7 @@ import com.amar.vault.benchmark.BenchmarkRunner
 import com.amar.vault.benchmark.GoldenDatasetStore
 import com.amar.vault.benchmark.RetrievalAblationBenchmark
 import com.amar.vault.benchmark.RetrievalEvaluator
+import com.amar.vault.retrieval.RetrievalTuning
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertTrue
@@ -47,9 +48,15 @@ class RankingScoreDeviceTest {
         // Without the embedding model the switches that only steer it change nothing: they are
         // left to a build that has the model.
         val hasModel = services.semanticRetriever().isReady
-        val variants = RetrievalAblationBenchmark.VARIANTS.filter {
+        // The app as it was before photo search: the same search with its photo band left out.
+        val noPhotos = RetrievalAblationBenchmark.Variant(
+            "noPhotoLane", RetrievalTuning(photoLane = false), "no photo search: the word lanes alone",
+        )
+        // -e variants production,noPhotoLane scores just those (each variant is a full pass).
+        val only = InstrumentationRegistry.getArguments().getString("variants")?.split(',')?.toSet()
+        val variants = (RetrievalAblationBenchmark.VARIANTS + noPhotos).filter {
             hasModel || (it.name != "keywordOnly" && it.name != "paddedQuery" && !it.name.startsWith("semanticHits"))
-        }
+        }.filter { only == null || it.name in only }
         for (variant in variants) {
             val scored = evaluator.scoreAll(cases, variant.tuning)
             val scores = scored.scores

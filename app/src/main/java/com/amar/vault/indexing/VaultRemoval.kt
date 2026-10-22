@@ -54,7 +54,11 @@ class VaultRemoval(
     /** One whole item — a picture, a link. What hangs off it in the database goes with it. */
     suspend fun removeItem(itemId: String): Removed? {
         val item = db.vaultDao().getByIds(listOf(itemId)).firstOrNull() ?: return null
-        db.vaultDao().deleteById(itemId)
+        db.withTransaction {
+            db.vaultDao().deleteById(itemId)
+            // What a picture looks like goes with it (photo search keeps it apart, see PhotoVector).
+            db.photoVectorDao().deleteItems(listOf(itemId))
+        }
         forgetKeywords(listOf(itemId))
         runCatching { forgetVectors(itemId) }
         return Removed(item.title ?: item.sourceFile.ifBlank { item.itemType.stored }, 1)

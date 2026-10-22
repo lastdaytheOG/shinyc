@@ -442,6 +442,13 @@ class SearchViewModel @Inject constructor(
     private val readAsWords = MutableStateFlow<Set<String>>(emptySet())
 
     /**
+     * Pictures that look like the query in the box, most alike first: photo search's own list
+     * ([com.amar.vault.retrieval.RetrievalResult.photos]), shown as a band above the result list.
+     * They are found by what is in them, not by a word they say, and the band says so.
+     */
+    val photoMatches = MutableStateFlow<List<StashItemWithVaultItem>>(emptyList())
+
+    /**
      * Takes one reading back. A filter that was written out (`type:pdf`) is taken out of the
      * box, there being nothing else it could mean; any other reading leaves the box as it is
      * and has its words looked for as words.
@@ -486,11 +493,13 @@ class SearchViewModel @Inject constructor(
                 isSearchLoading.value = false
                 understood.value = emptyList()
                 readingNote.value = null
+                photoMatches.value = emptyList()
                 emit(emptyList())
                 return@transformLatest
             }
             isSearchLoading.value = true
             readingNote.value = null
+            photoMatches.value = emptyList()
             // True once any result list for this query is on screen — a later-stage failure must
             // not wipe results the user is already looking at.
             var painted = false
@@ -550,7 +559,13 @@ class SearchViewModel @Inject constructor(
                         // An early stage that the operators narrow to nothing is not "no results"
                         // yet — keep the skeleton until a later stage or FINAL decides.
                         if (rows.isEmpty() && !isFinal) return@collect
+                        // The engine is asked before its first stage; once the words say nothing,
+                        // only the last stage can bring photos.
                         if (isFinal) {
+                            // Photos come with the last stage only: the photo model is the slow part.
+                            // Filters written into the query narrow them as they narrow the list.
+                            val photoRows = update.result.photos.map { savedByVaultId[it.item.id] ?: it.item.toStashWrapper() }
+                            photoMatches.value = if (ops.hasAny) applyOperators(photoRows, ops) else photoRows
                             // A period or an amount that left nothing is no longer in force:
                             // its chip goes, and the screen says what is shown instead.
                             val dropped = if (update.result.filterDropped) read.filter { it.narrows } else emptyList()

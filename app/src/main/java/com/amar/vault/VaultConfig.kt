@@ -248,5 +248,19 @@ object VaultConfig {
          * the same thing was tried as well, changed nothing on any query, and was not kept.
          */
         const val WHOLE_WORDS_FIRST = true
+
+        /**
+         * Search pictures by what is in them, beside the words ([com.amar.vault.photos.PhotoSearch]).
+         * Its photos are a list of their own ([com.amar.vault.retrieval.RetrievalResult.photos]); the
+         * rows that say the query's words are found and ordered exactly as without it. Off, or with
+         * no photo search models on the device, no photos are listed and no model runs.
+         *
+         * Measured 2026-10-22 (visual-search report): before it, the right photo was listed first
+         * for 0 of 93 searches in each of English, Hindi and Hindi in Latin letters.
+         */
+        const val PHOTO_LANE = true
+
+        /** How many photos a search lists at most: one band of thumbnails. */
+        const val PHOTO_BUDGET = 24
     }
 }

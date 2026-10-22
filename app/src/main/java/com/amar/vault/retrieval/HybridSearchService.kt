@@ -36,6 +36,8 @@ class HybridSearchService(
     private val lexical: LexicalRetriever,
     private val semantic: SemanticRetriever,
     private val boostConfig: BoostConfig,
+    /** Pictures by what is in them ([RetrievalResult.photos]); [PhotoRetriever.NONE] lists none. */
+    private val photos: PhotoRetriever = PhotoRetriever.NONE,
 ) : RetrievalService {
 
     private enum class QueryType { EXACT_KEYWORD, SEMANTIC_PHRASE, GIBBERISH }
@@ -82,7 +84,8 @@ class HybridSearchService(
     ): RetrievalResult {
         val result = execute(request, onStage)
         val plan = request.plan
-        if (result.items.isNotEmpty() || !request.tuning.relaxEmptyFilter ||
+        // Photos from the period asked about are an answer too: the filter is kept for them.
+        if (result.items.isNotEmpty() || result.photos.isNotEmpty() || !request.tuning.relaxEmptyFilter ||
             plan == null || plan.strict.isEmpty()) return result
         // With the words the filter was read from put back: for "last month" typed on its own
         // they are all there is to look for, and the list was simply empty.
@@ -159,6 +162,26 @@ class HybridSearchService(
         fun List<VaultItem>.applyStrictFilter(): List<VaultItem> {
             val inPeriod = if (strictIds != null) filter { it.id in strictIds } else this
             return if (only != null) inPeriod.filter(only) else inPeriod
+        }
+
+        // ── Photos by what is in them: a list of their own, beside the lanes below ──
+        // The period or amount narrows them inside the scan (by id), so the photos listed are
+        // the best ones in the period, not the best ones overall that happen to fall in it.
+        val photoDeferred = async(Dispatchers.Default) {
+            if (!tuning.photoLane || qLower.isBlank()) return@async emptyList<PhotoHit>()
+            try {
+                val inPeriod: ((String) -> Boolean)? = strictIds?.let { ids -> { id: String -> id in ids } }
+                val matches = photos.search(q, VaultConfig.Retrieval.PHOTO_BUDGET, inPeriod)
+                if (matches.isEmpty()) return@async emptyList<PhotoHit>()
+                val rows = repository.getByIds(matches.map { it.itemId }).associateBy { it.id }
+                matches.mapNotNull { m -> rows[m.itemId]?.let { PhotoHit(it, m.score) } }
+                    .filter { only == null || only(it.item) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Like the other lanes: a failed photo search lists no photos, and the words still work.
+                VaultLog.e("HybridSearch", "Photo lane error: ${e.message}"); emptyList<PhotoHit>()
+            }
         }
 
         // ── 1–4. Candidate lanes ──────────────────────────────────────────
@@ -346,7 +369,8 @@ class HybridSearchService(
 
         if (bm25Results.isEmpty() && vectorResults.isEmpty() &&
             substringResults.isEmpty() && fuzzyResults.isEmpty()) {
-            return@coroutineScope RetrievalResult(emptyList())
+            // No row says a word of it; pictures may still look like it.
+            return@coroutineScope RetrievalResult(emptyList(), photos = photoDeferred.await())
         }
 
         // ── 5. Late embedding for semantic document queries ───────────────
@@ -373,7 +397,8 @@ class HybridSearchService(
                 notes = if (tuning.candidateBounded) listOf("candidate-bounded") else emptyList(),
             ).also(it::accept)
         }
-        RetrievalResult(fusion.items, trace, similarSpellingsOnly = fusion.similarSpellingsOnly)
+        RetrievalResult(fusion.items, trace, similarSpellingsOnly = fusion.similarSpellingsOnly,
+            photos = photoDeferred.await())
     }
 
     // ════════════════════════════════════════════════════════════════════════

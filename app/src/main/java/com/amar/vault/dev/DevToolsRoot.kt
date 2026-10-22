@@ -32,7 +32,7 @@ import java.util.Locale
  * [com.amar.vault.Screen] graph has exactly ONE entry (DEV_TOOLS). Reachable only when
  * [DeveloperMode.isEnabled].
  */
-enum class DevRoute { HUB, INDEX_FILES, AI_MODELS, BENCHMARKS, GOLDEN_QUERIES }
+enum class DevRoute { HUB, INDEX_FILES, AI_MODELS, BENCHMARKS, GOLDEN_QUERIES, PHOTO_SEARCH }
 
 @Composable
 fun DevToolsRoot(onExit: () -> Unit) {
@@ -45,6 +45,7 @@ fun DevToolsRoot(onExit: () -> Unit) {
         DevRoute.AI_MODELS -> ModelDataManagerScreen(onBack = back)
         DevRoute.BENCHMARKS -> BenchmarkDashboardScreen(onBack = back)
         DevRoute.GOLDEN_QUERIES -> GoldenCaptureScreen(onBack = back)
+        DevRoute.PHOTO_SEARCH -> PhotoSearchScreen(onBack = back)
     }
 }
 
@@ -59,6 +60,7 @@ private fun DevToolsHub(onExit: () -> Unit, onNavigate: (DevRoute) -> Unit) {
         DevNavCard("AI Models", "Scan/import GGUF · load · test Summary/Chat/RAG", "🧠") { onNavigate(DevRoute.AI_MODELS) }
         DevNavCard("Benchmarks", "Run evaluation suites · regression vs baseline · reports", "📊") { onNavigate(DevRoute.BENCHMARKS) }
         DevNavCard("Golden Queries", "Type a real query · mark the right answers · scored by Benchmarks", "🎯") { onNavigate(DevRoute.GOLDEN_QUERIES) }
+        DevNavCard("Photo search", "Models · pictures embedded · timing on this phone", "🖼️") { onNavigate(DevRoute.PHOTO_SEARCH) }
         Spacer(Modifier.height(8.dp))
         KeywordIndexNote()
         UpkeepNote("Pictures looked at again", PictureTypeUpkeep.lastReport(LocalContext.current))

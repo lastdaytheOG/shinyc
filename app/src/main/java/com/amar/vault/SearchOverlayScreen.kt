@@ -79,6 +79,7 @@ fun SearchOverlayScreen(
     val similarSpellingsOnly by viewModel.similarSpellingsOnly.collectAsState()
     val understood by viewModel.understood.collectAsState()
     val readingNote by viewModel.readingNote.collectAsState()
+    val photoMatches by viewModel.photoMatches.collectAsState()
 
     // Detailed overlay for search results spatial continuity
     var activeDetailItem by remember { mutableStateOf<StashItemWithVaultItem?>(null) }
@@ -226,19 +227,19 @@ fun SearchOverlayScreen(
                     onDeleteSearch = { viewModel.deleteRecentSearch(it) },
                     onClearAll = { viewModel.clearHistory() }
                 )
-            } else if (mappedResults.isEmpty() && activeFilter != SearchFilter.ALL) {
+            } else if (mappedResults.isEmpty() && photoMatches.isEmpty() && activeFilter != SearchFilter.ALL) {
                 // Nothing under this chip: say that it is the chip, and offer the way out of it.
                 com.amar.vault.ui.components.search.EmptyStateView(
                     query = queryText,
                     filter = activeFilter,
                     onSearchEverything = { viewModel.updateFilter(SearchFilter.ALL) }
                 )
-            } else if (mappedResults.isEmpty() && searchSuggestions.isNotEmpty()) {
+            } else if (mappedResults.isEmpty() && photoMatches.isEmpty() && searchSuggestions.isNotEmpty()) {
                 com.amar.vault.ui.components.search.SearchSuggestionsView(
                     suggestions = searchSuggestions,
                     onSuggestionSelected = { viewModel.updateQuery(it) }
                 )
-            } else if (mappedResults.isEmpty()) {
+            } else if (mappedResults.isEmpty() && photoMatches.isEmpty()) {
                 com.amar.vault.ui.components.search.EmptyStateView(query = queryText)
             } else {
                 // Entity Page entry point — projects the current query as an entity over the
@@ -267,6 +268,19 @@ fun SearchOverlayScreen(
                     contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
+                    // Pictures found by what is in them: one band above the results that say the
+                    // query's words, never mixed in among them.
+                    if (photoMatches.isNotEmpty()) {
+                        item(key = "photo-band") {
+                            com.amar.vault.ui.components.search.PhotoBand(
+                                photos = photoMatches,
+                                onOpen = { photo ->
+                                    viewModel.recordSearch(queryText)
+                                    AmarImageViewerActivity.open(context, photo.toVaultItem())
+                                },
+                            )
+                        }
+                    }
                     items(mappedResults, key = { it.row.stashId }) { hit ->
                         val item = hit.row
                         val isImage = item.itemType.isImage
