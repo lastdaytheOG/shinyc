@@ -89,6 +89,81 @@ fun SearchOverlayScreen(
     // Each result is the card to show plus, for a document, the page and words that matched.
     val mappedResults = resultsList
 
+    // The results that say one of the query's words as a word come first; those found only
+    // inside longer words ("catalogue" for "cat") or by its small words alone ("the") are folded
+    // under one line. The order the search gave is kept within each.
+    val (direct, partial) = remember(mappedResults, queryText, similarSpellingsOnly) {
+        if (similarSpellingsOnly) mappedResults to emptyList()
+        else {
+            val words = ResultWording.contentWords(queryText)
+            mappedResults.partition { it.filedUnder != null || ResultWording.saysAWord(it, words) }
+        }
+    }
+    var showPartial by remember(queryText) { mutableStateOf(false) }
+    // With nothing else to show, the partial matches are not hidden behind a tap.
+    val partialOpen = showPartial || (direct.isEmpty() && photoMatches.isEmpty())
+
+    // One result's card, as each kind is shown.
+    val resultCard: @Composable (SearchHit, Modifier) -> Unit = { hit, cardModifier ->
+        val item = hit.row
+        val isImage = item.itemType.isImage
+        val isDocument = remember(item) {
+            !isImage && (ContentSpecies.classify(item) == ContentSpecies.PDF ||
+                ContentSpecies.isOfficeDocument(item.itemType, item.mimeType, item.uri))
+        }
+        if (isImage) {
+            // A picture is shown as the picture, with the words read off it that matched, and
+            // opens full screen. Its details are a long press away.
+            com.amar.vault.ui.components.search.ImageHitCard(
+                hit = hit,
+                query = queryText,
+                onClick = {
+                    viewModel.recordSearch(queryText)
+                    AmarImageViewerActivity.open(context, item.toVaultItem())
+                },
+                onLongClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    activeDetailItem = item
+                },
+                modifier = cardModifier
+            )
+        } else if (isDocument) {
+            // A document shows the words that matched and opens on their page. What the card
+            // used to open — folder, note, delete — is a long press away.
+            com.amar.vault.ui.components.search.DocumentHitCard(
+                hit = hit,
+                query = queryText,
+                onClick = {
+                    viewModel.recordSearch(queryText)
+                    if (!openAtMatch(context, hit, queryText)) activeDetailItem = item
+                },
+                onLongClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    activeDetailItem = item
+                },
+                modifier = cardModifier
+            )
+        } else {
+            // Every other kind keeps the shared card, drawn from the item as stored.
+            CollectibleVaultCard(
+                item = item,
+                onClick = {
+                    viewModel.recordSearch(queryText)
+                    activeDetailItem = item
+                },
+                onLongClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                },
+                screenBg = Cream,
+                cardBg = CreamLight,
+                primaryText = CharcoalSoft,
+                secondaryText = WarmBrownDark,
+                borderColor = CreamDark,
+                modifier = cardModifier
+            )
+        }
+    }
+
     // The box keeps its text between visits, so search again for what is in the vault now.
     LaunchedEffect(Unit) {
         viewModel.warmUpPhotoSearch()
@@ -106,7 +181,9 @@ fun SearchOverlayScreen(
             if (it is DragInteraction.Start) draggedByUser = true
         }
     }
-    LaunchedEffect(mappedResults) {
+    // The photos come with the last search stage, after the word results are on screen; laid out
+    // above the first of those, they were scrolled half out of sight. They are shown from the top.
+    LaunchedEffect(mappedResults, photoMatches) {
         if (!draggedByUser) listState.scrollToItem(0)
     }
 
@@ -271,12 +348,13 @@ fun SearchOverlayScreen(
                     contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // Pictures found by what is in them: one band above the results that say the
-                    // query's words, never mixed in among them.
+                    // Pictures found by what is in them come first, as a grid; a whole screen of
+                    // them when nothing says the query's words.
                     if (photoMatches.isNotEmpty()) {
-                        item(key = "photo-band") {
-                            com.amar.vault.ui.components.search.PhotoBand(
+                        item(key = "photo-grid") {
+                            com.amar.vault.ui.components.search.PhotoGrid(
                                 photos = photoMatches,
+                                shownAtFirst = if (direct.isEmpty()) 12 else 6,
                                 onOpen = { photo ->
                                     viewModel.recordSearch(queryText)
                                     AmarImageViewerActivity.open(context, photo.toVaultItem())
@@ -284,63 +362,31 @@ fun SearchOverlayScreen(
                             )
                         }
                     }
-                    items(mappedResults, key = { it.row.stashId }) { hit ->
-                        val item = hit.row
-                        val isImage = item.itemType.isImage
-                        val isDocument = remember(item) {
-                            !isImage && (ContentSpecies.classify(item) == ContentSpecies.PDF ||
-                                ContentSpecies.isOfficeDocument(item.itemType, item.mimeType, item.uri))
+                    items(direct, key = { it.row.stashId }) { hit ->
+                        resultCard(hit, Modifier.animateItemPlacement())
+                    }
+                    // What was found only inside longer words, or only by the query's small words,
+                    // is folded under one line: in the list, it buried what was asked for.
+                    if (partial.isNotEmpty() && !partialOpen) {
+                        item(key = "partial-toggle") {
+                            androidx.compose.material3.TextButton(onClick = { showPartial = true }) {
+                                Text("Show ${partial.size} partial matches", color = WarmBrownDark, fontSize = 14.sp)
+                            }
                         }
-                        if (isImage) {
-                            // A picture is shown as the picture, with the words read off it that
-                            // matched, and opens full screen. Its details are a long press away.
-                            com.amar.vault.ui.components.search.ImageHitCard(
-                                hit = hit,
-                                query = queryText,
-                                onClick = {
-                                    viewModel.recordSearch(queryText)
-                                    AmarImageViewerActivity.open(context, item.toVaultItem())
-                                },
-                                onLongClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    activeDetailItem = item
-                                },
-                                modifier = Modifier.animateItemPlacement()
-                            )
-                        } else if (isDocument) {
-                            // A document shows the words that matched and opens on their page.
-                            // What the card used to open — folder, note, delete — is a long press away.
-                            com.amar.vault.ui.components.search.DocumentHitCard(
-                                hit = hit,
-                                query = queryText,
-                                onClick = {
-                                    viewModel.recordSearch(queryText)
-                                    if (!openAtMatch(context, hit, queryText)) activeDetailItem = item
-                                },
-                                onLongClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    activeDetailItem = item
-                                },
-                                modifier = Modifier.animateItemPlacement()
-                            )
-                        } else {
-                            // Every other kind keeps the shared card, drawn from the item as stored.
-                            CollectibleVaultCard(
-                                item = item,
-                                onClick = {
-                                    viewModel.recordSearch(queryText)
-                                    activeDetailItem = item
-                                },
-                                onLongClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                },
-                                screenBg = Cream,
-                                cardBg = CreamLight,
-                                primaryText = CharcoalSoft,
-                                secondaryText = WarmBrownDark,
-                                borderColor = CreamDark,
-                                modifier = Modifier.animateItemPlacement()
-                            )
+                    }
+                    if (partialOpen && partial.isNotEmpty()) {
+                        if (direct.isEmpty() && photoMatches.isEmpty()) {
+                            item(key = "partial-note") {
+                                Text(
+                                    text = "Nothing says \"${queryText.trim()}\" as a word. These contain it inside other words.",
+                                    color = WarmBrownDark,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp,
+                                )
+                            }
+                        }
+                        items(partial, key = { "partial-" + it.row.stashId }) { hit ->
+                            resultCard(hit, Modifier.animateItemPlacement())
                         }
                     }
                 }

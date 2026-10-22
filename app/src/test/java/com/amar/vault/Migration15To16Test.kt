@@ -110,20 +110,24 @@ class Migration15To16Test {
     }
 
     @Test
-    fun thePicturesStillToEmbedAreThePicturesNewestFirst() = runBlocking {
+    fun thePhotosStillToEmbedAreThePhotosOnly() = runBlocking {
         aVaultWithPictures()
         val db = open(VaultDatabase.MIGRATION_15_16)
         val dao = db.photoVectorDao()
 
-        assertEquals(listOf("beach", "receipt"), dao.picturesWithout("m1", 10).map { it.id })
+        // Only the photo: the screenshot ("receipt") is found by the words on it.
+        assertEquals(listOf("beach"), dao.picturesWithout("m1", 10).map { it.id })
         dao.upsert(vector("beach"))
-        assertEquals(listOf("receipt"), dao.picturesWithout("m1", 10).map { it.id })
-        assertEquals(1, dao.countWithout("m1"))
-        // Another model has its own vectors: both pictures still need one from it.
-        assertEquals(2, dao.countWithout("m2"))
+        assertEquals(emptyList<String>(), dao.picturesWithout("m1", 10).map { it.id })
+        assertEquals(0, dao.countWithout("m1"))
+        // Another model has its own vectors: the photo still needs one from it.
+        assertEquals(1, dao.countWithout("m2"))
         // A picture that changed under the same id (another perceptual hash) is embedded again.
         dao.upsert(vector("beach", pHash = 99L))
-        assertEquals(listOf("beach", "receipt"), dao.picturesWithout("m1", 10).map { it.id })
+        assertEquals(listOf("beach"), dao.picturesWithout("m1", 10).map { it.id })
+        // A screenshot embedded before only photos were is found, to be forgotten.
+        dao.upsert(vector("receipt"))
+        assertEquals(listOf("receipt"), dao.ofItemsNotPhotos())
     }
 
     @Test

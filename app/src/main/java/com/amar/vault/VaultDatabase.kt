@@ -264,6 +264,10 @@ interface VaultDao {
     """)
     suspend fun wholeItemsForTyping(afterRowId: Long, limit: Int): List<StoredAddress>
 
+    /** The highest row id there is now (0 for an empty vault): where a pass over the rows ends. */
+    @Query("SELECT IFNULL(MAX(rowid), 0) FROM vault_items")
+    suspend fun lastRowId(): Long
+
     @Query("UPDATE vault_items SET itemType = :type WHERE id = :id")
     suspend fun setItemType(id: String, type: ItemType)
 

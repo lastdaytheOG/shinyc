@@ -58,10 +58,20 @@ class IndexingPipeline private constructor(private val context: Context) {
         if (!read) IndexMetrics.increment(IndexMetrics.Event.INDEX_SKIPPED_DUP)
     }
 
+    /**
+     * Reads a picture that is already stored again, with the reader as it is now, and replaces
+     * what was read off it before ([com.amar.vault.indexing.PictureTextUpkeep]). Its date and its
+     * photo vector stay as they are.
+     */
+    suspend fun rereadBitmap(bitmap: Bitmap, uri: String, id: String) {
+        beingRead.once(id) { readAndStore(bitmap, uri, id, reread = true) }
+    }
+
     private suspend fun readAndStore(
         bitmap: Bitmap,
         uri: String,
-        baseId: String?
+        baseId: String?,
+        reread: Boolean = false,
     ): Unit = withContext(Dispatchers.Default) {
 
         val t0 = System.currentTimeMillis()
@@ -79,7 +89,8 @@ class IndexingPipeline private constructor(private val context: Context) {
 
         // Image dedup = perceptual hash; the pHash is also stored on the item below.
         val (hash, isDuplicate) = duplicateDetector.imageVerdict(bitmap)
-        if (isDuplicate) {
+        // A picture read again is its own duplicate, by design: it is read all the same.
+        if (isDuplicate && !reread) {
             val existingByHash = duplicateTarget ?: dao.findByPHash(hash)
             if (existingByHash != null && existingByHash.ocrText.isBlank()) {
                 VaultLog.w("IndexingPipeline", "Repairing staged image shell with blank OCR: ${existingByHash.id}")
@@ -96,8 +107,12 @@ class IndexingPipeline private constructor(private val context: Context) {
 
         val shellItem = existing?.copy(
             pHash = hash,
-            timestamp = System.currentTimeMillis(),
-        ) ?: VaultItem(
+            timestamp = if (reread) existing.timestamp else System.currentTimeMillis(),
+        )?.let {
+            // Read again: what was read before goes, so a picture that now reads as nothing is
+            // stored with nothing on it rather than keeping the old text.
+            if (reread) it.copy(ocrText = "", tags = "", qrPayload = null, lang = "und") else it
+        } ?: VaultItem(
             id = targetId,
             uri = uri,
             ocrText = "",
@@ -116,7 +131,8 @@ class IndexingPipeline private constructor(private val context: Context) {
         // way a picture with no text on it can be found. The pixels are prepared now, while the
         // decoded picture is at hand; the model runs beside OCR. Without photo search's models
         // there is no input size and nothing is done.
-        photoSearch.inputSize?.let { size ->
+        // Photos only: a screenshot is found by the words on it.
+        if (!reread && itemType == ItemType.PHOTO) photoSearch.inputSize?.let { size ->
             val pixels = com.amar.vault.photos.PhotoPixels.of(bitmap, size)
             stagedDeepScope.launch {
                 try {
@@ -131,7 +147,7 @@ class IndexingPipeline private constructor(private val context: Context) {
 
         // Sprint E3 — observation-only profiler (null unless the developer capture toggle is on).
         // OCR + QR/barcode scanning (run in parallel inside the image content-extraction stage).
-        val (ocrText, qrPayloads) = imageContentExtractor.extract(bitmap, sourceId = targetId)
+        val (ocrText, qrPayloads) = imageContentExtractor.extract(bitmap, sourceId = targetId, photo = itemType == ItemType.PHOTO)
 
         val ocrMs = System.currentTimeMillis() - t1
         IndexMetrics.recordDuration(IndexMetrics.Timing.OCR, ocrMs)
@@ -140,6 +156,10 @@ class IndexingPipeline private constructor(private val context: Context) {
 
         // If both OCR and QR found nothing, keep the shell row visible/openable and stop deep work.
         if (ocrText.isBlank() && qrPayloads.isEmpty()) {
+            // Read again and found nothing: the keyword engine forgets the words it had for it.
+            if (reread) bm25Updater.update(listOf(com.amar.vault.indexing.IndexEntry(
+                id = targetId, text = com.amar.vault.retrieval.KeywordText.of(shellItem),
+            )))
             IndexMetrics.increment(IndexMetrics.Event.INDEX_SUCCESS)
             val totalMs = System.currentTimeMillis() - t0
             IndexMetrics.recordDuration(IndexMetrics.Timing.INDEX_TOTAL, totalMs)

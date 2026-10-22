@@ -65,6 +65,7 @@ private fun DevToolsHub(onExit: () -> Unit, onNavigate: (DevRoute) -> Unit) {
         KeywordIndexNote()
         UpkeepNote("Pictures looked at again", PictureTypeUpkeep.lastReport(LocalContext.current))
         UpkeepNote("Tags worked out again", AutoTagUpkeep.lastReport(LocalContext.current))
+        UpkeepNote("Pictures read again", com.amar.vault.indexing.PictureTextUpkeep.lastReport(LocalContext.current))
         DatabaseUpgradeNote()
     }
 }

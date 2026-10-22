@@ -187,15 +187,19 @@ class PhotoModelFiles(private val context: Context) {
         val f = File(dir, MANIFEST)
         if (!f.exists()) return null
         return try {
-            val j = JSONObject(f.readText())
-            PhotoModelManifest(
-                id = j.getString("id"), dim = j.getInt("dim"), inputSize = j.getInt("inputSize"),
-                queryModel = j.getString("queryModel"), photoModel = j.getString("photoModel"),
-            ).also { cached = it }
+            parse(f.readText()).also { cached = it }
         } catch (e: Exception) {
             VaultLog.w("PhotoSearch", "unreadable photo search manifest: ${e.message}")
             null
         }
+    }
+
+    private fun parse(json: String): PhotoModelManifest {
+        val j = JSONObject(json)
+        return PhotoModelManifest(
+            id = j.getString("id"), dim = j.getInt("dim"), inputSize = j.getInt("inputSize"),
+            queryModel = j.getString("queryModel"), photoModel = j.getString("photoModel"),
+        )
     }
 
     /** Every model file is on the device. */
@@ -222,12 +226,22 @@ class PhotoModelFiles(private val context: Context) {
      * Copies the models out of the APK, each file whole or not at all (written to `.part`, then
      * renamed), the manifest last: a copy cut short is finished by the next call, never mistaken
      * for a complete set.
+     *
+     * Only the files the bundled manifest names are copied. The folder can hold test material too
+     * (a folder of parity photos), and copying everything listed tried to open that folder as a
+     * file: the copy stopped after its first file, and on a phone photo search never started.
      */
     private fun copyFromAssets(): Boolean = synchronized(this) {
-        val names = try { context.assets.list(DIR)?.toList().orEmpty() } catch (e: Exception) { emptyList() }
-        if (MANIFEST !in names) return false
+        val m = try {
+            context.assets.open("$DIR/$MANIFEST").use { parse(it.readBytes().decodeToString()) }
+        } catch (e: Exception) {
+            VaultLog.w("PhotoSearch", "no readable manifest in the APK: ${e.message}")
+            return false
+        }
+        val listed = try { context.assets.list(DIR)?.toSet().orEmpty() } catch (e: Exception) { emptySet() }
+        val needed = listOf(TOKENIZER, m.queryModel, "${m.queryModel}_data", m.photoModel).filter { it in listed }
         dir.mkdirs()
-        for (name in names.filter { it != MANIFEST } + MANIFEST) {
+        for (name in needed + MANIFEST) {
             val target = File(dir, name)
             if (target.exists()) continue
             val partial = File(dir, "$name.part")
