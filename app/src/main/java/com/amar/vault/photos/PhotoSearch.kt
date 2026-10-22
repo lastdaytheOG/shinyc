@@ -4,7 +4,13 @@ import android.content.Context
 import android.graphics.Bitmap
 import com.amar.vault.VaultDatabase
 import com.amar.vault.VaultLog
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -26,8 +32,15 @@ import java.io.File
 class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
 
     private val files = PhotoModelFiles(context)
-    private val loadLock = Mutex()
     private val encodeLock = Mutex()
+
+    /**
+     * Where the models load: not in the caller's coroutine. Each keystroke cancels the search
+     * before it, and a load cancelled with it used to count as a failed one, which turned photo
+     * search off for the rest of the session ("Child of the scoped flow was cancelled").
+     */
+    private val loader = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    @Volatile private var loading: Deferred<Boolean>? = null
 
     @Volatile private var query: QueryEncoder? = null
     @Volatile private var photo: PhotoEncoder? = null
@@ -43,33 +56,49 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
     /** Why photo search is off, when it is: for Developer Tools. */
     val problem: String? get() = failed ?: if (!files.present() && !files.bundled()) "the photo search models are not on this device" else null
 
-    /** Loads the models and the stored vectors once; false when they are not here or did not load. */
+    /**
+     * Loads the models and the stored vectors once; false when they are not here or did not load.
+     * Every caller waits for the same load ([loader]); a caller that is cancelled stops waiting,
+     * and the load goes on for the next one.
+     */
     private suspend fun ensureLoaded(): Boolean {
         if (index != null) return true
         if (failed != null) return false
-        return loadLock.withLock {
-            if (index != null) return@withLock true
-            withContext(Dispatchers.IO) {
-                if (!files.installFromApk()) return@withContext false
-                try {
-                    val manifest = files.manifest() ?: error("no manifest")
-                    val tokenizer = files.tokenizer().inputStream().use { GemmaTokenizer.read(it) }
-                    val q = QueryEncoder(files.queryModel().path, tokenizer)
-                    val p = PhotoEncoder(files.photoModel().path, manifest.inputSize)
-                    check(q.dim == manifest.dim && p.dim == manifest.dim) {
-                        "model dimensions differ: query ${q.dim}, photo ${p.dim}, manifest ${manifest.dim}"
-                    }
-                    val idx = PhotoIndex(manifest.dim)
-                    idx.load(db.photoVectorDao().allOf(manifest.id))
-                    query = q; photo = p; index = idx
-                    VaultLog.i(TAG, "photo search ready: ${manifest.id}, ${idx.size} pictures")
-                    true
-                } catch (e: Throwable) {
-                    failed = "the photo search models could not be loaded: ${e.message}"
-                    VaultLog.e(TAG, failed!!)
-                    false
-                }
+        val load = synchronized(this) { loading ?: loader.async { load() }.also { loading = it } }
+        val loaded = load.await()
+        // Models not on the device yet are not a failure: let a later call look again.
+        if (!loaded && failed == null) synchronized(this) { if (loading === load) loading = null }
+        return loaded
+    }
+
+    private suspend fun load(): Boolean {
+        if (!files.installFromApk()) return false
+        return try {
+            val manifest = files.manifest() ?: error("no manifest")
+            val tokenizer = files.tokenizer().inputStream().use { GemmaTokenizer.read(it) }
+            val q = QueryEncoder(files.queryModel().path, tokenizer)
+            val p = PhotoEncoder(files.photoModel().path, manifest.inputSize)
+            check(q.dim == manifest.dim && p.dim == manifest.dim) {
+                "model dimensions differ: query ${q.dim}, photo ${p.dim}, manifest ${manifest.dim}"
             }
+            val idx = PhotoIndex(manifest.dim)
+            idx.load(db.photoVectorDao().allOf(manifest.id))
+            query = q; photo = p; index = idx
+            VaultLog.i(TAG, "photo search ready: ${manifest.id}, ${idx.size} pictures")
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            failed = "the photo search models could not be loaded: ${e.message}"
+            VaultLog.e(TAG, failed!!)
+            false
+        }
+    }
+
+    /** Starts loading the models now, so the first search does not wait for them. */
+    fun warmUp() {
+        if (index == null && failed == null && (files.present() || files.bundled())) {
+            loader.launch { ensureLoaded() }
         }
     }
 

@@ -90,7 +90,10 @@ fun SearchOverlayScreen(
     val mappedResults = resultsList
 
     // The box keeps its text between visits, so search again for what is in the vault now.
-    LaunchedEffect(Unit) { viewModel.refreshSearch() }
+    LaunchedEffect(Unit) {
+        viewModel.warmUpPhotoSearch()
+        viewModel.refreshSearch()
+    }
 
     // Every new result list is shown from its first, best row. A LazyColumn with keys keeps the
     // row that was on top where it is; when a later search stage (or the next keystroke) ranked
