@@ -102,10 +102,24 @@ object VaultModule {
 
     @Provides
     @Singleton
+    fun providePhotoSearch(@ApplicationContext context: Context, db: VaultDatabase): com.amar.vault.photos.PhotoSearch =
+        com.amar.vault.photos.PhotoSearch(context, db)
+
+    @Provides
+    @Singleton
+    fun providePhotoRetriever(photoSearch: com.amar.vault.photos.PhotoSearch): com.amar.vault.retrieval.PhotoRetriever =
+        object : com.amar.vault.retrieval.PhotoRetriever {
+            override suspend fun search(query: String, k: Int, only: ((String) -> Boolean)?) =
+                photoSearch.search(query, k, only)
+        }
+
+    @Provides
+    @Singleton
     fun provideRetrievalService(
         repository: SearchRepository,
         lexical: LexicalRetriever,
         semantic: SemanticRetriever,
         boostConfig: BoostConfig,
-    ): RetrievalService = HybridSearchService(repository, lexical, semantic, boostConfig)
+        photos: com.amar.vault.retrieval.PhotoRetriever,
+    ): RetrievalService = HybridSearchService(repository, lexical, semantic, boostConfig, photos)
 }

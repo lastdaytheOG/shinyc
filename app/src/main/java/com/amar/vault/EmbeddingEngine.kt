@@ -31,16 +31,21 @@ class EmbeddingEngine(context: Context) {
          * Whether a model can be loaded at all: already in app storage, or bundled in the
          * APK's assets. A build may ship without the model (it is ~570 MB); every caller
          * must treat the embedder as optional and leave keyword search working.
+         *
+         * Its tokenizer is an asset too, and a build without the model leaves that out as well
+         * (`-PnoEmbeddingModel`), so a model an earlier build left in storage cannot be used then.
          */
         fun isModelPresent(context: Context): Boolean {
-            if (File(context.filesDir, MODEL_CACHE).exists()) return true
             // Assets cannot change while the app runs, so the listing is read once.
-            return bundledInAssets
-                ?: (context.assets.list("")?.contains(MODEL_FILE) == true).also { bundledInAssets = it }
+            val assets = rootAssets ?: (context.assets.list("")?.toSet() ?: emptySet()).also { rootAssets = it }
+            if (TOKENIZER_FILE !in assets) return false
+            return File(context.filesDir, MODEL_CACHE).exists() || MODEL_FILE in assets
         }
 
+        private const val TOKENIZER_FILE = "tokenizer.json"
+
         @Volatile
-        private var bundledInAssets: Boolean? = null
+        private var rootAssets: Set<String>? = null
 
         private fun copyModelToStorage(context: Context): File {
             val cacheFile = File(context.filesDir, MODEL_CACHE)

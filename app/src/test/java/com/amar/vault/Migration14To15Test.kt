@@ -104,7 +104,7 @@ class Migration14To15Test {
     fun everythingStoredIsStillThereAndTheNewListIsEmpty() = runBlocking {
         aVaultWithThingsInIt()
 
-        val db = open(VaultDatabase.MIGRATION_14_15)
+        val db = open(VaultDatabase.MIGRATION_14_15, VaultDatabase.MIGRATION_15_16)
 
         val items = db.vaultDao().getAll().associateBy { it.id }
         assertEquals(setOf("act_chunk0", "act_chunk1", "shot"), items.keys)
@@ -125,7 +125,7 @@ class Migration14To15Test {
     @Test
     fun theFullTextIndexStillFindsWhatWasStored() = runBlocking {
         aVaultWithThingsInIt()
-        val db = open(VaultDatabase.MIGRATION_14_15)
+        val db = open(VaultDatabase.MIGRATION_14_15, VaultDatabase.MIGRATION_15_16)
 
         assertEquals(listOf("act_chunk1"), db.vaultDao().searchFts("income").first().map { it.id })
     }
@@ -133,7 +133,7 @@ class Migration14To15Test {
     @Test
     fun theNewListCanBeWrittenAndRead() = runBlocking {
         aVaultWithThingsInIt()
-        val db = open(VaultDatabase.MIGRATION_14_15)
+        val db = open(VaultDatabase.MIGRATION_14_15, VaultDatabase.MIGRATION_15_16)
 
         val row = DocumentImport(
             id = "scan", uri = "content://docs/scan", name = "Scan.pdf", mimeType = "application/pdf",
@@ -154,7 +154,8 @@ class Migration14To15Test {
             open()
             fail("a version-14 vault was opened with no step to version 15")
         } catch (e: IllegalStateException) {
-            assertTrue(e.message.orEmpty(), "14" in e.message.orEmpty() && "15" in e.message.orEmpty())
+            // The step that is missing is the one from 14, to whichever version this build is.
+            assertTrue(e.message.orEmpty(), "from 14 to" in e.message.orEmpty())
         }
     }
 
@@ -163,6 +164,7 @@ class Migration14To15Test {
         V13Vault.create(context, name).close()
         val db = open(*VaultDatabase.migrations())
         assertEquals(emptyList<DocumentImport>(), db.documentImportDao().getAll())
-        assertEquals(15, db.openHelper.readableDatabase.version)
+        // Every step there is, so it ends at the newest version, not at 15.
+        assertEquals(16, db.openHelper.readableDatabase.version)
     }
 }

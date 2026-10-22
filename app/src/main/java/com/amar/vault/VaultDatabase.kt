@@ -416,9 +416,10 @@ interface VaultRelationshipDao {
         StashItem::class,
         IngestionSession::class,
         IngestionAttachment::class,
-        com.amar.vault.indexing.DocumentImport::class
-    ], 
-    version = 15,
+        com.amar.vault.indexing.DocumentImport::class,
+        com.amar.vault.photos.PhotoVector::class,
+    ],
+    version = 16,
     exportSchema = true
 )
 @TypeConverters(ItemTypeConverter::class)
@@ -442,7 +443,8 @@ abstract class VaultDatabase : RoomDatabase() {
     abstract fun ingestionSessionDao(): IngestionSessionDao
     abstract fun ingestionAttachmentDao(): IngestionAttachmentDao
     abstract fun documentImportDao(): com.amar.vault.indexing.DocumentImportDao
- 
+    abstract fun photoVectorDao(): com.amar.vault.photos.PhotoVectorDao
+
     companion object {
         @Volatile
         private var INSTANCE: VaultDatabase? = null
@@ -632,6 +634,22 @@ abstract class VaultDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 16 adds what each picture looks like ([com.amar.vault.photos.PhotoVector]) for
+         * searching photos by what is in them. A new table and nothing else: no stored row is
+         * touched, and a build without photo search simply leaves the table empty.
+         */
+        internal val MIGRATION_15_16 = object : androidx.room.migration.Migration(15, 16) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `photo_vectors` (`itemId` TEXT NOT NULL, `model` TEXT NOT NULL, " +
+                        "`pHash` INTEGER NOT NULL, `vector` BLOB NOT NULL, `scale` REAL NOT NULL, `madeAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`itemId`, `model`))"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_photo_vectors_model` ON `photo_vectors` (`model`)")
+            }
+        }
+
+        /**
          * Every step from version 6 to the current one, in order. [context] is where the step to
          * version 14 leaves its account of what it changed ([MigrationReport]); a test that only
          * wants the steps passes none.
@@ -641,6 +659,7 @@ abstract class VaultDatabase : RoomDatabase() {
             MIGRATION_11_12, MIGRATION_12_13,
             Migration13To14 { report -> context?.let { MigrationReport.save(it, report) } },
             MIGRATION_14_15,
+            MIGRATION_15_16,
         )
 
         fun get(context: Context): VaultDatabase {

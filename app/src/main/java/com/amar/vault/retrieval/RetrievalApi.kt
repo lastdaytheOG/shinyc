@@ -65,6 +65,8 @@ data class RetrievalTuning(
     val nameBonus: Boolean = true,
     /** See [VaultConfig.Retrieval.WHOLE_WORDS_FIRST]. */
     val wholeWordsFirst: Boolean = VaultConfig.Retrieval.WHOLE_WORDS_FIRST,
+    /** See [VaultConfig.Retrieval.PHOTO_LANE]; false leaves [RetrievalResult.photos] empty. */
+    val photoLane: Boolean = VaultConfig.Retrieval.PHOTO_LANE,
 )
 
 /**
@@ -162,7 +164,34 @@ data class RetrievalResult(
      * found without it. The caller says so: the list is not what the reading asked for.
      */
     val filterDropped: Boolean = false,
+    /**
+     * Pictures that look like what was typed, most alike first ([PhotoRetriever]). They are a list
+     * of their own, never mixed into [items]: [items] are rows that say the query's words, these
+     * are found by what is in the picture, and a score for one cannot be weighed against the other.
+     * Measured on the benchmark: no similarity floor tells "the right photo is in the vault" from
+     * "a photo a bit like it is", so these are shown as photos that look like it, labelled so.
+     */
+    val photos: List<PhotoHit> = emptyList(),
 )
+
+/** A picture found by what is in it, and how close it came (cosine, -1…1). */
+data class PhotoHit(val item: VaultItem, val score: Float)
+
+/**
+ * Photo search by what is in the pictures ([com.amar.vault.photos.PhotoSearch]). [NONE] finds
+ * nothing: tests, and builds without photo search's models.
+ */
+interface PhotoRetriever {
+    /** The [k] pictures most like [query], most alike first; [only] narrows which item ids may be listed. */
+    suspend fun search(query: String, k: Int, only: ((String) -> Boolean)? = null): List<com.amar.vault.photos.PhotoMatch>
+
+    companion object {
+        val NONE: PhotoRetriever = object : PhotoRetriever {
+            override suspend fun search(query: String, k: Int, only: ((String) -> Boolean)?) =
+                emptyList<com.amar.vault.photos.PhotoMatch>()
+        }
+    }
+}
 
 /**
  * How complete a progressive emission is. Each stage is the SAME fusion/ranking function run

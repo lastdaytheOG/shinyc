@@ -120,7 +120,14 @@ class RetrievalEvaluator(
                 val result = retrieval.retrieve(asTyped.copy(tuning = tuning.copy(relaxEmptyFilter = true)))
                 latencies.add((System.nanoTime() - t0) / 1_000_000)
                 // Collapse chunk hits to unique parent documents, preserving rank order.
-                val ranked = result.items.map { it.parentDocumentId ?: it.id }.distinct()
+                val listed = result.items.map { it.parentDocumentId ?: it.id }.distinct()
+                // Photos found by what is in them are a band of their own above the list. The two
+                // are read separately on screen, so a query counts where its answer stands best:
+                // in the band for a photo found by meaning, in the list otherwise (as before).
+                val band = result.photos.map { it.item.id }.distinct()
+                val inBand = band.indexOfFirst { it in relevant }
+                val inList = listed.indexOfFirst { it in relevant }
+                val ranked = if (inBand >= 0 && (inList < 0 || inBand < inList)) band else listed
                 val score = score(case, query, ranked, relevant).copy(
                     rank = ranked.indexOfFirst { it in relevant } + 1,
                     kind = case.kind,

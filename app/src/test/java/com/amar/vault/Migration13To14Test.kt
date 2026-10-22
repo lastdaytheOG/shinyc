@@ -43,7 +43,7 @@ class Migration13To14Test {
     /** Opens the version-13 file with this build, which migrates it. */
     private fun migrate(): VaultDatabase =
         Room.databaseBuilder(context, VaultDatabase::class.java, name)
-            .addMigrations(Migration13To14 { report = it }, VaultDatabase.MIGRATION_14_15)
+            .addMigrations(Migration13To14 { report = it }, VaultDatabase.MIGRATION_14_15, VaultDatabase.MIGRATION_15_16)
             .allowMainThreadQueries()
             .build()
             .also { opened = it; it.openHelper.writableDatabase }
