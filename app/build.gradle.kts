@@ -83,7 +83,9 @@ android {
             // reads it) and a SentencePiece file nothing reads: 7.1 MB of the APK.
             ignoreAssetsPattern =
                 "!.svn:!.git:!.ds_store:!*.scc:.*:<dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~:!bge-m3-ocr-int4.onnx" +
-                    ":!tokenizer.json:!sentencepiece.bpe.model"
+                    ":!tokenizer.json:!sentencepiece.bpe.model" +
+                    // Photo search's device-test material stays out of the app: only the models ship.
+                    ":<dir>parity:!photo_refs.tsv:!query_refs.tsv"
         }
     }
 
