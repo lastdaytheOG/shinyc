@@ -92,16 +92,19 @@ fun SearchOverlayScreen(
     // The results that say one of the query's words as a word come first; those found only
     // inside longer words ("handbooks" for "hand") or by its small words alone ("the") are folded
     // under one line. The order the search gave is kept within each.
+    // When nothing has the word as typed, what has a word spelt nearly the same ("Eosin" for
+    // "cousin") is folded too: listed openly, it was taken for the answer.
     val (direct, partial) = remember(mappedResults, queryText, similarSpellingsOnly) {
-        if (similarSpellingsOnly) mappedResults to emptyList()
+        if (similarSpellingsOnly) emptyList<SearchHit>() to mappedResults
         else {
             val words = ResultWording.contentWords(queryText)
             mappedResults.partition { it.filedUnder != null || ResultWording.saysAWord(it, words) }
         }
     }
     var showPartial by remember(queryText) { mutableStateOf(false) }
-    // With nothing else to show, the partial matches are not hidden behind a tap.
-    val partialOpen = showPartial || (direct.isEmpty() && photoMatches.isEmpty())
+    // With nothing else to show, results found inside longer words are not hidden behind a tap;
+    // look-alike spellings always are.
+    val partialOpen = showPartial || (direct.isEmpty() && photoMatches.isEmpty() && !similarSpellingsOnly)
 
     // One result's card, as each kind is shown.
     val resultCard: @Composable (SearchHit, Modifier) -> Unit = { hit, cardModifier ->
@@ -333,7 +336,7 @@ fun SearchOverlayScreen(
                 // Look-alikes are said to be look-alikes, not passed off as matches.
                 if (similarSpellingsOnly) {
                     Text(
-                        text = "Nothing has \"${queryText.trim()}\" as typed. These have a word spelt nearly the same.",
+                        text = "Nothing has \"${queryText.trim()}\" as typed.",
                         color = WarmBrownDark,
                         fontSize = 13.sp,
                         lineHeight = 18.sp,
@@ -370,7 +373,11 @@ fun SearchOverlayScreen(
                     if (partial.isNotEmpty() && !partialOpen) {
                         item(key = "partial-toggle") {
                             androidx.compose.material3.TextButton(onClick = { showPartial = true }) {
-                                Text("Show ${partial.size} partial matches", color = WarmBrownDark, fontSize = 14.sp)
+                                Text(
+                                    if (similarSpellingsOnly) "Show ${partial.size} with a similar spelling"
+                                    else "Show ${partial.size} partial matches",
+                                    color = WarmBrownDark, fontSize = 14.sp,
+                                )
                             }
                         }
                     }

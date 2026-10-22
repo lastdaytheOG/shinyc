@@ -262,5 +262,26 @@ object VaultConfig {
 
         /** How many photos a search lists at most: one band of thumbnails. */
         const val PHOTO_BUDGET = 24
+
+        /**
+         * How much better a query must describe a photo than words for any photo do, for the photo
+         * to be a match ([com.amar.vault.photos.PhotoGate]). Without it every search listed the 24
+         * closest photos, whatever it was for ("cousin", "kumawat"). Set on the owner's phone
+         * (2026-10-23, its 39 photos, the shipped models): real matches cleared 0.056–0.150 ("hand",
+         * "medicine", "lab report", "old man with white beard", "peanut butter"), searches no photo
+         * answers at most 0.041 ("cousin" −0.008, "kumawat" 0.027, "sex" 0.041). On the benchmark
+         * (1,093 photos) the right photo is still listed for all 93 English gallery searches. 0.10,
+         * set from the benchmark alone, left out half the phone's real matches.
+         */
+        const val PHOTO_MATCH_MARGIN = 0.05f
+
+        /** The same for a search in Devanagari: on the benchmark the right photo is still listed for all 93. */
+        const val PHOTO_MATCH_MARGIN_HINDI = 0.05f
+
+        /** The same for Hindi typed in Latin letters, which the model reads least well: 89% on the benchmark. */
+        const val PHOTO_MATCH_MARGIN_ROMANISED = 0.04f
+
+        /** A match is listed only when its similarity is this close to the best match's. */
+        const val PHOTO_BEST_GAP = 0.08f
     }
 }
