@@ -94,10 +94,10 @@ class ImageContentExtractor(private val context: Context) {
      * instrumentation is disabled (production default) [recorder] is null and every timing
      * wrapper below is a pure pass-through — output is byte-identical to the uninstrumented path.
      */
-    suspend fun extract(bitmap: Bitmap, sourceId: String? = null): ImageContent {
+    suspend fun extract(bitmap: Bitmap, sourceId: String? = null, photo: Boolean = false): ImageContent {
         // Production Evaluation Mode: a real indexing pass is captured only when the dev
         // toggle is on (recorderOrNull() → non-null). Off = null recorder = pure pass-through.
-        val (content, report) = extractInternal(bitmap, sourceId, OcrInstrumentation.recorderOrNull())
+        val (content, report) = extractInternal(bitmap, sourceId, OcrInstrumentation.recorderOrNull(), photo)
         report?.let { OcrInstrumentation.publish(it) }
         return content
     }
@@ -122,11 +122,12 @@ class ImageContentExtractor(private val context: Context) {
         bitmap: Bitmap,
         sourceId: String?,
         recorder: OcrStrategyRecorder?,
+        photo: Boolean = false,
     ): Pair<ImageContent, OcrImageReport?> = coroutineScope {
         // Sprint E4 — record input geometry + whole-OCR wall time (observation only).
         recorder?.setInput(bitmap.width, bitmap.height)
         val tOcr = System.currentTimeMillis()
-        val ocrDeferred = async { runAggressiveOcr(bitmap, recorder) }
+        val ocrDeferred = async { if (photo) readPhoto(bitmap, recorder) else runAggressiveOcr(bitmap, recorder) }
         val qrDeferred = async(Dispatchers.IO) { scanBarcode(bitmap) }
         val mergedOcr = ocrDeferred.await()
         recorder?.setTotalMs((System.currentTimeMillis() - tOcr).toDouble())
@@ -365,6 +366,21 @@ class ImageContentExtractor(private val context: Context) {
         runEnsemble(bitmap, precomputedRaw = null, renderHiRes = null, recorder = recorder, picture = true)
 
     /**
+     * A photo is read once: ML Kit, English and Hindi, on the picture as it is (the ensemble's
+     * strategy 1). Measured on a phone's own gallery (2026-10-22): on the photos with text the
+     * grayscale, inverted and enlarged passes added 22% more distinct words, almost all of them
+     * misreadings of words this pass had read right ("fnasteride", "drigo", "pixeis"), for three
+     * times the work; on the photos without text every pass read nothing.
+     */
+    private suspend fun readPhoto(bitmap: Bitmap, recorder: OcrStrategyRecorder? = null): String =
+        timedStrategy(recorder, OcrStrategy.RAW) {
+            val image = InputImage.fromBitmap(bitmap, 0)
+            val en = recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, true)
+            val hi = recognize(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder, true)
+            mergeTexts(en, hi, true)
+        }
+
+    /**
      * The classic 5-strategy ensemble. [precomputedRaw] (Sprint P4): a caller that has
      * ALREADY run strategy 1 (the escalation ladder's tier 1) passes its result so it is
      * reused verbatim instead of re-run — same merge position, no duplicate inference.
@@ -484,9 +500,14 @@ class ImageContentExtractor(private val context: Context) {
                 }
 
                 // ── Strategy 5: Tesseract on preprocessed image (shared bitmap) ─
-                //    Tesseract sometimes catches what MLKit misses on noisy images
+                //    Tesseract sometimes catches what MLKit misses on noisy images. Not on a
+                //    picture: measured on a phone's own gallery (2026-10-22, 10 photos and 10
+                //    screenshots), every ML Kit pass read nothing on the five photos without text
+                //    and Tesseract alone made up every line stored for them ("Pi BS", "| $ |"); on
+                //    screenshots it added 8 to 31 junk lines each; and it was the slow part (median
+                //    2.5 s, up to 32 s a picture, against under 1 s for each ML Kit pass).
                 val tessDeferred = async(Dispatchers.IO) {
-                    timedStrategy(recorder, OcrStrategy.TESSERACT) { runTesseract(sharedGray, recorder).trim() }
+                    if (picture) "" else timedStrategy(recorder, OcrStrategy.TESSERACT) { runTesseract(sharedGray, recorder).trim() }
                 }
 
                 // ── Merge all results ───────────────────────────────────────────

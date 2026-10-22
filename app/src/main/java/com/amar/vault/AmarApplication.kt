@@ -97,17 +97,21 @@ class AmarApplication : Application(), Configuration.Provider {
 
             // 4d. Read the text of documents that were shared in before sharing indexed them.
             SavedDocumentRepairWorker.enqueue(applicationContext)
+            // Pictures read with an older reader are read again, once (PictureTextUpkeep).
+            com.amar.vault.indexing.PictureTextUpkeep.enqueueIfNeeded(applicationContext)
 
             // 4e. Carry on reading documents whose reading was cut short when the app last
             //     stopped. WorkManager starts its own work again; this covers what it lost.
             runCatching { com.amar.vault.indexing.DocumentImportQueue.get(applicationContext).carryOn() }
                 .onFailure { VaultLog.e("AmarApp", "Unfinished documents were not picked up again", it) }
 
-            // 4f. Give pictures stored before photo search (or while its models were missing) the
-            //     vector it finds them by. Nothing to do, and nothing enqueued, without its models.
+            // 4f. Give photos stored before photo search (or while its models were missing) the
+            //     vector it finds them by, and forget vectors that should not be there (pictures
+            //     gone, screenshots embedded before only photos were). The pass is quick when there
+            //     is nothing to do; without photo search's models nothing is enqueued.
             runCatching {
                 val photos = com.amar.vault.photos.photoSearchOf(applicationContext)
-                if (photos.isReady && photos.install() && photos.pending() > 0) {
+                if (photos.isReady && photos.install()) {
                     com.amar.vault.photos.PhotoBackfillWorker.enqueue(applicationContext)
                 }
             }.onFailure { VaultLog.e("AmarApp", "Photo search backfill was not started", it) }

@@ -63,28 +63,33 @@ interface PhotoVectorDao {
     suspend fun countOf(model: String): Int
 
     /**
-     * Pictures with no vector from [model] yet, or whose picture changed since (another
-     * perceptual hash), newest first.
+     * Photos with no vector from [model] yet, or whose picture changed since (another perceptual
+     * hash), newest first. Only photos: a screenshot is found by the words on it, and on a phone's
+     * own gallery screenshots of text came up among the photos for "hand".
      */
     @Query(
         """
         SELECT v.id AS id, v.uri AS uri, v.pHash AS pHash FROM vault_items v
-        WHERE v.parentDocumentId IS NULL AND v.itemType IN ('photo', 'screenshot')
+        WHERE v.parentDocumentId IS NULL AND v.itemType = 'photo'
           AND NOT EXISTS (SELECT 1 FROM photo_vectors p WHERE p.itemId = v.id AND p.model = :model AND p.pHash = v.pHash)
         ORDER BY v.timestamp DESC LIMIT :limit
         """
     )
     suspend fun picturesWithout(model: String, limit: Int): List<PictureToEmbed>
 
-    /** How many pictures still need a vector from [model]. */
+    /** How many photos still need a vector from [model]. */
     @Query(
         """
         SELECT COUNT(*) FROM vault_items v
-        WHERE v.parentDocumentId IS NULL AND v.itemType IN ('photo', 'screenshot')
+        WHERE v.parentDocumentId IS NULL AND v.itemType = 'photo'
           AND NOT EXISTS (SELECT 1 FROM photo_vectors p WHERE p.itemId = v.id AND p.model = :model AND p.pHash = v.pHash)
         """
     )
     suspend fun countWithout(model: String): Int
+
+    /** Vectors of items that are not photos (screenshots embedded before only photos were). */
+    @Query("SELECT itemId FROM photo_vectors WHERE itemId IN (SELECT id FROM vault_items WHERE itemType != 'photo')")
+    suspend fun ofItemsNotPhotos(): List<String>
 
     /** Vectors of pictures that are no longer in the vault. Returns how many went. */
     @Query("DELETE FROM photo_vectors WHERE itemId NOT IN (SELECT id FROM vault_items)")

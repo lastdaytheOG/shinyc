@@ -398,48 +398,58 @@ fun ImageHitCard(
 }
 
 /**
- * The pictures that look like the query, most alike first: photo search's own list
- * ([com.amar.vault.SearchViewModel.photoMatches]), above the results that say the query's words.
- * They are found by what is in them, so the band says that instead of marking a word, and it never
- * claims a picture says what was typed.
+ * The pictures that look like the query, most alike first, three across: photo search's own list
+ * ([com.amar.vault.SearchViewModel.photoMatches]), first on the screen, as Google Photos shows a
+ * search. They are found by what is in them, so the heading says that instead of marking a word.
+ * [shownAtFirst] of them until the user asks for all.
  */
 @Composable
-fun PhotoBand(
+fun PhotoGrid(
     photos: List<com.amar.vault.StashItemWithVaultItem>,
+    shownAtFirst: Int,
     onOpen: (com.amar.vault.StashItemWithVaultItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var all by remember(photos) { mutableStateOf(false) }
+    val shown = if (all) photos else photos.take(shownAtFirst)
     Column(modifier = modifier.fillMaxWidth()) {
-        Text(
-            text = "Photos that look like it",
-            color = CharcoalSoft,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-        )
-        Text(
-            text = "Found by what is in the picture, not by a word on it",
-            color = WarmBrown,
-            fontSize = 12.sp,
-        )
-        Spacer(Modifier.height(8.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(photos, key = { it.vaultItemId }) { item ->
-                Image(
-                    painter = rememberAsyncImagePainter(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(item.thumbnailPath?.takeIf { it.isNotBlank() } ?: item.uri)
-                            .size(256)
-                            .crossfade(true)
-                            .build()
-                    ),
-                    contentDescription = "Photo",
-                    modifier = Modifier
-                        .size(96.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(CreamDark)
-                        .clickable { onOpen(item) },
-                    contentScale = ContentScale.Crop,
-                )
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(text = "Photos", color = CharcoalSoft, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(8.dp))
+            Text(text = "${photos.size}", color = WarmBrownDark, fontSize = 14.sp)
+        }
+        Text(text = "Found by what is in them", color = WarmBrownDark, fontSize = 12.sp)
+        Spacer(Modifier.height(10.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            shown.chunked(3).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    row.forEach { item ->
+                        Image(
+                            painter = rememberAsyncImagePainter(
+                                model = ImageRequest.Builder(LocalContext.current)
+                                    .data(item.thumbnailPath?.takeIf { it.isNotBlank() } ?: item.uri)
+                                    .size(320)
+                                    .crossfade(true)
+                                    .build()
+                            ),
+                            contentDescription = "Photo, open it",
+                            modifier = Modifier
+                                .weight(1f)
+                                .aspectRatio(1f)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(CreamDark)
+                                .clickable { onOpen(item) },
+                            contentScale = ContentScale.Crop,
+                        )
+                    }
+                    // A short last row keeps its tiles the size of the others.
+                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+        if (!all && photos.size > shownAtFirst) {
+            TextButton(onClick = { all = true }, contentPadding = PaddingValues(horizontal = 0.dp)) {
+                Text(text = "Show all ${photos.size} photos", color = CharcoalSoft, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             }
         }
     }

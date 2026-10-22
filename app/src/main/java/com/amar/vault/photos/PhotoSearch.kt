@@ -4,7 +4,13 @@ import android.content.Context
 import android.graphics.Bitmap
 import com.amar.vault.VaultDatabase
 import com.amar.vault.VaultLog
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -26,8 +32,15 @@ import java.io.File
 class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
 
     private val files = PhotoModelFiles(context)
-    private val loadLock = Mutex()
     private val encodeLock = Mutex()
+
+    /**
+     * Where the models load: not in the caller's coroutine. Each keystroke cancels the search
+     * before it, and a load cancelled with it used to count as a failed one, which turned photo
+     * search off for the rest of the session ("Child of the scoped flow was cancelled").
+     */
+    private val loader = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    @Volatile private var loading: Deferred<Boolean>? = null
 
     @Volatile private var query: QueryEncoder? = null
     @Volatile private var photo: PhotoEncoder? = null
@@ -43,33 +56,49 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
     /** Why photo search is off, when it is: for Developer Tools. */
     val problem: String? get() = failed ?: if (!files.present() && !files.bundled()) "the photo search models are not on this device" else null
 
-    /** Loads the models and the stored vectors once; false when they are not here or did not load. */
+    /**
+     * Loads the models and the stored vectors once; false when they are not here or did not load.
+     * Every caller waits for the same load ([loader]); a caller that is cancelled stops waiting,
+     * and the load goes on for the next one.
+     */
     private suspend fun ensureLoaded(): Boolean {
         if (index != null) return true
         if (failed != null) return false
-        return loadLock.withLock {
-            if (index != null) return@withLock true
-            withContext(Dispatchers.IO) {
-                if (!files.installFromApk()) return@withContext false
-                try {
-                    val manifest = files.manifest() ?: error("no manifest")
-                    val tokenizer = files.tokenizer().inputStream().use { GemmaTokenizer.read(it) }
-                    val q = QueryEncoder(files.queryModel().path, tokenizer)
-                    val p = PhotoEncoder(files.photoModel().path, manifest.inputSize)
-                    check(q.dim == manifest.dim && p.dim == manifest.dim) {
-                        "model dimensions differ: query ${q.dim}, photo ${p.dim}, manifest ${manifest.dim}"
-                    }
-                    val idx = PhotoIndex(manifest.dim)
-                    idx.load(db.photoVectorDao().allOf(manifest.id))
-                    query = q; photo = p; index = idx
-                    VaultLog.i(TAG, "photo search ready: ${manifest.id}, ${idx.size} pictures")
-                    true
-                } catch (e: Throwable) {
-                    failed = "the photo search models could not be loaded: ${e.message}"
-                    VaultLog.e(TAG, failed!!)
-                    false
-                }
+        val load = synchronized(this) { loading ?: loader.async { load() }.also { loading = it } }
+        val loaded = load.await()
+        // Models not on the device yet are not a failure: let a later call look again.
+        if (!loaded && failed == null) synchronized(this) { if (loading === load) loading = null }
+        return loaded
+    }
+
+    private suspend fun load(): Boolean {
+        if (!files.installFromApk()) return false
+        return try {
+            val manifest = files.manifest() ?: error("no manifest")
+            val tokenizer = files.tokenizer().inputStream().use { GemmaTokenizer.read(it) }
+            val q = QueryEncoder(files.queryModel().path, tokenizer)
+            val p = PhotoEncoder(files.photoModel().path, manifest.inputSize)
+            check(q.dim == manifest.dim && p.dim == manifest.dim) {
+                "model dimensions differ: query ${q.dim}, photo ${p.dim}, manifest ${manifest.dim}"
             }
+            val idx = PhotoIndex(manifest.dim)
+            idx.load(db.photoVectorDao().allOf(manifest.id))
+            query = q; photo = p; index = idx
+            VaultLog.i(TAG, "photo search ready: ${manifest.id}, ${idx.size} pictures")
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            failed = "the photo search models could not be loaded: ${e.message}"
+            VaultLog.e(TAG, failed!!)
+            false
+        }
+    }
+
+    /** Starts loading the models now, so the first search does not wait for them. */
+    fun warmUp() {
+        if (index == null && failed == null && (files.present() || files.bundled())) {
+            loader.launch { ensureLoaded() }
         }
     }
 
@@ -158,15 +187,19 @@ class PhotoModelFiles(private val context: Context) {
         val f = File(dir, MANIFEST)
         if (!f.exists()) return null
         return try {
-            val j = JSONObject(f.readText())
-            PhotoModelManifest(
-                id = j.getString("id"), dim = j.getInt("dim"), inputSize = j.getInt("inputSize"),
-                queryModel = j.getString("queryModel"), photoModel = j.getString("photoModel"),
-            ).also { cached = it }
+            parse(f.readText()).also { cached = it }
         } catch (e: Exception) {
             VaultLog.w("PhotoSearch", "unreadable photo search manifest: ${e.message}")
             null
         }
+    }
+
+    private fun parse(json: String): PhotoModelManifest {
+        val j = JSONObject(json)
+        return PhotoModelManifest(
+            id = j.getString("id"), dim = j.getInt("dim"), inputSize = j.getInt("inputSize"),
+            queryModel = j.getString("queryModel"), photoModel = j.getString("photoModel"),
+        )
     }
 
     /** Every model file is on the device. */
@@ -193,12 +226,22 @@ class PhotoModelFiles(private val context: Context) {
      * Copies the models out of the APK, each file whole or not at all (written to `.part`, then
      * renamed), the manifest last: a copy cut short is finished by the next call, never mistaken
      * for a complete set.
+     *
+     * Only the files the bundled manifest names are copied. The folder can hold test material too
+     * (a folder of parity photos), and copying everything listed tried to open that folder as a
+     * file: the copy stopped after its first file, and on a phone photo search never started.
      */
     private fun copyFromAssets(): Boolean = synchronized(this) {
-        val names = try { context.assets.list(DIR)?.toList().orEmpty() } catch (e: Exception) { emptyList() }
-        if (MANIFEST !in names) return false
+        val m = try {
+            context.assets.open("$DIR/$MANIFEST").use { parse(it.readBytes().decodeToString()) }
+        } catch (e: Exception) {
+            VaultLog.w("PhotoSearch", "no readable manifest in the APK: ${e.message}")
+            return false
+        }
+        val listed = try { context.assets.list(DIR)?.toSet().orEmpty() } catch (e: Exception) { emptySet() }
+        val needed = listOf(TOKENIZER, m.queryModel, "${m.queryModel}_data", m.photoModel).filter { it in listed }
         dir.mkdirs()
-        for (name in names.filter { it != MANIFEST } + MANIFEST) {
+        for (name in needed + MANIFEST) {
             val target = File(dir, name)
             if (target.exists()) continue
             val partial = File(dir, "$name.part")

@@ -154,11 +154,18 @@ class SearchViewModel @Inject constructor(
     private val retrievalService: com.amar.vault.retrieval.RetrievalService,
     private val ragService: RagService,
     private val languageModel: com.amar.vault.retrieval.LanguageModel,
+    private val photoSearch: com.amar.vault.photos.PhotoSearch,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
 
     /** UI gateway to the single LLM owner — cancels any in-flight generation. */
     fun cancelGeneration() = languageModel.cancelGeneration()
+
+    /**
+     * The search screen opened: photo search starts loading its models now (on demand, not at
+     * app start), so the photos for the first query are not held up by the load.
+     */
+    fun warmUpPhotoSearch() = photoSearch.warmUp()
 
     // Entity Pages: read-only projection over the existing retrieval engine (no new storage/index).
     private val entityAggregator = EntityAggregator(retrievalService)

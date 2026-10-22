@@ -38,6 +38,12 @@ class PhotoBackfillWorker(context: Context, params: WorkerParameters) : Coroutin
         val dao = VaultDatabase.get(app).photoVectorDao()
         val gone = dao.deleteOrphans()
         if (gone > 0) VaultLog.i(TAG, "forgot $gone vectors of pictures no longer in the vault")
+        // Screenshots were embedded too before; photo search is for photos now.
+        val notPhotos = dao.ofItemsNotPhotos()
+        if (notPhotos.isNotEmpty()) {
+            photos.forget(notPhotos)
+            VaultLog.i(TAG, "forgot ${notPhotos.size} vectors of screenshots")
+        }
         var embedded = 0
         var unreadable = 0
         val started = System.currentTimeMillis()
