@@ -46,6 +46,8 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
     @Volatile private var photo: PhotoEncoder? = null
     @Volatile private var index: PhotoIndex? = null
     @Volatile private var failed: String? = null
+    /** [PhotoGate.GENERIC] through the query model, once: what any photo is described by. */
+    @Volatile private var generic: List<FloatArray> = emptyList()
 
     /** The models are on the device and loaded, or can be. */
     val isReady: Boolean get() = failed == null && (index != null || files.present() || files.bundled())
@@ -83,6 +85,7 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
             }
             val idx = PhotoIndex(manifest.dim)
             idx.load(db.photoVectorDao().allOf(manifest.id))
+            generic = PhotoGate.GENERIC.map { q.encode(it) }
             query = q; photo = p; index = idx
             VaultLog.i(TAG, "photo search ready: ${manifest.id}, ${idx.size} pictures")
             true
@@ -102,14 +105,17 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
         }
     }
 
-    /** The [k] pictures that look most like [text], most alike first; empty without models. */
+    /**
+     * Up to [k] photos that match [text], most alike first: of the photos most like it, those
+     * [PhotoGate] finds to be a match. None when nothing does, or without models.
+     */
     suspend fun search(text: String, k: Int, only: ((String) -> Boolean)? = null): List<PhotoMatch> {
         if (text.isBlank() || !ensureLoaded()) return emptyList()
         val idx = index ?: return emptyList()
         if (idx.size == 0) return emptyList()
         return withContext(Dispatchers.Default) {
             val v = query!!.encode(text)
-            idx.top(v, k, only)
+            PhotoGate.keep(idx.top(v, maxOf(k, CANDIDATES), only), generic, idx::vectorOf, margin = PhotoGate.marginFor(text)).take(k)
         }
     }
 
@@ -163,6 +169,8 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
 
     companion object {
         private const val TAG = "PhotoSearch"
+        /** The most alike photos [PhotoGate] looks at, before it keeps the ones that match. */
+        private const val CANDIDATES = 48
     }
 }
 

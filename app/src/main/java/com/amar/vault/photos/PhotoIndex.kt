@@ -54,6 +54,14 @@ class PhotoIndex(val dim: Int) {
     @Synchronized
     fun contains(itemId: String): Boolean = itemId in positionOf
 
+    /** The vector held for [itemId], as the scan reads it; null when it is not held. */
+    @Synchronized
+    fun vectorOf(itemId: String): FloatArray? {
+        val at = positionOf[itemId] ?: return null
+        val scale = scales[at]
+        return FloatArray(dim) { vectors[at * dim + it] * scale }
+    }
+
     /** Adds the picture's vector, or replaces the one it had. */
     @Synchronized
     fun put(itemId: String, bytes: ByteArray, scale: Float) {
