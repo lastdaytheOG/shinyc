@@ -65,7 +65,7 @@ interface PhotoVectorDao {
     /**
      * Photos with no vector from [model] yet, or whose picture changed since (another perceptual
      * hash), newest first. Only photos: a screenshot is found by the words on it, and on a phone's
-     * own gallery screenshots of text came up among the photos for "hand".
+     * own gallery screenshots of text came up among the photos a search listed.
      */
     @Query(
         """

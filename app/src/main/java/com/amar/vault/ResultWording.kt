@@ -3,7 +3,7 @@ package com.amar.vault
 /**
  * Whether a search result says what was typed: one of the query's words, standing as a word of
  * its own, in the result's text, name, tags or note. A result listed only for a longer word that
- * contains the typed one ("handbooks", "handle" for "hand"), or only for the query's small words
+ * contains the typed one ("catalogue", "category" for "cat"), or only for the query's small words
  * ("in", "the" of "dog in the snow"), does not; the search screen shows those after, folded away.
  *
  * It decides where a result is shown, never whether it was found: the order the search gave stays.

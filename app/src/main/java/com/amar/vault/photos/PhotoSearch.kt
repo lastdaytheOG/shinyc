@@ -84,7 +84,7 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
                 "model dimensions differ: query ${q.dim}, photo ${p.dim}, manifest ${manifest.dim}"
             }
             val idx = PhotoIndex(manifest.dim)
-            idx.load(db.photoVectorDao().allOf(manifest.id))
+            idx.load(vectorsFor(manifest))
             generic = PhotoGate.GENERIC.map { q.encode(it) }
             query = q; photo = p; index = idx
             VaultLog.i(TAG, "photo search ready: ${manifest.id}, ${idx.size} pictures")
@@ -96,6 +96,19 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
             VaultLog.e(TAG, failed!!)
             false
         }
+    }
+
+    /**
+     * The vectors [m] made, and for each photo it has not embedded yet, one an earlier model in the
+     * same space made ([PhotoModelManifest.sameSpaceAs]): after a model update every photo is still
+     * found while [PhotoBackfillWorker] embeds them again, each vector replaced as its new one comes.
+     */
+    private suspend fun vectorsFor(m: PhotoModelManifest): List<PhotoVector> {
+        val dao = db.photoVectorDao()
+        val own = dao.allOf(m.id)
+        if (m.sameSpaceAs.isEmpty()) return own
+        val held = own.mapTo(HashSet()) { it.itemId }
+        return own + m.sameSpaceAs.flatMap { dao.allOf(it) }.filter { held.add(it.itemId) }
     }
 
     /** Starts loading the models now, so the first search does not wait for them. */
@@ -157,7 +170,7 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
     /** Pictures that still need a vector from the model in use. */
     suspend fun pending(): Int = modelId?.let { db.photoVectorDao().countWithout(it) } ?: 0
 
-    /** Puts the models where they are loaded from (out of the APK, once); loads nothing. */
+    /** Puts the models where they are loaded from (out of the APK, once and after an update); loads nothing. */
     suspend fun install(): Boolean = withContext(Dispatchers.IO) { files.installFromApk() }
 
     /** Pictures held in memory for search. */
@@ -174,18 +187,33 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
     }
 }
 
-/** What `files/photo-search/manifest.json` says about the models: see `tools/visual-search`. */
-data class PhotoModelManifest(val id: String, val dim: Int, val inputSize: Int, val queryModel: String, val photoModel: String)
+/**
+ * What `files/photo-search/manifest.json` says about the models: see `tools/visual-search`.
+ * [sameSpaceAs] names earlier models whose vectors are in the same space as this one's (the same
+ * weights run another way): they stand in for photos this model has not embedded yet.
+ */
+data class PhotoModelManifest(
+    val id: String, val dim: Int, val inputSize: Int, val queryModel: String, val photoModel: String,
+    val sameSpaceAs: List<String> = emptyList(),
+) {
+    /** The files it names, apart from itself. */
+    val files: List<String> get() = listOf(PhotoModelFiles.TOKENIZER, queryModel, "${queryModel}_data", photoModel)
+}
 
 /**
  * Where photo search's files are: `files/photo-search/` holds `manifest.json`, the tokenizer table
  * (`gemma_bpe.bin`), the query model (EmbeddingGemma 2's text model, with its `_data` file beside
  * it) and the photo model. A build made with `-PphotoSearchModels` carries them in its assets and
- * they are copied here the first time; otherwise they are put here by Developer Tools or adb.
+ * they are copied here the first time, and again when an update carries other models; otherwise
+ * they are put here by Developer Tools or adb.
  */
-class PhotoModelFiles(private val context: Context) {
+class PhotoModelFiles internal constructor(
+    /** `files/photo-search/`: where the models are read from. */
+    val dir: File,
+    private val apk: CarriedFiles,
+) {
 
-    val dir: File get() = File(context.filesDir, DIR)
+    constructor(context: Context) : this(File(context.filesDir, DIR), ApkAssets(context.assets))
 
     @Volatile private var cached: PhotoModelManifest? = null
 
@@ -204,9 +232,11 @@ class PhotoModelFiles(private val context: Context) {
 
     private fun parse(json: String): PhotoModelManifest {
         val j = JSONObject(json)
+        val same = j.optJSONArray("sameSpaceAs")
         return PhotoModelManifest(
             id = j.getString("id"), dim = j.getInt("dim"), inputSize = j.getInt("inputSize"),
             queryModel = j.getString("queryModel"), photoModel = j.getString("photoModel"),
+            sameSpaceAs = if (same == null) emptyList() else List(same.length()) { same.getString(it) },
         )
     }
 
@@ -214,14 +244,25 @@ class PhotoModelFiles(private val context: Context) {
     fun present(): Boolean = manifest()?.let(::complete) == true
 
     /** This APK carries the models (a build made with `-PphotoSearchModels`). */
-    fun bundled(): Boolean = try {
-        context.assets.list(DIR)?.contains(MANIFEST) == true
-    } catch (e: Exception) {
-        false
-    }
+    fun bundled(): Boolean = MANIFEST in apk.list()
 
-    /** Copies the models out of the APK when they are not on the device yet. Slow: call off the main thread. */
-    fun installFromApk(): Boolean = present() || (bundled() && copyFromAssets() && run { cached = null; present() })
+    /**
+     * Copies the models out of the APK when they are not on the device yet, or when this APK
+     * carries other ones than the device has (an update). Slow: call off the main thread. When an
+     * update's copy fails, the models already here stay in use.
+     */
+    fun installFromApk(): Boolean {
+        if (bundled()) {
+            val carried = try {
+                apk.open(MANIFEST).use { it.readBytes().decodeToString() }
+            } catch (e: Exception) {
+                null
+            }
+            val installed = File(dir, MANIFEST).takeIf { it.exists() }?.readText()
+            if (carried != null && (carried != installed || !present())) copyFromAssets(carried)
+        }
+        return present()
+    }
 
     private fun complete(m: PhotoModelManifest): Boolean =
         tokenizer().exists() && File(dir, m.queryModel).exists() && File(dir, m.photoModel).exists()
@@ -231,30 +272,33 @@ class PhotoModelFiles(private val context: Context) {
     fun photoModel(): File = File(dir, manifest()!!.photoModel)
 
     /**
-     * Copies the models out of the APK, each file whole or not at all (written to `.part`, then
-     * renamed), the manifest last: a copy cut short is finished by the next call, never mistaken
-     * for a complete set.
+     * Copies the models [manifestText] names out of the APK, each file whole or not at all (written
+     * to `.part`, then renamed), the manifest last: a copy cut short is finished by the next call,
+     * never mistaken for a complete set. Then the files of the models it replaces that it does not
+     * name go: a photo model is 64 MB.
+     *
+     * A file here is taken to be the one the APK carries when it has its name: a model whose
+     * content changes gets a new file name (tools/visual-search/package_models.py).
      *
      * Only the files the bundled manifest names are copied. The folder can hold test material too
      * (a folder of parity photos), and copying everything listed tried to open that folder as a
      * file: the copy stopped after its first file, and on a phone photo search never started.
      */
-    private fun copyFromAssets(): Boolean = synchronized(this) {
+    private fun copyFromAssets(manifestText: String): Boolean = synchronized(this) {
         val m = try {
-            context.assets.open("$DIR/$MANIFEST").use { parse(it.readBytes().decodeToString()) }
+            parse(manifestText)
         } catch (e: Exception) {
             VaultLog.w("PhotoSearch", "no readable manifest in the APK: ${e.message}")
             return false
         }
-        val listed = try { context.assets.list(DIR)?.toSet().orEmpty() } catch (e: Exception) { emptySet() }
-        val needed = listOf(TOKENIZER, m.queryModel, "${m.queryModel}_data", m.photoModel).filter { it in listed }
+        val listed = apk.list()
         dir.mkdirs()
-        for (name in needed + MANIFEST) {
+        for (name in m.files.filter { it in listed }) {
             val target = File(dir, name)
             if (target.exists()) continue
             val partial = File(dir, "$name.part")
             try {
-                context.assets.open("$DIR/$name").use { input -> partial.outputStream().use { input.copyTo(it, 8 shl 20) } }
+                apk.open(name).use { input -> partial.outputStream().use { input.copyTo(it, 8 shl 20) } }
             } catch (e: Exception) {
                 partial.delete()
                 VaultLog.w("PhotoSearch", "copying $name out of the APK failed: ${e.message}")
@@ -262,6 +306,22 @@ class PhotoModelFiles(private val context: Context) {
             }
             if (!partial.renameTo(target)) { partial.delete(); return false }
         }
+        val replaced = manifest()
+        val partial = File(dir, "$MANIFEST.part")
+        try {
+            partial.writeText(manifestText)
+            java.nio.file.Files.move(
+                partial.toPath(), File(dir, MANIFEST).toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            )
+        } catch (e: Exception) {
+            partial.delete()
+            VaultLog.w("PhotoSearch", "writing the photo search manifest failed: ${e.message}")
+            return false
+        }
+        cached = null
+        replaced?.let { old -> (old.files - m.files.toSet()).forEach { File(dir, it).delete() } }
+        if (replaced != null && replaced.id != m.id) VaultLog.i("PhotoSearch", "photo search models updated: ${replaced.id} → ${m.id}")
         true
     }
 
@@ -270,4 +330,21 @@ class PhotoModelFiles(private val context: Context) {
         const val MANIFEST = "manifest.json"
         const val TOKENIZER = "gemma_bpe.bin"
     }
+}
+
+/** The photo search files a build carries (its assets' `photo-search/`), as [PhotoModelFiles] copies them out. */
+internal interface CarriedFiles {
+    /** The names it carries; none when it carries no models. */
+    fun list(): Set<String>
+    fun open(name: String): java.io.InputStream
+}
+
+private class ApkAssets(private val assets: android.content.res.AssetManager) : CarriedFiles {
+    override fun list(): Set<String> = try {
+        assets.list(PhotoModelFiles.DIR)?.toSet().orEmpty()
+    } catch (e: Exception) {
+        emptySet()
+    }
+
+    override fun open(name: String): java.io.InputStream = assets.open("${PhotoModelFiles.DIR}/$name")
 }

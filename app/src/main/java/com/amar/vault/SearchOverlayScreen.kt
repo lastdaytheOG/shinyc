@@ -90,10 +90,10 @@ fun SearchOverlayScreen(
     val mappedResults = resultsList
 
     // The results that say one of the query's words as a word come first; those found only
-    // inside longer words ("handbooks" for "hand") or by its small words alone ("the") are folded
+    // inside longer words ("catalogue" for "cat") or by its small words alone ("the") are folded
     // under one line. The order the search gave is kept within each.
-    // When nothing has the word as typed, what has a word spelt nearly the same ("Eosin" for
-    // "cousin") is folded too: listed openly, it was taken for the answer.
+    // When nothing has the word as typed, what has a word spelt nearly the same is folded too:
+    // listed openly, it was taken for the answer.
     val (direct, partial) = remember(mappedResults, queryText, similarSpellingsOnly) {
         if (similarSpellingsOnly) emptyList<SearchHit>() to mappedResults
         else {

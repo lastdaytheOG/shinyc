@@ -6,8 +6,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * A result says what was typed only when a word of the query stands in it as a word: "hand"
- * in "a hand with henna", not in "handbooks"; "dog in the snow" by "dog" or "snow", not by "the".
+ * A result says what was typed only when a word of the query stands in it as a word: "cat"
+ * in "a cat asleep on the sofa", not in "catalogue"; "dog in the snow" by "dog" or "snow", not by "the".
  */
 class ResultWordingTest {
 
@@ -23,9 +23,9 @@ class ResultWordingTest {
     private fun says(text: String, query: String, file: String = "x.pdf") =
         ResultWording.saysAWord(hit(text, file), ResultWording.contentWords(query))
 
-    @Test fun aWordOfItsOwnCounts() = assertTrue(says("a hand with henna on it", "hand"))
-    @Test fun aWordInsideALongerOneDoesNot() = assertFalse(says("training manuals and handbooks, handle, handed", "hand"))
-    @Test fun punctuationEndsAWord() = assertTrue(says("my left hand, painted.", "hand"))
+    @Test fun aWordOfItsOwnCounts() = assertTrue(says("a cat asleep on the sofa", "cat"))
+    @Test fun aWordInsideALongerOneDoesNot() = assertFalse(says("the spring catalogue, by category, scattered", "cat"))
+    @Test fun punctuationEndsAWord() = assertTrue(says("my black cat, sleeping.", "cat"))
     @Test fun aFileNameSaysItsWords() = assertTrue(says("", "aadhaar", file = "Aadhaar_Card-2024.pdf"))
     @Test fun smallWordsAloneDoNotCount() = assertFalse(says("in other words, the reward system", "dog in the snow"))
     @Test fun oneContentWordIsEnough() = assertTrue(says("snow fell all night", "dog in the snow"))

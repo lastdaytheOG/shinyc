@@ -4,17 +4,18 @@ import com.amar.vault.VaultConfig
 
 /**
  * Which of the photos most like a query are really a match, so that a search for something no photo
- * shows ("cousin", "kumawat", "salary") lists no photos instead of the closest 24 of whatever is
- * there.
+ * shows lists no photos instead of the closest 24 of whatever is there.
  *
  * A photo's similarity to a query is not a probability: one photo is close to every query and
  * another to none, so no single floor tells a match from the closest of the rest. What does is how
  * much better the query describes the photo than words that describe any photo ("a photo", "an
- * image"): a photo of a hand beats them clearly for "hand"; for "cousin" every photo is described
- * as well by "a photo" as by the query. A photo is kept when that margin is at least
+ * image"): a photo of a cat beats them clearly for "cat"; for a person's name every photo is
+ * described as well by "a photo" as by the query. A photo is kept when that margin is at least
  * [VaultConfig.Retrieval.PHOTO_MATCH_MARGIN] and its similarity is within
- * [VaultConfig.Retrieval.PHOTO_BEST_GAP] of the best kept one. Both were measured on the gallery
- * set with the models the app ships (tools/visual-search, the visual-search report).
+ * [VaultConfig.Retrieval.PHOTO_BEST_GAP] of the best kept one. Both were set with the models the
+ * app ships, on the owner's phone (real matches cleared 0.056–0.150, searches no photo answers at
+ * most 0.041), and checked on the gallery set (tools/visual-search): the right photo is still
+ * listed for all 93 English and 93 Hindi searches.
  */
 object PhotoGate {
 
