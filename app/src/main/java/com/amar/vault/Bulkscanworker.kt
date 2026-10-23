@@ -18,7 +18,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.amar.vault.indexing.DiscoveryEngine
 import com.amar.vault.indexing.DiscoverySpec
-import com.amar.vault.indexing.FixedBurstBatchPolicy
+import com.amar.vault.indexing.CoolWhenWarmBatchPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -27,7 +27,7 @@ import kotlinx.coroutines.withContext
  * Background worker that bulk-indexes photos from user-selected folders.
  *
  * Features:
- * - Thermal-aware batching: burst 8 photos → pause 2s → repeat
+ * - Thermal-aware batching: burst 8 photos → pause 2s while the phone is warm → repeat
  * - Persistent notification with progress
  * - Resumable: tracks last-processed timestamp, skips already-indexed
  * - WorkManager guarantees completion even if app is killed
@@ -98,10 +98,10 @@ class BulkScanWorker @dagger.assisted.AssistedInject constructor(
             var indexed = 0
             var skipped = 0
 
-            // Fixed 8-photo bursts with a 2s cool-down between them (skipped after the final burst).
+            // 8-photo bursts with a 2s cool-down between them while the phone is warm (skipped after the final burst).
             val outcome = engine.process(
                 candidates = uris,
-                policy = FixedBurstBatchPolicy(VaultConfig.Indexing.BATCH_SIZE, VaultConfig.Indexing.COOL_DOWN_MS),
+                policy = CoolWhenWarmBatchPolicy(applicationContext, VaultConfig.Indexing.BATCH_SIZE, VaultConfig.Indexing.COOL_DOWN_MS),
                 isActive = { !isStopped },
                 indexOne = { i, total, photoUri ->
                     // Update notification

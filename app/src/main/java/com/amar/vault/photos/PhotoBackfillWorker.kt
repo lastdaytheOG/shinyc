@@ -34,6 +34,9 @@ class PhotoBackfillWorker(context: Context, params: WorkerParameters) : Coroutin
     override suspend fun doWork(): Result {
         val app = applicationContext
         val photos = photoSearchOf(app)
+        // An update may carry other models: they are put in place first, so that the pictures
+        // are embedded again with them.
+        photos.install()
         val model = photos.modelId ?: return Result.success()
         val dao = VaultDatabase.get(app).photoVectorDao()
         val gone = dao.deleteOrphans()
@@ -114,7 +117,13 @@ object PhotoThumbnails {
         val cr = context.contentResolver
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && uri.scheme == "content") {
             try {
-                return software(cr.loadThumbnail(uri, Size(side, side), null))
+                // Some phones return their gallery's small thumbnail whatever size is asked
+                // for: 128 × 176 on one, for 7 of its 39 photos, whose vectors then drifted to
+                // cosine 0.79–0.95 from the picture's own. A thumbnail shorter than [side] is
+                // decoded again below.
+                val thumbnail = software(cr.loadThumbnail(uri, Size(side, side), null))
+                if (maxOf(thumbnail.width, thumbnail.height) >= side) return thumbnail
+                thumbnail.recycle()
             } catch (e: Exception) {
                 // No thumbnail for this one: decode it below.
             }

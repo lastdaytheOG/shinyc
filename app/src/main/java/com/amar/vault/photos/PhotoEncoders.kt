@@ -70,6 +70,12 @@ class QueryEncoder(modelPath: String, private val tokenizer: GemmaTokenizer, thr
 /**
  * A picture as a vector in the same space as [QueryEncoder]'s queries. The model takes the picture
  * squashed to a square of [size] pixels, values scaled to -1…1, and returns a unit vector.
+ *
+ * The shipped model multiplies its 4-bit layers in 8-bit integers rather than floats
+ * (`package_models.py --int8-maths`), same weights: on a Dimensity 7300 a photo takes 0.24 s
+ * instead of 0.50 s, and its vectors, made on that phone, find the right one of XM3600's 3,600
+ * photos a little more often than before in English, Hindi and romanised Hindi alike. Four
+ * threads are the fastest there: eight run 33% slower, two 66%.
  */
 class PhotoEncoder(modelPath: String, val size: Int, threads: Int = 4) : AutoCloseable {
 

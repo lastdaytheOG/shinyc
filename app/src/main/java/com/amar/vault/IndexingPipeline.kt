@@ -47,6 +47,12 @@ class IndexingPipeline private constructor(private val context: Context) {
     }
     private val bm25Updater by lazy { com.amar.vault.indexing.Bm25IndexUpdater(bm25) }
     private val photoSearch by lazy { com.amar.vault.photos.photoSearchOf(context) }
+    /**
+     * Photos waiting for the photo model, each holding its prepared pixels (768 KB): at most two,
+     * so a scan that reads photos faster than the model embeds them waits for it instead of
+     * piling them up.
+     */
+    private val photoModelSlots = kotlinx.coroutines.sync.Semaphore(2)
 
     suspend fun indexBitmap(
         bitmap: Bitmap,
@@ -134,11 +140,14 @@ class IndexingPipeline private constructor(private val context: Context) {
         // Photos only: a screenshot is found by the words on it.
         if (!reread && itemType == ItemType.PHOTO) photoSearch.inputSize?.let { size ->
             val pixels = com.amar.vault.photos.PhotoPixels.of(bitmap, size)
+            photoModelSlots.acquire()
             stagedDeepScope.launch {
                 try {
                     photoSearch.embedPixels(targetId, hash, pixels)
                 } catch (e: Exception) {
                     VaultLog.w("IndexingPipeline", "Photo vector failed for $targetId: ${e.message}")
+                } finally {
+                    photoModelSlots.release()
                 }
             }
         }

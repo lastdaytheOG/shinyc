@@ -22,17 +22,25 @@ interface BatchPolicy {
 }
 
 /**
- * Fixed-size bursts with an unconditional cool-down between them — the bulk path's pacing.
+ * Fixed-size bursts with a cool-down between them while the phone is warm — the bulk path's pacing.
  *
- * Verbatim behaviour of `BulkScanWorker`'s `(i+1) % BATCH_SIZE == 0 && i < size-1 → delay`: a
- * constant [size] burst, a constant [delayMs] pause after every burst **except the final one**.
+ * A constant [size] burst, and a constant [delayMs] pause after every burst except the final one,
+ * as long as Android reports the phone at least moderately warm, or cannot tell (before Android 10).
+ * The pause after every burst, cool phone or not, cost a 2026 phone 0.25 s a photo, as much as its
+ * photo model took to embed one.
  */
-class FixedBurstBatchPolicy(
+class CoolWhenWarmBatchPolicy(
+    context: Context,
     private val size: Int,
     private val delayMs: Long,
 ) : BatchPolicy {
+    private val power = context.getSystemService(PowerManager::class.java)
+
     override fun nextBatchSize(remaining: Int): Int = size
-    override fun postBatchDelayMs(isFinalBatch: Boolean): Long = if (isFinalBatch) 0L else delayMs
+    override fun postBatchDelayMs(isFinalBatch: Boolean): Long = if (isFinalBatch || !warm()) 0L else delayMs
+
+    private fun warm(): Boolean =
+        Build.VERSION.SDK_INT < 29 || power == null || power.currentThermalStatus >= PowerManager.THERMAL_STATUS_MODERATE
 }
 
 /**
