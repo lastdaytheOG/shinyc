@@ -133,6 +133,9 @@ data class TextForTagging(
     val qrPayload: String?,
 )
 
+/** A whole item that has been read: where it came from and when ([com.amar.vault.indexing.DiscoveryEngine.toRead]). */
+data class ItemRead(val id: String, val uri: String, val timestamp: Long)
+
 /** What the keyword engine is filled from when the app starts ([com.amar.vault.retrieval.KeywordText]). */
 data class VaultItemSearchData(
     val rowId: Long,
@@ -245,6 +248,9 @@ interface VaultDao {
     @Query("SELECT COUNT(*) FROM vault_items")
     suspend fun getCount(): Int
 
+    @Query("SELECT COUNT(*) FROM vault_items")
+    fun observeCount(): Flow<Int>
+
     /** How many pictures — screenshots and photos — are in the vault. */
     @Query("SELECT COUNT(*) FROM vault_items WHERE parentDocumentId IS NULL AND itemType IN ('screenshot', 'photo')")
     fun observePictureCount(): Flow<Int>
@@ -254,6 +260,10 @@ interface VaultDao {
 
     @Query("SELECT * FROM vault_items WHERE pHash = :hash LIMIT 1")
     suspend fun findByPHash(hash: Long): VaultItem?
+
+    /** The whole items with this perceptual hash: pictures that look alike at eight by eight, or the same one. */
+    @Query("SELECT * FROM vault_items WHERE pHash = :hash AND parentDocumentId IS NULL")
+    suspend fun picturesWithHash(hash: Long): List<VaultItem>
 
     // ── Deciding again what a stored picture is (PictureTypeUpkeep) ──
 
@@ -301,6 +311,17 @@ interface VaultDao {
 
     @Query("SELECT uri FROM vault_items")
     suspend fun getAllUris(): List<String>
+
+    /**
+     * The whole items that have been read to the end, oldest first: those with text, and those
+     * read and found to have none. One whose reading was cut short has neither.
+     */
+    @Query("""
+        SELECT id, uri, timestamp FROM vault_items
+        WHERE parentDocumentId IS NULL AND (ocrText != '' OR lang = 'zxx')
+        ORDER BY timestamp
+    """)
+    suspend fun itemsRead(): List<ItemRead>
 
     @Query("SELECT * FROM vault_items WHERE originalUri = :uri LIMIT 1")
     suspend fun findByOriginalUri(uri: String): VaultItem?

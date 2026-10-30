@@ -88,7 +88,7 @@ class PhotoIndexSpeedDeviceTest {
         val blank = FloatArray(3 * size * size)
         repeat(2) { (listOf(inUse, eight) + variants.values).forEach { it.encode(blank) } }
 
-        val out = File(app.filesDir, "photo-speed").apply { mkdirs() }
+        val out = File(app.getExternalFilesDir(null) ?: app.filesDir, "photo-speed").apply { mkdirs() }
         val kept = ArrayList<FloatArray>()
         File(out, "result.jsonl").bufferedWriter().use { w ->
             for ((n, p) in photos.withIndex()) {
@@ -103,6 +103,7 @@ class PhotoIndexSpeedDeviceTest {
                     s.recycle()
                 }
                 val pixels = timed(ms, "pixels_full") { PhotoPixels.of(full, size) }
+                timed(ms, "pixels_kotlin") { PhotoPixels.ofInKotlin(full, size) }
                 val thumb = timed(ms, "thumbnail") { PhotoThumbnails.load(app, uri) }
                 val thumbPixels = thumb?.let { t -> timed(ms, "pixels_thumbnail") { PhotoPixels.of(t, size) } }
                 thumb?.recycle()
@@ -269,7 +270,7 @@ class PhotoIndexSpeedDeviceTest {
                 }
             }
         }
-        val out = File(app.filesDir, "photo-speed").apply { mkdirs() }
+        val out = File(app.getExternalFilesDir(null) ?: app.filesDir, "photo-speed").apply { mkdirs() }
         File(out, "pipeline.json").writeText(JSONObject().apply {
             put("photos", photos.size).put("with_text", hasText.values.count { it })
             put("rest_s", rest).put("passes", passes)
@@ -299,7 +300,7 @@ class PhotoIndexSpeedDeviceTest {
         val files = PhotoModelFiles(app)
         assumeTrue("photo search models are not on this device", files.present())
         val size = files.manifest()!!.inputSize
-        val dir = File(app.filesDir, "photo-speed")
+        val dir = File(app.getExternalFilesDir(null) ?: app.filesDir, "photo-speed")
         // -e only_variants true: the model in use was scored on this set before.
         val models = (if (args.getString("only_variants") == "true") emptyList() else listOf(files.photoModel().name)) +
             args.getString("variants").orEmpty().split(',').filter { it.isNotBlank() }
@@ -381,7 +382,7 @@ class PhotoIndexSpeedDeviceTest {
                 result.put(name, "failed: ${e.message}")
             }
         }
-        File(File(app.filesDir, "photo-speed").apply { mkdirs() }, "threads.json").writeText(result.toString(1))
+        File(File(app.getExternalFilesDir(null) ?: app.filesDir, "photo-speed").apply { mkdirs() }, "threads.json").writeText(result.toString(1))
     }
 
     /**
@@ -415,7 +416,7 @@ class PhotoIndexSpeedDeviceTest {
             bitmap.recycle()
         }
         ms.sort()
-        File(File(app.filesDir, "photo-speed").apply { mkdirs() }, "reading.json").writeText(JSONObject()
+        File(File(app.getExternalFilesDir(null) ?: app.filesDir, "photo-speed").apply { mkdirs() }, "reading.json").writeText(JSONObject()
             .put("photos", photos.size).put("same_text", same).put("different_text", differ).put("unreadable", unreadable)
             .put("reading_ms_median", if (ms.isEmpty()) 0.0 else ms[ms.size / 2]).toString(1))
     }
@@ -429,7 +430,7 @@ class PhotoIndexSpeedDeviceTest {
         val photos = VaultDatabase.get(app).vaultDao().getAll()
             .filter { it.itemType == ItemType.PHOTO && it.parentDocumentId == null }
             .sortedByDescending { it.timestamp }
-        val out = File(app.filesDir, "photo-speed").apply { mkdirs() }
+        val out = File(app.getExternalFilesDir(null) ?: app.filesDir, "photo-speed").apply { mkdirs() }
         File(out, "orientation.jsonl").bufferedWriter().use { w ->
             for ((n, p) in photos.withIndex()) {
                 val uri = Uri.parse(p.uri)

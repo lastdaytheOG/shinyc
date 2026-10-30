@@ -141,3 +141,5 @@ tools/phone-screenshots/
 # Photo search models for local tests (a junction to the benchmark kit; hundreds of MB)
 # ==============================
 tools/visual-search/models/
+# Results of the indexing speed bench (tools/index-bench).
+tools/index-bench/results/

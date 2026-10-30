@@ -19,7 +19,11 @@ plugins {
 //                       in the APK; the app copies them to files/photo-search the first time.
 //                       Without it there is no photo search until the models are put on the
 //                       device, and everything else works as before.
+//   -PbenchApp          install beside the real app, as com.amar.vault.bench, with its own data:
+//                       IndexingEngineBenchDeviceTest can then run on a phone without touching its vault.
+//   -PtestPhoneBuild    instrumented tests run against the `phone` build instead of `debug`.
 val phoneApk: Boolean = providers.gradleProperty("phoneApk").isPresent
+val benchApp: Boolean = providers.gradleProperty("benchApp").isPresent
 val photoSearchModels: Boolean = providers.gradleProperty("photoSearchModels").isPresent
 val noEmbeddingModel: Boolean = phoneApk || providers.gradleProperty("noEmbeddingModel").isPresent
 val abiOnly: String? = if (phoneApk) "arm64-v8a" else providers.gradleProperty("abiOnly").orNull
@@ -34,6 +38,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
+        if (benchApp) applicationIdSuffix = ".bench"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         externalNativeBuild {
@@ -60,7 +65,20 @@ android {
                 "proguard-rules.pro"
             )
         }
+        // What goes on a phone. A debug build is what has been handed out so far, and Android runs
+        // one with its optimisations off so that it can be debugged: every line of Kotlin, the
+        // framework's included. This is the same code with the same signature, so it installs over
+        // a debug build and keeps the vault; what it gives up is `run-as`. Tests that need that
+        // stay on `debug`.
+        create("phone") {
+            initWith(getByName("debug"))
+            isDebuggable = false
+            isJniDebuggable = false
+            matchingFallbacks += listOf("debug")
+            signingConfig = signingConfigs.getByName("debug")
+        }
     }
+    if (providers.gradleProperty("testPhoneBuild").isPresent) testBuildType = "phone"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

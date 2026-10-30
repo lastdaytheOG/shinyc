@@ -34,6 +34,26 @@ class DiscoveryEngine(context: Context) {
     private val contentResolver = context.contentResolver
     private val dao = VaultDatabase.get(context).vaultDao()
 
+    /**
+     * A picture that has to be read. [storedId] is its row when it was read before and has been
+     * changed since; null for one not read yet.
+     */
+    data class ToRead(val uri: Uri, val storedId: String?)
+
+    internal enum class Decision { READ, READ_AGAIN, LEAVE }
+
+    internal companion object {
+        /**
+         * What a scan does with a picture in the gallery: [stored] is its row if it has been read
+         * to the end, and [modifiedSeconds] when the gallery says its file last changed.
+         */
+        fun decide(stored: com.amar.vault.ItemRead?, modifiedSeconds: Long): Decision = when {
+            stored == null -> Decision.READ
+            modifiedSeconds * 1000 > stored.timestamp -> Decision.READ_AGAIN
+            else -> Decision.LEAVE
+        }
+    }
+
     /** Result of a processing run. [cancelled] is true iff the run stopped on a cooperative cancel. */
     data class DiscoveryOutcome(val cancelled: Boolean)
 
@@ -52,20 +72,7 @@ class DiscoveryEngine(context: Context) {
         // projection returns the identical URI list the per-trigger projections did.
         val projection = arrayOf(MediaStore.Images.Media._ID)
 
-        val clauses = mutableListOf<String>()
-        val args = mutableListOf<String>()
-        if (spec.folders.isNotEmpty() && !spec.folders.contains("")) {
-            clauses += "(" + spec.folders.joinToString(" OR ") {
-                "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ?"
-            } + ")"
-            args += spec.folders.map { "%$it%" }
-        }
-        if (spec.sinceEpochSeconds != null) {
-            clauses += "${MediaStore.Images.Media.DATE_ADDED} > ?"
-            args += spec.sinceEpochSeconds.toString()
-        }
-        val selection = if (clauses.isEmpty()) null else clauses.joinToString(" AND ")
-        val selectionArgs = if (args.isEmpty()) null else args.toTypedArray()
+        val (selection, selectionArgs) = selectionOf(spec)
         val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
 
         val uris = mutableListOf<Uri>()
@@ -79,6 +86,49 @@ class DiscoveryEngine(context: Context) {
         if (!spec.dedupAgainstIndexed) return uris
         val indexed = dao.getAllUris().toHashSet()
         return uris.filter { it.toString() !in indexed }
+    }
+
+    /**
+     * The pictures in [spec]'s scope, in its order, without those that have been read to the end
+     * and not changed since. A scan that was cut short, or runs again, carries on from what is
+     * left: read in full it cost almost what the first scan did, for nothing. A picture counts as
+     * changed when the gallery says its file was modified after the row was written.
+     */
+    suspend fun toRead(spec: DiscoverySpec): List<ToRead> {
+        val collection = resolveCollection(spec.mediaScope)
+        val read = HashMap<String, com.amar.vault.ItemRead>()
+        for (item in dao.itemsRead()) read[item.uri] = item
+
+        val projection = arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATE_MODIFIED)
+        val (selection, selectionArgs) = selectionOf(spec)
+        val found = ArrayList<ToRead>()
+        contentResolver.query(collection, projection, selection, selectionArgs, "${MediaStore.Images.Media.DATE_ADDED} DESC")?.use { c ->
+            while (c.moveToNext()) {
+                val uri = ContentUris.withAppendedId(collection, c.getLong(0))
+                when (decide(read[uri.toString()], c.getLong(1))) {
+                    Decision.READ -> found += ToRead(uri, null)
+                    Decision.READ_AGAIN -> found += ToRead(uri, read.getValue(uri.toString()).id)
+                    Decision.LEAVE -> {}
+                }
+            }
+        }
+        return found
+    }
+
+    private fun selectionOf(spec: DiscoverySpec): Pair<String?, Array<String>?> {
+        val clauses = mutableListOf<String>()
+        val args = mutableListOf<String>()
+        if (spec.folders.isNotEmpty() && !spec.folders.contains("")) {
+            clauses += "(" + spec.folders.joinToString(" OR ") {
+                "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ?"
+            } + ")"
+            args += spec.folders.map { "%$it%" }
+        }
+        if (spec.sinceEpochSeconds != null) {
+            clauses += "${MediaStore.Images.Media.DATE_ADDED} > ?"
+            args += spec.sinceEpochSeconds.toString()
+        }
+        return (if (clauses.isEmpty()) null else clauses.joinToString(" AND ")) to (if (args.isEmpty()) null else args.toTypedArray())
     }
 
     private fun resolveCollection(scope: DiscoverySpec.MediaScope): Uri = when (scope) {

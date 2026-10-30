@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.pm.ServiceInfo
 import android.graphics.BitmapFactory
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.hilt.work.HiltWorker
@@ -29,7 +30,7 @@ import kotlinx.coroutines.withContext
  * Features:
  * - Thermal-aware batching: burst 8 photos → pause 2s while the phone is warm → repeat
  * - Persistent notification with progress
- * - Resumable: tracks last-processed timestamp, skips already-indexed
+ * - Resumable: pictures that have been read to the end, and not changed since, are not touched
  * - WorkManager guarantees completion even if app is killed
  */
 @HiltWorker
@@ -47,6 +48,9 @@ class BulkScanWorker @dagger.assisted.AssistedInject constructor(
         private const val CHANNEL_ID = "bulk_scan"
         private const val NOTIFICATION_ID = 9001
         // Burst size + cooldown are centralized in VaultConfig.Indexing (same values).
+
+        /** A notification and a progress record cost a trip to the system and a database write. */
+        private const val PROGRESS_EVERY_MS = 1000L
 
         /** Enqueue a bulk scan. Safe to call multiple times — WorkManager deduplicates. */
         fun enqueue(context: Context) {
@@ -77,15 +81,17 @@ class BulkScanWorker @dagger.assisted.AssistedInject constructor(
             val prefs = ScanPreferences.prefsFlow(applicationContext).first()
             val folders = prefs.foldersToScan()
 
-            // Bulk scope: all volumes, user-selected folders, and NO Room dedup — the pipeline's own
-            // pHash check is the bulk path's intentional dedup. Identical query to the old queryPhotos().
+            // Bulk scope: all volumes and user-selected folders. A picture is skipped by what has
+            // been read (DiscoveryEngine.toRead); one that is new to the vault still goes through
+            // the pipeline's own pHash check.
             val spec = DiscoverySpec(
                 mediaScope = DiscoverySpec.MediaScope.ALL_VOLUMES,
                 folders = folders,
                 sinceEpochSeconds = null,
                 dedupAgainstIndexed = false,
             )
-            val uris = engine.discover(spec)
+            val toRead = engine.toRead(spec)
+            val uris = toRead.map { it.uri }
 
             Log.d(TAG, "Starting bulk scan: ${uris.size} photos from ${folders.size} folders")
 
@@ -99,13 +105,18 @@ class BulkScanWorker @dagger.assisted.AssistedInject constructor(
             var skipped = 0
 
             // 8-photo bursts with a 2s cool-down between them while the phone is warm (skipped after the final burst).
+            var lastProgress = 0L
             val outcome = engine.process(
                 candidates = uris,
                 policy = CoolWhenWarmBatchPolicy(applicationContext, VaultConfig.Indexing.BATCH_SIZE, VaultConfig.Indexing.COOL_DOWN_MS),
                 isActive = { !isStopped },
                 indexOne = { i, total, photoUri ->
-                    // Update notification
-                    setForeground(buildForegroundInfo(i + 1, total, indexed))
+                    val now = SystemClock.elapsedRealtime()
+                    val report = i == 0 || now - lastProgress >= PROGRESS_EVERY_MS
+                    if (report) {
+                        lastProgress = now
+                        setForeground(buildForegroundInfo(i + 1, total, indexed))
+                    }
 
                     try {
                         val stream = applicationContext.contentResolver.openInputStream(photoUri)
@@ -113,7 +124,9 @@ class BulkScanWorker @dagger.assisted.AssistedInject constructor(
                             val bitmap = BitmapFactory.decodeStream(stream)
                             stream.close()
                             if (bitmap != null) {
-                                pipeline.indexBitmap(bitmap, photoUri.toString())
+                                val stored = toRead[i].storedId
+                                if (stored != null) pipeline.indexChanged(bitmap, photoUri.toString(), stored)
+                                else pipeline.indexBitmap(bitmap, photoUri.toString())
                                 bitmap.recycle()
                                 indexed++
                             } else {
@@ -122,18 +135,27 @@ class BulkScanWorker @dagger.assisted.AssistedInject constructor(
                         } else {
                             skipped++
                         }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         IndexMetrics.increment(IndexMetrics.Event.INDEX_FAILURE)
                         Log.w(TAG, "Failed to index $photoUri: ${e.message}")
                         skipped++
+                    } catch (e: OutOfMemoryError) {
+                        // A picture too big for the phone is one picture left out, not a scan that
+                        // stops at it every time it is started again.
+                        IndexMetrics.increment(IndexMetrics.Event.INDEX_FAILURE)
+                        Log.w(TAG, "Not enough memory to read $photoUri")
+                        skipped++
                     }
 
-                    // Report progress
-                    setProgress(workDataOf(
-                        "current" to (i + 1),
-                        "total" to total,
-                        "indexed" to indexed,
-                    ))
+                    if (report) {
+                        setProgress(workDataOf(
+                            "current" to (i + 1),
+                            "total" to total,
+                            "indexed" to indexed,
+                        ))
+                    }
                 },
             )
 

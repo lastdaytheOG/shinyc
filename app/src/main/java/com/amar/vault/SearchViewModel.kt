@@ -216,9 +216,12 @@ class SearchViewModel @Inject constructor(
     private val modelDao = db.localModelDao()
     private val gson = Gson()
 
+    // Every write to the table reads all of it again, text and all, so only while a screen is
+    // looking: left running, it went on for as long as the app was open once Photos had been seen,
+    // over and over during a scan.
     val allItems: StateFlow<List<VaultItem>> = db.vaultDao()
         .getAllItems()
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val stashItems: StateFlow<List<StashItemWithVaultItem>> = db.stashItemDao()
         .getStashItemsByType("SAVED")
