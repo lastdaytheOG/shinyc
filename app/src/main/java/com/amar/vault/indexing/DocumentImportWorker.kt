@@ -55,10 +55,16 @@ class DocumentImportWorker(context: Context, params: WorkerParameters) : Corouti
         }
 
         ImportNotices.ensureChannels(app)
+        val onCharge = lane == ImportLane.ON_CHARGE
         // Refused when the app is not on screen (Android 12 and later): the work then runs as
         // ordinary background work, in ten-minute stretches.
-        var inForeground = showReading(ImportNotices.reading(app, null, waiting))
+        //
+        // Never on the charger. WorkManager ignores a stop for work in the foreground, and that
+        // stop is how this lane ends when the charger is pulled: it would read on, on battery, or
+        // with the app closed freeze still saying it is reading. Its progress is a plain notification.
+        var inForeground = !onCharge && showReading(ImportNotices.reading(app, null, waiting))
         if (!inForeground) VaultLog.i(TAG, "Reading in the background")
+        if (onCharge) ImportNotices.showOnCharge(app, ImportNotices.reading(app, null, waiting))
 
         val startedAt = System.currentTimeMillis()
         val lastShown = AtomicLong(0)
@@ -68,16 +74,21 @@ class DocumentImportWorker(context: Context, params: WorkerParameters) : Corouti
                 baseId = import.id, displayName = import.name, log = log,
             )
         })
-        val readers = if (lane == ImportLane.ON_CHARGE) 1 else READERS
-        val ended = reader.readAll(readers, lane) { row ->
-            if (!inForeground || row.isFinished || row.waitsForCharger) return@readAll
-            // A scan finishes a page every few seconds and a text PDF hundreds a second; the
-            // notification is redrawn at most once a second.
-            val now = System.currentTimeMillis()
-            val last = lastShown.get()
-            if (now - last >= 1000 && lastShown.compareAndSet(last, now)) {
-                inForeground = showReading(ImportNotices.reading(app, row, leftInThisLane()))
+        val readers = if (onCharge) 1 else READERS
+        val ended = try {
+            reader.readAll(readers, lane) { row ->
+                if (!(inForeground || onCharge) || row.isFinished || row.waitsForCharger) return@readAll
+                // A scan finishes a page every few seconds and a text PDF hundreds a second; the
+                // notification is redrawn at most once a second.
+                val now = System.currentTimeMillis()
+                val last = lastShown.get()
+                if (now - last >= 1000 && lastShown.compareAndSet(last, now)) {
+                    val notice = ImportNotices.reading(app, row, leftInThisLane())
+                    if (onCharge) ImportNotices.showOnCharge(app, notice) else inForeground = showReading(notice)
+                }
             }
+        } finally {
+            if (onCharge) ImportNotices.clearOnCharge(app)
         }
 
         ImportNotices.ended(app, ended, tookMs = System.currentTimeMillis() - startedAt)
@@ -101,15 +112,12 @@ class DocumentImportWorker(context: Context, params: WorkerParameters) : Corouti
         false
     }
 
-    private fun foregroundInfo(notification: android.app.Notification): ForegroundInfo {
-        // The two lanes can run side by side, each with its own notification.
-        val id = if (lane == ImportLane.ON_CHARGE) ImportNotices.READING_ON_CHARGE_ID else ImportNotices.READING_ID
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ForegroundInfo(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+    private fun foregroundInfo(notification: android.app.Notification): ForegroundInfo =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(ImportNotices.READING_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
-            ForegroundInfo(id, notification)
+            ForegroundInfo(ImportNotices.READING_ID, notification)
         }
-    }
 
     companion object {
         private const val TAG = "DocumentImportWorker"
@@ -153,7 +161,7 @@ internal object ImportNotices {
     private const val RESULT_CHANNEL = "document_results"
     const val READING_ID = 9002
     private const val RESULT_ID = 9003
-    const val READING_ON_CHARGE_ID = 9004
+    private const val READING_ON_CHARGE_ID = 9004
     /** A reading shorter than this ends without a notification: the screen showed it happen. */
     private const val WORTH_TELLING_MS = 20_000L
 
@@ -188,6 +196,19 @@ internal object ImportNotices {
             .setOnlyAlertOnce(true)
             .setContentIntent(openApp(context))
             .build()
+    }
+
+    /** Shows where the reading on the charger stands; it runs beside the other lane, under its own id. */
+    fun showOnCharge(context: Context, notification: android.app.Notification) {
+        runCatching {
+            if (NotificationManagerCompat.from(context).areNotificationsEnabled()) {
+                NotificationManagerCompat.from(context).notify(READING_ON_CHARGE_ID, notification)
+            }
+        }
+    }
+
+    fun clearOnCharge(context: Context) {
+        runCatching { NotificationManagerCompat.from(context).cancel(READING_ON_CHARGE_ID) }
     }
 
     /** Says how the files that ended in one run of the worker ended, if it is worth saying. */

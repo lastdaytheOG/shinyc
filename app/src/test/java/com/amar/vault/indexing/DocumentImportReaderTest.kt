@@ -504,6 +504,33 @@ class DocumentImportReaderTest {
     }
 
     @Test
+    fun aSharedFileThatWasReadIsNotReadAgainWhenTheRepairAsksAboutIt() = runBlocking {
+        val item = VaultItem(id = "saved-1", uri = "/data/shared/saved-1.pdf", ocrText = "", lang = "en", itemType = ItemType.PDF, sourceFile = "Bill.pdf", timestamp = 0L)
+        assertTrue(queue.addShared(item))
+        reader { import, _ -> IndexResult.Success(import.name, 3, 1L) }.readAll()
+        assertEquals(ImportState.DONE, row("saved-1").state)
+        val startedBefore = started
+
+        assertTrue("it is a document, and it is taken care of", queue.addShared(item))
+
+        assertEquals("still says it was read", ImportState.DONE, row("saved-1").state)
+        assertEquals("nothing is set going", startedBefore, started)
+    }
+
+    @Test
+    fun aPausedScanIsNotBegunAgainWhenTheRepairAsksAboutIt() = runBlocking {
+        val item = VaultItem(id = "saved-2", uri = "/data/shared/saved-2.pdf", ocrText = "", lang = "en", itemType = ItemType.PDF, sourceFile = "Register.pdf", timestamp = 0L)
+        assertTrue(queue.addShared(item))
+        timedReader(longScan()::read).readAll()
+        val before = row("saved-2")
+        assertTrue(before.waitsForCharger)
+
+        assertTrue(queue.addShared(item))
+
+        assertEquals("what it read and why it waits are untouched", before, row("saved-2"))
+    }
+
+    @Test
     fun whatIsSaidOfAScanThatWaitsForTheCharger() = runBlocking {
         val import = queue.addPicked(listOf(file("Register.pdf"))).single()
         timedReader(longScan()::read).readAll()

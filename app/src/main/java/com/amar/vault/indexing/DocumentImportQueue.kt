@@ -72,6 +72,9 @@ class DocumentImportQueue(
             startWorker()
             return true
         }
+        // The start-up repair asks about every saved file once. Read again, one that was read would
+        // change from "Read" to "Already in your vault" with nothing wrong with it.
+        if (earlier?.state == ImportState.DONE && earlier.uri == address) return true
         dao.upsert(
             DocumentImport(
                 id = item.id, uri = address, name = name.ifBlank { "document" }, mimeType = mimeType,
