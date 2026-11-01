@@ -90,6 +90,12 @@ class DocumentImportQueue(
         if (dao.retry(id, now()) > 0) startWorker()
     }
 
+    /** Reads a locked file with the [password] the user typed for it; see [PdfPasswords]. */
+    suspend fun unlock(id: String, password: String) {
+        PdfPasswords.typed(id, password)
+        if (dao.retry(id, now()) > 0) startWorker() else PdfPasswords.forget(id)
+    }
+
     /** The rest of a long scan that waits for the charger is read now, on battery, because the user asked. */
     suspend fun readRestNow(id: String) {
         if (dao.readRestNow(id, now()) > 0) startWorker()
@@ -167,7 +173,10 @@ class DocumentImportReader(
                     while (true) {
                         val next = nextUnclaimed(lane) ?: break
                         try {
-                            ended += readOne(next, lane, onChange)
+                            val triedAPassword = PdfPasswords.of(next.id) != null
+                            val row = readOne(next, lane, onChange)
+                            // The user is at the card that asks for it: no notification about it too.
+                            if (!(triedAPassword && row.failure == ImportFailure.LOCKED)) ended += row
                         } finally {
                             claim.withLock { claimed -= next.id }
                         }
@@ -193,6 +202,7 @@ class DocumentImportReader(
 
         // Read before reading begins: beginning clears it.
         val askedForNow = import.readsRestNow
+        val password = PdfPasswords.of(id)
         val timed = lane == ImportLane.AT_ONCE && !askedForNow
         val startedAt = now()
         val pagesThisStretch = java.util.concurrent.atomic.AtomicInteger()
@@ -243,7 +253,7 @@ class DocumentImportReader(
                 ),
             )
         } else try {
-            read(import, log)
+            if (password == null) read(import, log) else withContext(PdfPassword(password)) { read(import, log) }
         } catch (stopped: CancellationException) {
             // The charger was pulled, or a reading asked for went on past the system's patience.
             // Neither is the fault of the page it was on, and each goes back to where it was.
@@ -259,18 +269,40 @@ class DocumentImportReader(
             IndexResult.Failure(import.name, com.amar.vault.IndexError.StorageFailed(e))
         }
         when (result) {
-            is IndexResult.Success ->
+            is IndexResult.Success -> {
                 dao.finish(id, ImportState.DONE, result.chunkCount, null, null, now())
-            is IndexResult.Duplicate ->
+                PdfPasswords.forget(id)
+                if (password != null) {
+                    dao.getById(id)?.fingerprint?.let { PdfPasswords.opens(it, password) }
+                    tryOnOtherLockedFiles(password)
+                }
+            }
+            is IndexResult.Duplicate -> {
                 dao.finish(id, ImportState.ALREADY_THERE, 0, null, null, now())
+                PdfPasswords.forget(id)
+            }
             is IndexResult.Paused ->
                 dao.markWaiting(id, DocumentImport.WAITS_FOR_CHARGER, now())
             is IndexResult.Failure -> {
                 val (failure, detail) = ImportFailure.of(result.error, import.name)
-                dao.finish(id, ImportState.FAILED, dao.getById(id)?.pieces ?: 0, failure, detail, now())
+                val locked = failure == ImportFailure.LOCKED
+                // Said only of a password typed for this file, not of one tried on it in passing.
+                val said = if (locked && PdfPasswords.wasTypedFor(id)) DocumentImport.WRONG_PASSWORD else detail
+                dao.finish(id, ImportState.FAILED, dao.getById(id)?.pieces ?: 0, failure, said, now())
+                // Kept for any other failure: "Try again" is to work without typing it again.
+                if (locked) PdfPasswords.forget(id)
             }
         }
         return changed()
+    }
+
+    /** Statements of one bank share a password: twelve files should not ask for it twelve times. */
+    private suspend fun tryOnOtherLockedFiles(password: String) {
+        for (other in dao.locked()) {
+            if (PdfPasswords.of(other.id) != null) continue
+            PdfPasswords.tryOn(other.id, password)
+            dao.retry(other.id, now())
+        }
     }
 
     companion object {

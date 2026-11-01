@@ -98,7 +98,8 @@ object ImportWords {
         ImportFailure.FILE_GONE ->
             "The file could not be opened. It was moved, renamed or deleted after you chose it."
         ImportFailure.LOCKED ->
-            "This PDF is locked with a password, so its text cannot be read."
+            if (detail == DocumentImport.WRONG_PASSWORD) "That password did not open this PDF."
+            else "This PDF is locked with a password."
         ImportFailure.NOT_A_DOCUMENT ->
             (if (detail.isNullOrBlank()) "This kind of file cannot be read." else "A .$detail file cannot be read.") +
                 " The app reads PDF, Word (.docx), Excel (.xlsx) and EPUB."
@@ -120,7 +121,7 @@ object ImportWords {
             if (origin == ImportOrigin.SHARED) "Share it to the app again."
             else "Choose it again from where it is now."
         ImportFailure.LOCKED ->
-            "Open it in another app with its password, print it to a new PDF, and add that one."
+            "Open Import documents and type its password."
         ImportFailure.NOT_A_DOCUMENT ->
             "Save it as a PDF and add the PDF."
         ImportFailure.DAMAGED ->

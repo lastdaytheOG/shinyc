@@ -202,7 +202,7 @@ class PdfFormatExtractor : FormatExtractor {
         prof?.stageNs(ProfilerStage.PDF_OPEN, openNs)
         stream.use {
             val tLoad = System.nanoTime()
-            val doc = PDDocument.load(stream)
+            val doc = PDDocument.load(stream, kotlin.coroutines.coroutineContext[PdfPassword]?.value.orEmpty())
             val loadNs = System.nanoTime() - tLoad
             IndexMetrics.recordDuration(IndexMetrics.Timing.PDF_LOAD, nsToMs(loadNs))
             prof?.stageNs(ProfilerStage.PDF_LOAD, loadNs)
@@ -485,7 +485,7 @@ class PdfFormatExtractor : FormatExtractor {
         prof?.stageNs(ProfilerStage.PDF_OPEN, openNs)
         stream.use {
             val tLoad = System.nanoTime()
-            val doc = PDDocument.load(stream)
+            val doc = PDDocument.load(stream, kotlin.coroutines.coroutineContext[PdfPassword]?.value.orEmpty())
             val loadNs = System.nanoTime() - tLoad
             IndexMetrics.recordDuration(IndexMetrics.Timing.PDF_LOAD, nsToMs(loadNs))
             prof?.stageNs(ProfilerStage.PDF_LOAD, loadNs)

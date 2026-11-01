@@ -71,6 +71,8 @@ data class DocumentImport(
     companion object {
         const val WAITS_FOR_CHARGER = "waits-for-charger"
         const val READ_REST_NOW = "read-rest-now"
+        /** On a [ImportFailure.LOCKED] row: the password typed for it did not open it. */
+        const val WRONG_PASSWORD = "wrong-password"
     }
 }
 
@@ -162,6 +164,10 @@ interface DocumentImportDao {
         WHERE id = :id
     """)
     suspend fun markWaiting(id: String, why: String, now: Long)
+
+    /** The files that wait for a password. */
+    @Query("SELECT * FROM document_imports WHERE state = 'FAILED' AND failure = 'LOCKED' ORDER BY addedAt")
+    suspend fun locked(): List<DocumentImport>
 
     @Query("SELECT COUNT(*) FROM document_imports WHERE state = 'WAITING' AND failureDetail = 'waits-for-charger'")
     suspend fun countWaitingForCharger(): Int

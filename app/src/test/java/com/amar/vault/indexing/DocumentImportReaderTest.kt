@@ -47,10 +47,14 @@ class DocumentImportReaderTest {
         db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext<Context>(), VaultDatabase::class.java)
             .allowMainThreadQueries().build()
         queue = DocumentImportQueue(db, startWorker = { started++ }, nameOf = { it.lastPathSegment }, now = { clock++ })
+        PdfPasswords.clear()
     }
 
     @After
-    fun close() = db.close()
+    fun close() {
+        db.close()
+        PdfPasswords.clear()
+    }
 
     private fun file(name: String, type: String = "application/pdf") = FileToRead(Uri.parse("content://docs/$name"), type)
 
@@ -528,6 +532,131 @@ class DocumentImportReaderTest {
         assertTrue(queue.addShared(item))
 
         assertEquals("what it read and why it waits are untouched", before, row("saved-2"))
+    }
+
+    // ── Locked PDFs ─────────────────────────────────────────────────────────────────────
+
+    /** Files that open only with the password given for their name, as the indexer behaves. */
+    private fun lockedWith(vararg passwords: Pair<String, String>): suspend (DocumentImport, ReadingLog) -> IndexResult {
+        val needed = passwords.toMap()
+        return { import, log ->
+            log.reading("fp-${import.name}", 0, 0)
+            val given = kotlin.coroutines.coroutineContext[PdfPassword]?.value
+            val wanted = needed[import.name]
+            if (wanted != null && given != wanted) {
+                IndexResult.Failure(import.name, IndexError.ExtractionFailed(java.io.IOException("Cannot decrypt PDF, the password is incorrect")))
+            } else IndexResult.Success(import.name, 1, 1L)
+        }
+    }
+
+    @Test
+    fun aLockedFileAsksForItsPasswordAndIsToldOfIt() = runBlocking {
+        val import = queue.addPicked(listOf(file("Statement.pdf"))).single()
+        val ended = reader(lockedWith("Statement.pdf" to "open-sesame")).readAll()
+
+        assertEquals(ImportFailure.LOCKED, row(import.id).failure)
+        assertEquals("This PDF is locked with a password.", ImportWords.progress(row(import.id)))
+        assertEquals("nobody asked yet: the notification says so", listOf(import.id), ended.map { it.id })
+    }
+
+    @Test
+    fun aWrongPasswordSaysSoAndIsNotKept() = runBlocking {
+        val import = queue.addPicked(listOf(file("Statement.pdf"))).single()
+        val read = lockedWith("Statement.pdf" to "open-sesame")
+        reader(read).readAll()
+        val startedBefore = started
+
+        queue.unlock(import.id, "wrong")
+
+        assertEquals("the reading is set going", startedBefore + 1, started)
+        val ended = reader(read).readAll()
+        assertEquals("That password did not open this PDF.", ImportWords.progress(row(import.id)))
+        assertTrue("the user is at the card: no notification too", ended.isEmpty())
+        assertNull(PdfPasswords.of(import.id))
+    }
+
+    @Test
+    fun theRightPasswordReadsItAndIsForgottenOnceRead() = runBlocking {
+        val import = queue.addPicked(listOf(file("Statement.pdf"))).single()
+        val read = lockedWith("Statement.pdf" to "open-sesame")
+        reader(read).readAll()
+
+        queue.unlock(import.id, "open-sesame")
+        reader(read).readAll()
+
+        assertEquals(ImportState.DONE, row(import.id).state)
+        assertNull("not held for reading any more", PdfPasswords.of(import.id))
+        assertEquals("the viewer need not ask while the app runs", "open-sesame", PdfPasswords.forViewing("fp-Statement.pdf"))
+        assertFalse("no column of the row holds it", row(import.id).toString().contains("open-sesame"))
+    }
+
+    @Test
+    fun aPasswordThatOpensOneFileIsTriedOnTheOtherLockedOnes() = runBlocking {
+        val (march, april, other) = queue.addPicked(listOf(file("March.pdf"), file("April.pdf"), file("Other.pdf")))
+        val read = lockedWith("March.pdf" to "same", "April.pdf" to "same", "Other.pdf" to "different")
+        reader(read).readAll()
+
+        queue.unlock(march.id, "same")
+        val ended = reader(read).readAll()
+
+        assertEquals(ImportState.DONE, row(march.id).state)
+        assertEquals("opened by the same password, typed once", ImportState.DONE, row(april.id).state)
+        assertEquals(ImportFailure.LOCKED, row(other.id).failure)
+        assertEquals(
+            "nothing was typed for this one, so nothing typed was wrong",
+            "This PDF is locked with a password.", ImportWords.progress(row(other.id)),
+        )
+        assertEquals("only what was read is told of", setOf(march.id, april.id), ended.map { it.id }.toSet())
+        assertNull(PdfPasswords.of(other.id))
+    }
+
+    @Test
+    fun aWrongPasswordIsNotTriedOnOtherFiles() = runBlocking {
+        val (one, two) = queue.addPicked(listOf(file("One.pdf"), file("Two.pdf")))
+        val read = lockedWith("One.pdf" to "a", "Two.pdf" to "b")
+        reader(read).readAll()
+
+        queue.unlock(one.id, "b")
+        reader(read).readAll()
+
+        assertEquals(ImportFailure.LOCKED, row(one.id).failure)
+        assertEquals("only a password that opened something goes further", ImportFailure.LOCKED, row(two.id).failure)
+    }
+
+    @Test
+    fun aPausedLockedScanKeepsItsPasswordForTheRest() = runBlocking {
+        val import = queue.addPicked(listOf(file("Register.pdf"))).single()
+        val seen = ArrayList<String?>()
+        val scan = longScan()
+        val read: suspend (DocumentImport, ReadingLog) -> IndexResult = { i, log ->
+            seen += kotlin.coroutines.coroutineContext[PdfPassword]?.value
+            scan.read(i, log)
+        }
+        db.documentImportDao().finish(import.id, ImportState.FAILED, 0, ImportFailure.LOCKED, null, clock)
+        queue.unlock(import.id, "open-sesame")
+
+        timedReader(read).readAll()
+        assertTrue(row(import.id).waitsForCharger)
+        timedReader(read).readAll(lane = ImportLane.ON_CHARGE)
+
+        assertEquals(ImportState.DONE, row(import.id).state)
+        assertEquals(listOf<String?>("open-sesame", "open-sesame"), seen)
+        assertNull(PdfPasswords.of(import.id))
+    }
+
+    @Test
+    fun aPasswordIsNotKeptForAFileThatIsNotWaitingForOne() = runBlocking {
+        val import = queue.addPicked(listOf(file("Plain.pdf"))).single()
+
+        queue.unlock(import.id, "open-sesame")
+
+        assertNull(PdfPasswords.of(import.id))
+        assertEquals(ImportState.WAITING, row(import.id).state)
+    }
+
+    @Test
+    fun aPasswordDoesNotShowWhenItIsPrinted() {
+        assertFalse(PdfPassword("open-sesame").toString().contains("open-sesame"))
     }
 
     @Test
