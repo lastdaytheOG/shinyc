@@ -85,11 +85,13 @@ def main():
     instr += design
     instr.append(f"{pkg}.test/androidx.test.runner.AndroidJUnitRunner")
     t0 = time.time()
-    out = adb(serial, *instr, check=False)
+    # A whole gallery on a phone can take hours.
+    out = adb(serial, *instr, check=False, timeout=14400)
     took = time.time() - t0
     remote = f"/sdcard/Android/data/{pkg}/files/bench"
     adb(serial, "pull", f"{remote}/{label}.json", str(RESULTS / f"{label}.json"), check=False)
     adb(serial, "pull", f"{remote}/{label}.digest.jsonl", str(RESULTS / f"{label}.digest.jsonl"), check=False)
+    adb(serial, "pull", f"{remote}/{label}.progress.jsonl", str(RESULTS / f"{label}.progress.jsonl"), check=False)
     ok = "OK (" in out
     host_after = host_state()
     valid = bool(host_before["mains"] and host_after["mains"])

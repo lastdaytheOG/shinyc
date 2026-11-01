@@ -67,7 +67,11 @@ class IndexingEngineBenchDeviceTest {
         assumeTrue("run with -e bench scan", args.getString("bench") == "scan")
         val label = args.getString("label") ?: "run"
         val folder = args.getString("folder")!!
-        ScanPreferences.save(app, ScanPreferences.Prefs(onboardingDone = true, scanScreenshots = false, customFolders = setOf(folder)))
+        // -e folder ALL: the whole gallery.
+        ScanPreferences.save(app, ScanPreferences.Prefs(
+            onboardingDone = true, scanScreenshots = false, scanAll = folder == "ALL",
+            customFolders = if (folder == "ALL") emptySet() else setOf(folder),
+        ))
 
         // What the app does when it starts must not be counted: the models copied out and loaded,
         // the keyword engine filled.
@@ -98,12 +102,27 @@ class IndexingEngineBenchDeviceTest {
         var state: WorkInfo.State
         var outputData = androidx.work.Data.EMPTY
         var workEndedAt = 0L
+        // Written as it goes: a phone's own cleaner can kill a long run, and what is only in memory
+        // goes with it. The scan itself carries on where it stopped when run again.
+        val progress = File(out, "$label.progress.jsonl")
+        var lastNote = t0
         while (true) {
             val info = wm.getWorkInfosForUniqueWork("bulk_scan").get().lastOrNull()
             state = info?.state ?: WorkInfo.State.ENQUEUED
             peakHeap = maxOf(peakHeap, heapMb()); peakNative = maxOf(peakNative, nativeMb())
-            if (Build.VERSION.SDK_INT >= 29) worst = maxOf(worst, power.currentThermalStatus)
+            val thermalNow = if (Build.VERSION.SDK_INT >= 29) power.currentThermalStatus else -1
+            worst = maxOf(worst, thermalNow)
             if (state.isFinished) { outputData = info!!.outputData; workEndedAt = System.nanoTime(); break }
+            val now = System.nanoTime()
+            if (now - lastNote >= 30_000_000_000L) {
+                lastNote = now
+                progress.appendText(JSONObject().apply {
+                    put("ms", (now - t0) / 1_000_000)
+                    put("rows", db.vaultDao().getCount() - before)
+                    put("thermal", thermalNow)
+                    put("peak_native_mb", peakNative).put("peak_heap_mb", peakHeap)
+                }.toString() + "\n")
+            }
             delay(50)
         }
         // The last vectors are made just after the scan's last photo has been read.

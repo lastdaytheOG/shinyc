@@ -23,6 +23,11 @@ python compare_digests.py results/<a>.digest.jsonl results/<b>.digest.jsonl
 # a new picture, a copy, a picture changed in place
 python validate_scan.py <serial> com.amar.vault.bench <folder>
 
+# A real phone, before the real app is updated on it: room check, the bench build installed, native
+# pixels against Kotlin's on that CPU, the whole gallery scanned, the bench build removed again.
+# A run killed part way carries on. Summary in results/phone-summary.json
+python phone_run.py <serial>
+
 # Reads: what each one costs and finds, against typed or drawn truth
 adb shell am instrument -w -e class com.amar.vault.PictureOcrMeasureDeviceTest -e ocr draw ...
 adb shell am instrument -w -e class com.amar.vault.PictureOcrMeasureDeviceTest -e ocr reads ...
