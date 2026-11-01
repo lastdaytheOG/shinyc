@@ -11,6 +11,7 @@ import com.amar.vault.ReadingLog
 import com.amar.vault.VaultDatabase
 import com.amar.vault.VaultItem
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -61,7 +62,13 @@ class DocumentImportReaderTest {
      * page, as the system does when background work has had its ten minutes. (Cut short from
      * inside like this, the reader's call returns; what matters is what is left written down.)
      */
-    private class Scan(val pages: Int, val fingerprint: String = "fp", var stopAt: Int? = null) {
+    private class Scan(
+        val pages: Int, val fingerprint: String = "fp", var stopAt: Int? = null,
+        /** Called as a page is read: where a test moves its clock on. */
+        val onPage: () -> Unit = {},
+        /** Stops the reading as the next page begins, before it is done: the charger pulled mid-page. */
+        var stopBeforeNextPageDone: Boolean = false,
+    ) {
         val pagesRead = ArrayList<Int>()
 
         suspend fun read(import: DocumentImport, log: ReadingLog): IndexResult {
@@ -69,7 +76,10 @@ class DocumentImportReaderTest {
             log.reading(fingerprint, done, pieces = done)
             log.pageCount(pages)
             for (page in done + 1..pages) {
+                if (log.shouldPause()) return IndexResult.Paused(import.name)
+                if (stopBeforeNextPageDone) throw CancellationException("the charger was pulled")
                 pagesRead += page
+                onPage()
                 log.pageDone(page, pieces = page)
                 if (page == stopAt) throw CancellationException("ten minutes are up")
             }
@@ -319,5 +329,190 @@ class DocumentImportReaderTest {
         db.documentImportDao().markReading(second.id, "fp", pagesDone = 9, pieces = 9, now = clock++)
 
         assertEquals(listOf(second.id, first.id), db.documentImportDao().unfinished().map { it.id })
+    }
+
+    // ── A long scan on battery ──────────────────────────────────────────────────────────
+
+    /** A reader whose time is [clock], which only a scan moves: 100 ms a reading at once, 40 ms a page. */
+    private fun timedReader(read: suspend (DocumentImport, ReadingLog) -> IndexResult) =
+        DocumentImportReader(db, read, now = { clock }, readAtOnceMs = 100)
+
+    private fun longScan(pages: Int = 10) = Scan(pages, onPage = { clock += 40 })
+
+    @Test
+    fun aLongScanStopsAtItsTimeWithWhatItReadAndWaitsForTheCharger() = runBlocking {
+        val import = queue.addPicked(listOf(file("Register.pdf"))).single()
+        val scan = longScan()
+
+        val ended = timedReader(scan::read).readAll()
+
+        val row = row(import.id)
+        assertEquals("three pages take 120 ms", 3, row.pagesDone)
+        assertEquals(10, row.pageCount)
+        assertTrue(row.waitsForCharger)
+        assertEquals("told to whoever says how the run ended", listOf(import.id), ended.map { it.id })
+        assertFalse("not finished: it stays on the list", row.isFinished)
+        assertEquals(1, db.documentImportDao().countWaitingForCharger())
+    }
+
+    @Test
+    fun aFileBehindALongScanIsNotKeptWaiting() = runBlocking {
+        val (long, short) = queue.addPicked(listOf(file("Register.pdf"), file("Receipt.pdf")))
+        val order = ArrayList<String>()
+        val scan = longScan()
+
+        timedReader { import, log ->
+            order += import.name
+            if (import.id == long.id) scan.read(import, log) else IndexResult.Success(import.name, 1, 1L)
+        }.readAll(readers = 1)
+
+        assertEquals(listOf("Register.pdf", "Receipt.pdf"), order)
+        assertEquals(ImportState.DONE, row(short.id).state)
+        assertTrue(row(long.id).waitsForCharger)
+    }
+
+    @Test
+    fun nothingIsReadAgainAtOnceThatWaitsForTheCharger() = runBlocking {
+        val import = queue.addPicked(listOf(file("Register.pdf"))).single()
+        val scan = longScan()
+        timedReader(scan::read).readAll()
+        scan.pagesRead.clear()
+
+        val second = timedReader(scan::read).readAll()
+
+        assertTrue("it would stop and be taken up again for ever", second.isEmpty())
+        assertTrue(scan.pagesRead.isEmpty())
+        assertTrue(row(import.id).waitsForCharger)
+    }
+
+    @Test
+    fun onTheChargerTheRestIsReadFromThePageItReached() = runBlocking {
+        val import = queue.addPicked(listOf(file("Register.pdf"))).single()
+        val scan = longScan()
+        timedReader(scan::read).readAll()
+
+        timedReader(scan::read).readAll(lane = ImportLane.ON_CHARGE)
+
+        assertEquals("every page once, in order", (1..10).toList(), scan.pagesRead)
+        assertEquals(ImportState.DONE, row(import.id).state)
+        assertEquals(10, row(import.id).pagesDone)
+        assertEquals(0, db.documentImportDao().countWaitingForCharger())
+    }
+
+    @Test
+    fun theChargerLaneTakesOnlyWhatWaitsForIt() = runBlocking {
+        val import = queue.addPicked(listOf(file("JustAdded.pdf"))).single()
+        var reads = 0
+
+        timedReader { i, _ -> reads++; IndexResult.Success(i.name, 1, 1L) }.readAll(lane = ImportLane.ON_CHARGE)
+
+        assertEquals(0, reads)
+        assertEquals(ImportState.WAITING, row(import.id).state)
+    }
+
+    @Test
+    fun aChargerPulledMidPageLosesNothingAndIsNotCountedAgainstThePage() = runBlocking {
+        val import = queue.addPicked(listOf(file("Register.pdf"))).single()
+        val scan = longScan()
+        timedReader(scan::read).readAll()
+        val reached = row(import.id).pagesDone
+
+        // More often than the times a page may stop the app before it is given up on.
+        scan.stopBeforeNextPageDone = true
+        repeat(DocumentImportReader.STARTS_WITHOUT_A_PAGE + 2) {
+            timedReader(scan::read).readAll(lane = ImportLane.ON_CHARGE)
+            assertTrue("back to waiting for the charger", row(import.id).waitsForCharger)
+        }
+        assertEquals(reached, row(import.id).pagesDone)
+        assertEquals("no page was given up on", 0, row(import.id).pagesSkipped)
+
+        scan.stopBeforeNextPageDone = false
+        timedReader(scan::read).readAll(lane = ImportLane.ON_CHARGE)
+        assertEquals((1..10).toList(), scan.pagesRead)
+        assertEquals(ImportState.DONE, row(import.id).state)
+    }
+
+    @Test
+    fun askedForTheRestNowItIsReadOnBatteryWithoutStopping() = runBlocking {
+        val import = queue.addPicked(listOf(file("Register.pdf"))).single()
+        val scan = longScan()
+        timedReader(scan::read).readAll()
+        val startedBefore = started
+
+        queue.readRestNow(import.id)
+
+        assertEquals("the reading is set going", startedBefore + 1, started)
+        assertTrue(row(import.id).readsRestNow)
+        timedReader(scan::read).readAll()
+        assertEquals((1..10).toList(), scan.pagesRead)
+        assertEquals(ImportState.DONE, row(import.id).state)
+    }
+
+    @Test
+    fun askedForTheRestNowAndStoppedByTheSystemItIsStillAskedFor() = runBlocking {
+        val import = queue.addPicked(listOf(file("Register.pdf"))).single()
+        val scan = longScan()
+        timedReader(scan::read).readAll()
+        queue.readRestNow(import.id)
+
+        scan.stopBeforeNextPageDone = true
+        timedReader(scan::read).readAll()
+
+        assertTrue(row(import.id).readsRestNow)
+    }
+
+    @Test
+    fun readingStopsOnlyAfterAPageIsFinishedSoEveryStopMovesTheFileOn() = runBlocking {
+        // A reading with no time at all still reads a page; otherwise it would stop where it began.
+        val import = queue.addPicked(listOf(file("Register.pdf"))).single()
+        val scan = Scan(pages = 5)
+
+        DocumentImportReader(db, scan::read, now = { clock }, readAtOnceMs = 0).readAll()
+
+        assertEquals(1, row(import.id).pagesDone)
+        assertTrue(row(import.id).waitsForCharger)
+    }
+
+    @Test
+    fun aFileThatFailedAfterSomePagesDoesNotWaitForTheChargerWhenTriedAgain() = runBlocking {
+        val import = queue.addPicked(listOf(file("Register.pdf"))).single()
+        db.documentImportDao().markReading(import.id, "fp", pagesDone = 4, pieces = 4, now = clock)
+        db.documentImportDao().finish(import.id, ImportState.FAILED, 4, ImportFailure.TOO_BIG, null, clock)
+
+        queue.retry(import.id)
+
+        assertFalse(row(import.id).waitsForCharger)
+        assertTrue(ImportLane.AT_ONCE.takes(row(import.id)))
+    }
+
+    @Test
+    fun twoReadersOfTwoLanesNeverReadTheSameFile() = runBlocking {
+        // The lanes are two workers, so two readers; the indexer would call the second a duplicate.
+        queue.addPicked((1..12).map { file("Doc$it.pdf") })
+        val read = ConcurrentLinkedQueue<String>()
+        val slowly: suspend (DocumentImport, ReadingLog) -> IndexResult = { import, _ ->
+            read += import.name
+            kotlinx.coroutines.delay(5)
+            IndexResult.Success(import.name, 1, 1L)
+        }
+        kotlinx.coroutines.coroutineScope {
+            repeat(2) { launch { reader(slowly).readAll(readers = 2) } }
+        }
+
+        assertEquals("each once", 12, read.size)
+        assertEquals(12, read.toSet().size)
+    }
+
+    @Test
+    fun whatIsSaidOfAScanThatWaitsForTheCharger() = runBlocking {
+        val import = queue.addPicked(listOf(file("Register.pdf"))).single()
+        timedReader(longScan()::read).readAll()
+        val row = row(import.id)
+
+        assertEquals(
+            "Read 3 of 10 pages. You can search those now. The rest is read while the phone charges.",
+            ImportWords.progress(row),
+        )
+        assertEquals("Register.pdf: 3 of 10 pages read", ImportNotices.wordsAboutThePause(row).first)
     }
 }

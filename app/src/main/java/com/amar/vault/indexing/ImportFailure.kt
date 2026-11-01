@@ -143,7 +143,12 @@ object ImportWords {
 
     /** One line on where a reading stands, for the list and the notification. */
     fun progress(import: DocumentImport): String = when (import.state) {
-        ImportState.WAITING -> "Waiting its turn"
+        ImportState.WAITING -> when {
+            import.waitsForCharger ->
+                "Read ${import.pagesDone} of ${import.pageCount} pages. You can search those now. The rest is read while the phone charges."
+            import.readsRestNow -> "Reading the rest"
+            else -> "Waiting its turn"
+        }
         ImportState.READING -> {
             val pages = import.pageCount
             when {

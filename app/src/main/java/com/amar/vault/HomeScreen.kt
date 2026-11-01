@@ -281,7 +281,7 @@ private fun HomeGlance(modifier: Modifier, onSearch: (String) -> Unit, onDocumen
     val pictures by remember { db.vaultDao().observePictureCount() }.collectAsState(initial = -1)
     val newest by remember { db.vaultDocumentDao().observeNewest(4) }.collectAsState(initial = emptyList())
     val imports by remember { db.documentImportDao().observeAll() }.collectAsState(initial = emptyList())
-    val reading = imports.filter { !it.isFinished }
+    val reading = imports.filter { !it.isFinished && !it.waitsForCharger }
     val searches = remember { com.amar.vault.search.core.HistoryManager.getRecentSearches().take(6) }
 
     Column(modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {

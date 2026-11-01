@@ -75,10 +75,11 @@ class DocumentContentExtractor(
         onPageCount: suspend (Int) -> Unit = {},
         from: ReadFrom = ReadFrom.START,
         onPageDone: suspend (Int) -> Unit = {},
+        pauseBefore: suspend () -> Boolean = { false },
         onBatch: suspend (List<PagedChunk>) -> Unit,
     ) {
         val extractor = registry.extractorFor(mimeType)
             ?: error("Unsupported mime type '$mimeType' — call isSupported() before extractStreaming()")
-        extractor.extractStreaming(context, uri, chunker, onPageCount, from, onPageDone, onBatch)
+        extractor.extractStreaming(context, uri, chunker, onPageCount, from, onPageDone, pauseBefore, onBatch)
     }
 }

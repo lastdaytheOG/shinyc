@@ -87,7 +87,7 @@ fun DocumentPickerScreen() {
     val queue = remember { DocumentImportQueue.get(context) }
     val relink = remember { DocumentRelink.get(context) }
     val imports by remember { db.documentImportDao().observeAll() }.collectAsState(initial = emptyList())
-    val reading = imports.count { !it.isFinished }
+    val reading = imports.count { !it.isFinished && !it.waitsForCharger }
 
     // Documents whose file is no longer where it was added from, and what the last search for
     // them found. Looked for again whenever a reading ends: a file that just failed as "gone"
@@ -199,7 +199,11 @@ fun DocumentPickerScreen() {
             }
 
             items(imports, key = { it.id }) { import ->
-                ImportCard(import, onTryAgain = { scope.launch(Dispatchers.IO) { queue.retry(import.id) } })
+                ImportCard(
+                    import,
+                    onTryAgain = { scope.launch(Dispatchers.IO) { queue.retry(import.id) } },
+                    onReadRestNow = { scope.launch(Dispatchers.IO) { queue.readRestNow(import.id) } },
+                )
             }
         }
     }
@@ -264,7 +268,7 @@ private fun MissingFilesCard(missing: List<VaultDocument>, result: String?, find
 }
 
 @Composable
-private fun ImportCard(import: DocumentImport, onTryAgain: () -> Unit) {
+private fun ImportCard(import: DocumentImport, onTryAgain: () -> Unit, onReadRestNow: () -> Unit) {
     val failure = import.failure ?: ImportFailure.OTHER
     // A file with no words in it is in the vault under its name: a caution, not a failure.
     val noWords = import.state == ImportState.FAILED && failure == ImportFailure.NO_TEXT
@@ -288,6 +292,11 @@ private fun ImportCard(import: DocumentImport, onTryAgain: () -> Unit) {
                     Icon(Icons.Default.Warning, "Note", Modifier.size(28.dp), tint = MaterialTheme.colorScheme.tertiary)
                 import.state == ImportState.FAILED ->
                     Icon(Icons.Default.Close, "Not read", Modifier.size(28.dp), tint = MaterialTheme.colorScheme.error)
+                // Nothing is happening to it just now, so nothing spins.
+                import.waitsForCharger -> CircularProgressIndicator(
+                    progress = { import.pagesDone.toFloat() / (import.pageCount ?: import.pagesDone).coerceAtLeast(1) },
+                    modifier = Modifier.size(24.dp), strokeWidth = 2.dp,
+                )
                 else -> CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
             }
 
@@ -318,6 +327,11 @@ private fun ImportCard(import: DocumentImport, onTryAgain: () -> Unit) {
                             Spacer(Modifier.width(4.dp))
                             Text("Try again")
                         }
+                    }
+                }
+                if (import.waitsForCharger) {
+                    TextButton(onClick = onReadRestNow, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
+                        Text("Read the rest now")
                     }
                 }
             }
