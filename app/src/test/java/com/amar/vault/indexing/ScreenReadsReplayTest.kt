@@ -57,7 +57,7 @@ class ScreenReadsReplayTest {
                 for (picture in pictures) {
                     val reads = picture.getJSONArray("reads")
                     val byName = (0 until reads.length()).map { reads.getJSONObject(it) }.associateBy { it.getString("read") }
-                    fun t(n: String) = byName.getValue(n).getString("text")
+                    fun t(n: String) = LookAlikeDigits.repaired(byName.getValue(n).getString("text"))
                     val readings = plan(Reads(t("EN_RAW"), t("HI_RAW"), t("EN_GRAY"), t("HI_GRAY"), t("EN_INVERT"), t("EN_UPSCALE")))
                     file.write(JSONObject().apply {
                         put("name", picture.getString("name"))

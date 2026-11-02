@@ -5,6 +5,7 @@ import com.amar.vault.UnicodeText
 import com.amar.vault.indexing.ImageContentExtractor
 import com.amar.vault.indexing.OcrStrategy
 import com.amar.vault.indexing.OcrStrategyRecorder
+import com.amar.vault.indexing.ReadingMerge
 import com.amar.vault.indexing.RecordedRun
 import java.util.Locale
 
@@ -48,28 +49,10 @@ object OcrAblationMath {
     private val WS = Regex("\\s+")
 
     /**
-     * Line-for-line mirror of `ImageContentExtractor.mergeAllOcrResults` (same trim, same
-     * lowercase+whitespace normalize, same "skip if an existing line contains this" test, same
-     * substring eviction), returning the surviving lines. Inputs MUST already be in production
-     * merge order ([OcrStrategy.MERGE_ORDER]) for the replay to be exact.
+     * The lines the production merge keeps of [texts]. Inputs MUST already be in production merge
+     * order ([OcrStrategy.MERGE_ORDER]) for the replay to be exact.
      */
-    fun mergeLines(texts: List<String>): List<String> {
-        val seen = mutableSetOf<String>()
-        val unique = mutableListOf<String>()
-        for (text in texts) {
-            if (text.isBlank()) continue
-            for (line in text.split("\n")) {
-                val cleaned = line.trim()
-                if (cleaned.isEmpty()) continue
-                val normalized = cleaned.lowercase().replace(WS, " ")
-                if (seen.any { it.contains(normalized) }) continue
-                seen.removeAll { normalized.contains(it) }
-                seen.add(normalized)
-                unique.add(cleaned)
-            }
-        }
-        return unique
-    }
+    fun mergeLines(texts: List<String>): List<String> = ReadingMerge.lines(texts).map { it.text }
 
     /** One leave-one-out ablation for a single image. Every field measured, none estimated. */
     data class Ablation(

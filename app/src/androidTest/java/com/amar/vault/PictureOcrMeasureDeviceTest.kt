@@ -7,6 +7,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.amar.vault.indexing.ImageContentExtractor
 import com.amar.vault.indexing.OcrStrategyRecorder
 import com.amar.vault.indexing.PlacedText
+import com.amar.vault.indexing.ReadingMerge
 import com.amar.vault.indexing.ReadingOrder
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
@@ -86,6 +87,56 @@ class PictureOcrMeasureDeviceTest {
         "नमस्ते धन्यवाद बैठक कल भुगतान खाता राशि पता फोन संदेश तस्वीर दस्तावेज़ बिल बैंक तारीख समय सेवा " +
             "परीक्षा विद्यालय पुस्तक शहर गाँव नदी पहाड़ बाज़ार परिवार मित्र त्योहार रसीद टिकट यात्रा"
         ).split(' ')
+
+    /**
+     * `-e ocr pages [-e out name]`: each picture read the way a scanned PDF's page is, by the real
+     * path, into `<name>.jsonl`, with the two reads its first step is made of, for a merge to be
+     * tried on again without a device. `escalated` says the page went on to the full set of reads.
+     */
+    @Test
+    fun pages() = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("run with -e ocr pages", args.getString("ocr") == "pages")
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        val folder = File(app.getExternalFilesDir(null) ?: app.filesDir, "ocr-measure").takeIf { it.isDirectory }
+            ?: File(app.filesDir, "ocr-measure")
+        val pictures = folder.listFiles { f -> f.extension.lowercase() in setOf("jpg", "jpeg", "png", "webp") }
+            ?.sortedBy { it.name }.orEmpty()
+        assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
+        val en = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        val hi = TextRecognition.getClient(DevanagariTextRecognizerOptions.Builder().build())
+        val reader = ImageContentExtractor(app)
+        fun escalations() = com.amar.vault.IndexMetrics.snapshot()[com.amar.vault.IndexMetrics.Event.PDF_OCR_ESCALATED] ?: 0L
+        File(folder, (args.getString("out") ?: "pages") + ".jsonl").bufferedWriter().use { out ->
+            for (picture in pictures) {
+                val bitmap = BitmapFactory.decodeFile(picture.path) ?: continue
+                val before = escalations()
+                val started = System.nanoTime()
+                val text = reader.extractPdfPageText(bitmap, sourceId = picture.name)
+                val tookMs = (System.nanoTime() - started) / 1_000_000
+                val escalated = escalations() > before
+                val image = InputImage.fromBitmap(bitmap, 0)
+                val reads = JSONArray()
+                for ((name, client) in listOf("EN_RAW" to en, "HI_RAW" to hi)) {
+                    val found = client.process(image).await()
+                    val blocks = found.textBlocks.map { block ->
+                        val box = block.boundingBox!!
+                        val lineHeight = block.lines.firstOrNull()?.boundingBox?.height() ?: (box.height() / block.lines.size.coerceAtLeast(1))
+                        PlacedText(block.text, box.left, box.top, lineHeight.coerceAtLeast(1))
+                    }
+                    reads.put(JSONObject().put("read", name).put("text", found.text.trim()).put("ordered", ReadingOrder.text(blocks).trim()))
+                }
+                val mergeStarted = System.nanoTime()
+                ReadingMerge.text(listOf(reads.getJSONObject(0).getString("text"), reads.getJSONObject(1).getString("text")))
+                val mergeMs = (System.nanoTime() - mergeStarted) / 1e6
+                out.write(JSONObject().put("name", picture.name).put("text", text).put("ms", tookMs).put("mergeMs", mergeMs)
+                    .put("escalated", escalated).put("reads", reads).toString())
+                out.newLine()
+                out.flush()
+                bitmap.recycle()
+            }
+        }
+    }
 
     @Test
     fun reads() = runBlocking {

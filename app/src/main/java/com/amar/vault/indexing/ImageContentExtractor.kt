@@ -138,7 +138,7 @@ class ImageContentExtractor(private val context: Context) {
         recorder?.setTotalMs((System.currentTimeMillis() - tOcr).toDouble())
         val qr = qrDeferred.await()
         // Observation only: attribute the (already-final) merged text to its source strategies.
-        val report = recorder?.buildReport(sourceId ?: "img@${System.identityHashCode(bitmap)}", mergedOcr, linedUp = true)
+        val report = recorder?.buildReport(sourceId ?: "img@${System.identityHashCode(bitmap)}", mergedOcr)
         // Sprint 4A: NFC at the OCR ingestion boundary — one site covers screenshots,
         // images AND the PDF trust-gate fallback. ML Kit output is NFC in practice, so
         // this is a no-op for existing behaviour; it guarantees canonical bytes in Room.
@@ -243,7 +243,8 @@ class ImageContentExtractor(private val context: Context) {
         // With the two passes overlapped, this wall time is now max(EN, HI), not EN+HI.
         recorder?.record(OcrStrategy.RAW, tier1, (System.nanoTime() - tierStart) / 1_000_000.0)
 
-        val tier1Final = normalize(mergeAllOcrResults(listOf(tier1)))
+        val tier1Merged = ReadingMerge.text(listOf(tier1))
+        val tier1Final = normalize(tier1Merged)
         if (tier1Healthy(tier1Final)) {
             IndexMetrics.increment(IndexMetrics.Event.PDF_OCR_TIER1_ACCEPTED)
             // Sprint E3 — observation only: attribute the ladder outcome to the current page.
@@ -254,7 +255,7 @@ class ImageContentExtractor(private val context: Context) {
             recorder?.let {
                 it.setTotalMs((System.currentTimeMillis() - tLadder).toDouble())
                 OcrInstrumentation.publish(
-                    it.buildReport(sourceId ?: "pdfpage@${System.identityHashCode(bitmap)}", mergeAllOcrResults(listOf(tier1)))
+                    it.buildReport(sourceId ?: "pdfpage@${System.identityHashCode(bitmap)}", tier1Merged)
                 )
             }
             return tier1Final
@@ -317,7 +318,7 @@ class ImageContentExtractor(private val context: Context) {
         val t0 = System.currentTimeMillis()
         try {
             val found = client.process(image).await()
-            return (if (inReadingOrder) readingOrder(found) else found.text).trim()
+            return LookAlikeDigits.repaired((if (inReadingOrder) readingOrder(found) else found.text).trim())
         } finally {
             val elapsed = System.currentTimeMillis() - t0
             com.amar.vault.IndexMetrics.recordDuration(metric, elapsed)
@@ -376,7 +377,7 @@ class ImageContentExtractor(private val context: Context) {
             val image = InputImage.fromBitmap(bitmap, 0)
             val en = recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, true)
             hiAsIs = recognize(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder, true)
-            mergeTexts(en, hiAsIs, true)
+            mergeTexts(en, hiAsIs)
         }
         val gray = timedPre(recorder, "grayscale") { preprocess { toHighContrastGrayscale(bitmap) } }
         try {
@@ -384,7 +385,7 @@ class ImageContentExtractor(private val context: Context) {
                 val image = InputImage.fromBitmap(gray, 0)
                 val hi = recognize(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder, true)
                 if (saysHindi(hiAsIs) || saysHindi(hi)) {
-                    mergeTexts(recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, true), hi, true)
+                    mergeTexts(recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, true), hi)
                 } else hi
             }
             val inverted = timedStrategy(recorder, OcrStrategy.INVERT) {
@@ -439,7 +440,7 @@ class ImageContentExtractor(private val context: Context) {
             val image = InputImage.fromBitmap(bitmap, 0)
             val en = recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, true)
             val hi = recognize(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder, true)
-            mergeTexts(en, hi, true)
+            mergeTexts(en, hi)
         }
 
     /**
@@ -576,7 +577,7 @@ class ImageContentExtractor(private val context: Context) {
                 )
 
                 val tMerge = System.nanoTime()
-                val merged = mergeAllOcrResults(results)
+                val merged = ReadingMerge.text(results)
                 val mergeNs = System.nanoTime() - tMerge
                 IndexMetrics.recordDuration(IndexMetrics.Timing.OCR_MERGE, nsToMs(mergeNs))
                 recorder?.setMergeMs(mergeNs / 1e6)
@@ -589,48 +590,18 @@ class ImageContentExtractor(private val context: Context) {
     }
 
     /**
-     * Merges OCR results from multiple passes.
-     * Deduplicates at the line level — keeps unique lines from all strategies.
-     * Returns the combined text sorted by line length (longest first = most info).
+     * Merges English and Hindi OCR results, picking the longer one or lining the two up if both are
+     * substantial: both readers read Latin text, and a line both read is one line, not two. Taking
+     * the longer one when it is over twice the other is not only quicker: lined up instead, a Hindi
+     * page keeps every line of the English reader's nonsense, which on drawn Hindi test pages was
+     * twice the wrong words for no word gained.
      */
-    private fun mergeAllOcrResults(results: List<String>): String {
-        val seenLines = mutableSetOf<String>()
-        val uniqueLines = mutableListOf<String>()
-
-        for (text in results) {
-            if (text.isBlank()) continue
-            for (line in text.split("\n")) {
-                val cleaned = line.trim()
-                if (cleaned.isEmpty()) continue
-                val normalized = cleaned.lowercase().replace(Regex("\\s+"), " ")
-                // Skip if we already have a line that contains this one (substring dedup)
-                if (seenLines.any { it.contains(normalized) }) continue
-                // Remove lines that are substrings of this new line
-                seenLines.removeAll { normalized.contains(it) }
-                seenLines.add(normalized)
-                uniqueLines.add(cleaned)
-            }
-        }
-
-        return uniqueLines.joinToString("\n")
-    }
-
-    /**
-     * Merges English and Hindi OCR results, picking the longer one or combining if both substantial.
-     * For a picture ([lineUp]) the two are lined up: both readers read Latin text, and a line both
-     * read is one line, not two.
-     */
-    private fun mergeTexts(en: String, hi: String, lineUp: Boolean = false): String {
+    private fun mergeTexts(en: String, hi: String): String {
         if (en.isBlank()) return hi
         if (hi.isBlank()) return en
         if (en.length > hi.length * 2) return en
         if (hi.length > en.length * 2) return hi
-        if (lineUp) return ReadingMerge.text(listOf(en, hi))
-        // Both substantial — combine unique lines
-        val enLines = en.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
-        val hiLines = hi.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
-        val combined = (enLines + hiLines).distinct()
-        return combined.joinToString("\n")
+        return ReadingMerge.text(listOf(en, hi))
     }
 
     // ════════════════════════════════════════════════════════════════════════

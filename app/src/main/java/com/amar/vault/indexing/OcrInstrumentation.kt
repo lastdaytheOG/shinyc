@@ -10,7 +10,7 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * PURE OBSERVATION. Nothing here changes OCR output, ordering, threading, or the merge
  * result. It records, per strategy, the text/time each produced, then REPLAYS the exact
- * [ImageContentExtractor.mergeAllOcrResults] algorithm to attribute which merged lines
+ * [ReadingMerge] algorithm to attribute which merged lines
  * survived from which strategy — and self-checks that its replayed merge equals the
  * production merge (a mismatch is flagged in the report, never fed back into the pipeline).
  *
@@ -148,62 +148,31 @@ class OcrStrategyRecorder {
     }
 
     /**
-     * Replay [ImageContentExtractor.mergeAllOcrResults] with provenance. The loop below is a
-     * line-for-line mirror of the production merge (same trim, same lowercase+`\s+` normalize,
-     * same "skip if an existing line contains this" test, same substring eviction). Because it
-     * reproduces the algorithm exactly and in [OcrStrategy.MERGE_ORDER], its merged output must
-     * equal the production merge — asserted via [actualMerged] and surfaced as
+     * What each pass came to, read off [ReadingMerge], which says itself whose wording each stored
+     * line is: a pass's surviving lines are those stored in its wording. Its merged output must equal
+     * the production merge — asserted via [actualMerged] and surfaced as
      * [OcrImageReport.attributionConsistent].
      */
-    fun buildReport(imageId: String, actualMerged: String, linedUp: Boolean = false): OcrImageReport {
+    fun buildReport(imageId: String, actualMerged: String): OcrImageReport {
         val ws = Regex("\\s+")
-        val seen = HashSet<String>()
         val mergedLines = ArrayList<String>()
         val perStrategy = LinkedHashMap<OcrStrategy, MutableContribution>()
 
-        // A picture's passes are lined up by [ReadingMerge], which says itself whose wording
-        // each stored line is: a pass's surviving lines are those stored in its wording.
-        if (linedUp) {
-            val order = OcrStrategy.MERGE_ORDER
-            val lines = ReadingMerge.lines(order.map { runs[it]?.text.orEmpty() })
-            for ((at, strategy) in order.withIndex()) {
-                val run = runs[strategy] ?: continue
-                val own = run.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
-                perStrategy[strategy] = MutableContribution().apply {
-                    elapsedMs = run.elapsedMs
-                    chars = run.text.length
-                    totalLines = own.size
-                    words = own.sumOf { line -> line.split(ws).count { it.isNotEmpty() } }
-                    survivedLines = lines.count { it.from == at }
-                    duplicateLines = totalLines - survivedLines
-                }
-            }
-            mergedLines += lines.map { it.text }
-        } else
-
-        for (strategy in OcrStrategy.MERGE_ORDER) {
+        val order = OcrStrategy.MERGE_ORDER
+        val lines = ReadingMerge.lines(order.map { runs[it]?.text.orEmpty() })
+        for ((at, strategy) in order.withIndex()) {
             val run = runs[strategy] ?: continue
-            val c = MutableContribution().apply {
+            val own = run.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+            perStrategy[strategy] = MutableContribution().apply {
                 elapsedMs = run.elapsedMs
                 chars = run.text.length
+                totalLines = own.size
+                words = own.sumOf { line -> line.split(ws).count { it.isNotEmpty() } }
+                survivedLines = lines.count { it.from == at }
+                duplicateLines = totalLines - survivedLines
             }
-            val text = run.text
-            if (text.isNotBlank()) {
-                for (line in text.split("\n")) {
-                    val cleaned = line.trim()
-                    if (cleaned.isEmpty()) continue
-                    c.totalLines++
-                    c.words += cleaned.split(ws).count { it.isNotEmpty() }
-                    val normalized = cleaned.lowercase().replace(ws, " ")
-                    if (seen.any { it.contains(normalized) }) { c.duplicateLines++; continue }
-                    seen.removeAll { normalized.contains(it) }
-                    seen.add(normalized)
-                    mergedLines.add(cleaned)
-                    c.survivedLines++
-                }
-            }
-            perStrategy[strategy] = c
         }
+        mergedLines += lines.map { it.text }
 
         val mergedText = mergedLines.joinToString("\n")
         val consistent = mergedText == actualMerged
