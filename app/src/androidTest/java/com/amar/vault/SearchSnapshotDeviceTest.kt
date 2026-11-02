@@ -52,7 +52,6 @@ class SearchSnapshotDeviceTest {
         val queries = if (mode == "record") queriesFrom(rows).also { queriesFile.writeText(it.joinToString("\n")) }
         else queriesFile.readLines().filter { it.isNotBlank() }
 
-        val saved = emptyMap<String, StashItemWithVaultItem>()
         File(folder, "$mode.jsonl").bufferedWriter().use { out ->
             queries.forEachIndexed { index, query ->
                 // Every query unfiltered; every fifth one through the two chips as well.
@@ -60,9 +59,9 @@ class SearchSnapshotDeviceTest {
                 else listOf(SearchFilter.ALL)
                 for (chip in chips) {
                     val only: ((VaultItem) -> Boolean)? =
-                        if (chip == SearchFilter.ALL) null else { item -> SearchFilter.accepts(chip, item, saved = null) }
+                        if (chip == SearchFilter.ALL) null else { item -> SearchFilter.accepts(chip, item) }
                     val result = services.retrievalService().retrieve(RetrievalRequest.forResultList(query, only))
-                    val cards = oneCardPerDocument(result.items.map { it.asRow() }, result.items, saved, queryWordsOf(query))
+                    val cards = oneCardPerDocument(result.items, queryWordsOf(query))
                     out.write(JSONObject().apply {
                         put("q", query)
                         put("chip", chip)
@@ -70,7 +69,7 @@ class SearchSnapshotDeviceTest {
                         put("items", JSONArray(result.items.map { "${it.id}@${it.pageNum}" }))
                         put("cards", JSONArray(cards.map { card ->
                             JSONObject().apply {
-                                put("id", card.row.vaultItemId)
+                                put("id", card.row.id)
                                 put("page", card.page ?: JSONObject.NULL)
                                 put("excerpt", card.excerpt ?: JSONObject.NULL)
                                 put("similar", card.similarWord ?: JSONObject.NULL)
@@ -83,15 +82,6 @@ class SearchSnapshotDeviceTest {
             }
         }
     }
-
-    /** The row the search screen draws for an item that was never saved. */
-    private fun VaultItem.asRow() = StashItemWithVaultItem(
-        stashId = "search_$id", sessionId = null, vaultItemId = id, vaultType = "SAVED", category = "",
-        savedAt = timestamp, sourceApp = sourceApp ?: "", isFavorite = false, createdAt = timestamp,
-        userNote = null, thumbnailPath = null, uri = uri, ocrText = ocrText, itemType = itemType,
-        sourceFile = sourceFile, timestamp = timestamp, title = title, mimeType = mimeType,
-        tags = tags, parentDocumentId = parentDocumentId,
-    )
 
     private fun queriesFrom(rows: List<VaultItem>): List<String> {
         val pages = rows.map { it.ocrText }

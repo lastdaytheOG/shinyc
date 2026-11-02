@@ -104,8 +104,7 @@ fun PhotosScreen(
     onBack: () -> Unit = {},
 ) {
     val query by viewModel.query.collectAsStateWithLifecycle()
-    val stashResults by viewModel.results.collectAsStateWithLifecycle()
-    val results = remember(stashResults) { stashResults.map { it.toVaultItem() } }
+    val results by viewModel.results.collectAsStateWithLifecycle()
     val allItems by viewModel.allItems.collectAsStateWithLifecycle()
     val isLoading by viewModel.isSearchLoading.collectAsStateWithLifecycle()
 

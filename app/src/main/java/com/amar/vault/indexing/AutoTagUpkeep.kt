@@ -70,7 +70,7 @@ class AutoTagUpkeep(private val db: VaultDatabase, context: Context) {
             if (codes) recognised.merge("code", 1, Int::plus)
         }
 
-        // Whole items: pictures, saved links and files. A few hundred at a time, by rowid.
+        // Whole items: pictures, shared links and files. A few hundred at a time, by rowid.
         var after = Long.MIN_VALUE
         while (true) {
             val batch = db.vaultDao().wholeItemsForTagging(after, BATCH)
@@ -82,7 +82,7 @@ class AutoTagUpkeep(private val db: VaultDatabase, context: Context) {
                 val codes = QrPayloads.split(row.qrPayload)
                 val text = if (codes.isEmpty()) row.ocrText else QrText.withoutFormerWords(row.ocrText)
                 // Pictures are what the indexer tags among whole items. A saved file's own row
-                // has no text (its pieces are tagged below), and a saved link or note is
+                // has no text (its pieces are tagged below), and a shared link or note is
                 // stored without tags.
                 val tags = if (row.itemType.isImage) AutoTags.of(text, row.itemType, codes) else row.tags
                 if (row.itemType.isImage) note(text, codes.isNotEmpty())

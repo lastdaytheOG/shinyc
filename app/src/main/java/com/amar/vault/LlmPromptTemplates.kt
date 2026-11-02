@@ -17,28 +17,6 @@ package com.amar.vault
 object LlmPromptTemplates {
 
     // =========================================================================
-    // Ghost Organizer — Folder Naming
-    // =========================================================================
-
-    /**
-     * Generate a 2-3 word folder name from OCR text of representative screenshots.
-     *
-     * @param ocrTexts  OCR text from the 3 centroid-nearest screenshots
-     * @return          Complete prompt ready for inference
-     */
-    fun folderNaming(ocrTexts: List<String>): String {
-        // Cap each OCR sample to prevent context overflow on small models
-        val combinedText = ocrTexts.joinToString("\n---\n") { it.take(300) }
-
-        return buildChatML(
-            system = "You are an AI organizing a user's digital vault. " +
-                    "Generate a short, 2-to-3 word title for the folder these documents belong in. " +
-                    "Reply ONLY with the title. No explanation, no punctuation, no quotes.",
-            user = combinedText
-        )
-    }
-
-    // =========================================================================
     // Phase 7 — RAG Chatbot (Foundation)
     // =========================================================================
 

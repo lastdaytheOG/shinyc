@@ -65,8 +65,7 @@ import java.util.Locale
 @Composable
 fun GalleryScreen(viewModel: SearchViewModel = hiltViewModel()) {
     val query by viewModel.query.collectAsStateWithLifecycle()
-    val stashResults by viewModel.results.collectAsStateWithLifecycle()
-    val results = remember(stashResults) { stashResults.map { it.toVaultItem() } }
+    val results by viewModel.results.collectAsStateWithLifecycle()
     val allItems by viewModel.allItems.collectAsStateWithLifecycle()
     val isLoading by viewModel.isSearchLoading.collectAsStateWithLifecycle()
     var selectedTab by remember { mutableIntStateOf(0) }

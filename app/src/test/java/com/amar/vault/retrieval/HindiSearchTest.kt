@@ -1,6 +1,5 @@
 package com.amar.vault.retrieval
 
-import com.amar.vault.StashItemWithVaultItem
 import com.amar.vault.ItemType
 import com.amar.vault.VaultItem
 import com.amar.vault.oneCardPerDocument
@@ -73,19 +72,12 @@ class HindiSearchTest {
         page("statute", 1, storedAsTwo + " पूरे भारत में लागू होगा"),
     )
 
-    private fun VaultItem.asRow() = StashItemWithVaultItem(
-        stashId = "search_$id", sessionId = null, vaultItemId = id, vaultType = "SAVED", category = "",
-        savedAt = timestamp, sourceApp = "", isFavorite = false, createdAt = timestamp, userNote = null,
-        thumbnailPath = null, uri = uri, ocrText = ocrText, itemType = itemType, sourceFile = sourceFile,
-        timestamp = timestamp, title = title, mimeType = mimeType,
-    )
-
     /** What the search box shows for [typed]: document, page it opens on, words shown. */
     private fun search(typed: String) = runBlocking {
         val service = HybridSearchService(Repo(corpus), NoKeywordEngine, NoSemantic, BoostConfig())
         val items = service.retrieve(RetrievalRequest.forResultList(typed)).items
-        oneCardPerDocument(items.map { it.asRow() }, items, emptyMap(), queryWordsOf(typed))
-            .map { Triple(corpus.first { c -> c.id == it.row.vaultItemId }.parentDocumentId, it.page, it.excerpt) }
+        oneCardPerDocument(items, queryWordsOf(typed))
+            .map { Triple(corpus.first { c -> c.id == it.row.id }.parentDocumentId, it.page, it.excerpt) }
     }
 
     @Test

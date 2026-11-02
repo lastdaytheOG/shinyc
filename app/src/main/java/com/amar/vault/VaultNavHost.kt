@@ -27,7 +27,6 @@ import com.amar.vault.ui.theme.WarmBrown
 enum class Screen {
     ONBOARDING,
     HOME,
-    SAVED,
     AGENTIC,
     PHOTOS,
     DOCUMENTS,
@@ -88,18 +87,14 @@ fun VaultApp() {
             }
 
             Screen.HOME -> {
-                val stashItems by searchViewModel.stashItems.collectAsState(initial = emptyList())
                 val workInfos by androidx.work.WorkManager.getInstance(context)
                     .getWorkInfosByTagFlow("bulk_scan")
                     .collectAsState(initial = emptyList())
                 val isSyncing = workInfos.any { it.state == androidx.work.WorkInfo.State.RUNNING }
 
                 HomeScreen(
-                    stashItems = stashItems,
                     isSyncing = isSyncing,
                     onSearchTriggerClick = { currentScreen = Screen.SEARCH_OVERLAY },
-                    onSavedClick = { currentScreen = Screen.SAVED },
-                    onRecentItemClick = { item -> ContentOpenManager.open(context, item) },
                     onAgenticClick = { currentScreen = Screen.AGENTIC },
                     onPhotosClick = { currentScreen = Screen.PHOTOS },
                     onDocumentsClick = { currentScreen = Screen.DOCUMENTS },
@@ -108,18 +103,6 @@ fun VaultApp() {
                     onSearch = { words ->
                         searchViewModel.updateQuery(words)
                         currentScreen = Screen.SEARCH_OVERLAY
-                    }
-                )
-            }
-
-            Screen.SAVED -> {
-                SavedScreen(
-                    viewModel = searchViewModel,
-                    onBack = { currentScreen = Screen.HOME },
-                    onItemClick = { id ->
-                        selectedDocumentId = id
-                        previousScreen = Screen.SAVED
-                        currentScreen = Screen.DOCUMENT_VIEWER
                     }
                 )
             }

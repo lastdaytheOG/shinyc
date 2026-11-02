@@ -73,21 +73,14 @@ class HindiSearchDeviceTest {
         services.bm25Index().removeDocuments(corpus.map { it.id })
     }
 
-    private fun VaultItem.asRow() = StashItemWithVaultItem(
-        stashId = "search_$id", sessionId = null, vaultItemId = id, vaultType = "SAVED", category = "",
-        savedAt = timestamp, sourceApp = "", isFavorite = false, createdAt = timestamp, userNote = null,
-        thumbnailPath = null, uri = uri, ocrText = ocrText, itemType = itemType, sourceFile = sourceFile,
-        timestamp = timestamp, title = title, mimeType = mimeType,
-    )
-
     /** What the search box shows for [typed], among this test's own documents. */
     private fun search(typed: String): List<SearchHit> = runBlocking {
         val items = services.retrievalService().retrieve(RetrievalRequest.forResultList(typed)).items
-        oneCardPerDocument(items.map { it.asRow() }, items, emptyMap(), queryWordsOf(typed))
-            .filter { it.row.vaultItemId.startsWith(PREFIX) }
+        oneCardPerDocument(items, queryWordsOf(typed))
+            .filter { it.row.id.startsWith(PREFIX) }
     }
 
-    private fun SearchHit.document() = corpus.first { it.id == row.vaultItemId }.parentDocumentId!!.removePrefix(PREFIX)
+    private fun SearchHit.document() = corpus.first { it.id == row.id }.parentDocumentId!!.removePrefix(PREFIX)
 
     @Test
     fun theKeywordEngineKnowsADevanagariWord() {

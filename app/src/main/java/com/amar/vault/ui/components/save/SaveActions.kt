@@ -24,51 +24,6 @@ import com.amar.vault.ui.theme.CharcoalSoft
 import com.amar.vault.ui.theme.Spacing
 
 @Composable
-fun QuickTags(
-    tags: List<String>,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.L),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        tags.forEach { tag ->
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFFF7F7F7))
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    text = "#$tag",
-                    color = Color.Gray,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-        }
-        
-        // Add tag button (UI only placeholder)
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFFF7F7F7))
-                .bounceClick { /* Placeholder */ }
-                .padding(horizontal = 12.dp, vertical = 6.dp)
-        ) {
-            Text(
-                text = "+ Tag",
-                color = CharcoalSoft,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
-    }
-}
-
-@Composable
 fun SaveActions(
     onSave: () -> Unit,
     onCancel: () -> Unit,

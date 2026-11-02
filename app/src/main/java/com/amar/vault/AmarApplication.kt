@@ -96,7 +96,8 @@ class AmarApplication : Application(), Configuration.Provider {
             }
 
             // 4d. Read the text of documents that were shared in before sharing indexed them.
-            SavedDocumentRepairWorker.enqueue(applicationContext)
+            SharedDocumentRepairWorker.enqueue(applicationContext)
+            SavedLeftovers.clearOnce(applicationContext)
             // Pictures read with an older reader are read again, once (PictureTextUpkeep).
             com.amar.vault.indexing.PictureTextUpkeep.enqueueIfNeeded(applicationContext)
 

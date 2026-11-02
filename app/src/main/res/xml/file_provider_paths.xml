@@ -2,6 +2,5 @@
 <paths>
     <files-path name="exports" path="exports/" />
     <files-path name="shared_imports" path="shared_imports/" />
-    <files-path name="thumbnails" path="thumbnails/" />
     <cache-path name="cache" path="." />
 </paths>

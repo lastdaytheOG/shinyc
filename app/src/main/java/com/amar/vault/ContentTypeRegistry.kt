@@ -23,12 +23,6 @@ enum class ContentSpecies(
     DOCUMENT("Note", "📝", DocumentColor, DocumentWash, null);
 
     companion object {
-        fun classify(item: StashItemWithVaultItem): ContentSpecies =
-            classify(item.sourceApp, item.uri, item.itemType, item.mimeType, item.ocrText)
-
-        fun classify(item: VaultItem): ContentSpecies =
-            classify(item.sourceApp.orEmpty(), item.uri, item.itemType, item.mimeType, item.ocrText)
-
         /** True for a stored Word, Excel or EPUB file (a PDF has a species of its own). */
         fun isOfficeDocument(itemType: ItemType, mimeType: String?, uri: String): Boolean {
             val mime = mimeType?.lowercase().orEmpty()
@@ -39,15 +33,12 @@ enum class ContentSpecies(
 
         private val OFFICE_EXTENSIONS = listOf(".docx", ".xlsx", ".epub")
 
-        /** One body for both item shapes, so the two cannot drift apart. */
-        private fun classify(
-            rawSourceApp: String, rawUri: String, itemType: ItemType,
-            rawMimeType: String?, ocrText: String,
-        ): ContentSpecies {
-            val sourceApp = rawSourceApp.trim()
-            val uri = rawUri.trim()
-            val mimeType = rawMimeType?.lowercase().orEmpty()
-            val ocr = ocrText.lowercase()
+        fun classify(item: VaultItem): ContentSpecies {
+            val sourceApp = item.sourceApp.orEmpty().trim()
+            val uri = item.uri.trim()
+            val itemType = item.itemType
+            val mimeType = item.mimeType?.lowercase().orEmpty()
+            val ocr = item.ocrText.lowercase()
 
             return when {
                 // 1. YouTube video

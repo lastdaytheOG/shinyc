@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.Flow
  * could not be read still says why the next time the app is opened.
  *
  * [id] is the id the document is stored under ([com.amar.vault.VaultDocument.id]); for a file
- * that was shared in it is the saved item's id.
+ * that was shared in it is the id of the file's own row.
  */
 @Entity(tableName = "document_imports", indices = [Index("state")])
 data class DocumentImport(

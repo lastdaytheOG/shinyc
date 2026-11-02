@@ -109,7 +109,7 @@ class SearchPrecisionTest {
 
     private fun result(typed: String, chip: String = SearchFilter.ALL) = runBlocking {
         val only: ((VaultItem) -> Boolean)? =
-            if (chip == SearchFilter.ALL) null else { item -> SearchFilter.accepts(chip, item, saved = null) }
+            if (chip == SearchFilter.ALL) null else { item -> SearchFilter.accepts(chip, item) }
         service.retrieve(RetrievalRequest.forResultList(typed, only))
     }
 
@@ -298,7 +298,7 @@ class SearchPrecisionTest {
         val crowded = manual + picture
         val service = HybridSearchService(Repo(crowded), EngineLike(crowded), NoSemantic, BoostConfig())
         val images = service.retrieve(
-            RetrievalRequest.forResultList("report") { SearchFilter.accepts(SearchFilter.IMAGES, it, null) }
+            RetrievalRequest.forResultList("report") { SearchFilter.accepts(SearchFilter.IMAGES, it) }
         ).items.map { it.id }
         assertEquals(listOf("whiteboard"), images)
     }

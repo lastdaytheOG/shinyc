@@ -145,30 +145,6 @@ fun RecentSearchesView(
 }
 
 @Composable
-fun SearchSuggestionsView(
-    suggestions: List<String>,
-    onSuggestionSelected: (String) -> Unit
-) {
-    Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-        Text("Suggestions", color = CharcoalSoft, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-        Spacer(Modifier.height(12.dp))
-        suggestions.forEach { suggestion ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onSuggestionSelected(suggestion) }
-                    .padding(vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Default.Search, contentDescription = null, tint = WarmBrown, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(12.dp))
-                Text(suggestion, color = CharcoalSoft, fontSize = 15.sp)
-            }
-        }
-    }
-}
-
-@Composable
 fun HighlightedText(text: String, query: String, color: Color, fontSize: androidx.compose.ui.unit.TextUnit, fontWeight: FontWeight? = null) {
     val startIndex = if (query.isNotBlank()) text.indexOf(query, ignoreCase = true) else -1
     
@@ -331,7 +307,7 @@ fun ImageHitCard(
         Image(
             painter = rememberAsyncImagePainter(
                 model = ImageRequest.Builder(LocalContext.current)
-                    .data(item.thumbnailPath?.takeIf { it.isNotBlank() } ?: item.uri)
+                    .data(item.uri)
                     .crossfade(true)
                     .build()
             ),
@@ -405,9 +381,9 @@ fun ImageHitCard(
  */
 @Composable
 fun PhotoGrid(
-    photos: List<com.amar.vault.StashItemWithVaultItem>,
+    photos: List<com.amar.vault.VaultItem>,
     shownAtFirst: Int,
-    onOpen: (com.amar.vault.StashItemWithVaultItem) -> Unit,
+    onOpen: (com.amar.vault.VaultItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var all by remember(photos) { mutableStateOf(false) }
@@ -427,7 +403,7 @@ fun PhotoGrid(
                         Image(
                             painter = rememberAsyncImagePainter(
                                 model = ImageRequest.Builder(LocalContext.current)
-                                    .data(item.thumbnailPath?.takeIf { it.isNotBlank() } ?: item.uri)
+                                    .data(item.uri)
                                     .size(320)
                                     .crossfade(true)
                                     .build()

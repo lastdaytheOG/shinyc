@@ -156,10 +156,10 @@ interface VaultDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(items: List<VaultItem>)
     
-    // A shared PDF is one standalone row (the saved item) plus one row per chunk, and both
-    // kinds carry the file's hash. The three lookups below each mean one kind only: the saved
-    // item must never be counted as a chunk or deleted as one (its Stash entry would go with
-    // it), and a chunk must never be handed back as "the item with this hash".
+    // A shared PDF is one standalone row plus one row per chunk, and both kinds carry the file's
+    // hash. The three lookups below each mean one kind only: the standalone row must never be
+    // counted as a chunk or deleted as one, and a chunk must never be handed back as "the item
+    // with this hash".
 
     /** The standalone item with this hash — never one of a document's chunk rows. */
     @Query("SELECT * FROM vault_items WHERE contentHash = :hash AND parentDocumentId IS NULL LIMIT 1")
@@ -438,13 +438,12 @@ interface VaultRelationshipDao {
         com.amar.vault.action.storage.AgentActionSnapshot::class,
         LocalModel::class,
         ChatMessageEntity::class,
-        StashItem::class,
         IngestionSession::class,
         IngestionAttachment::class,
         com.amar.vault.indexing.DocumentImport::class,
         com.amar.vault.photos.PhotoVector::class,
     ],
-    version = 16,
+    version = 17,
     exportSchema = true
 )
 @TypeConverters(ItemTypeConverter::class)
@@ -456,7 +455,6 @@ abstract class VaultDatabase : RoomDatabase() {
     abstract fun canonicalEntityStatsDao(): CanonicalEntityStatsDao
     abstract fun canonicalReviewQueueDao(): CanonicalReviewQueueDao
     abstract fun vaultRelationshipDao(): VaultRelationshipDao
-    abstract fun stashItemDao(): StashItemDao
     abstract fun eventSnapshotDao(): com.amar.vault.events.engine.EventSnapshotDao
     abstract fun timelineSnapshotDao(): com.amar.vault.timeline.engine.TimelineSnapshotDao
     abstract fun timelineEntrySnapshotDao(): com.amar.vault.timeline.engine.TimelineEntrySnapshotDao
@@ -675,6 +673,17 @@ abstract class VaultDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 17 drops the Saved screen's table: its folders, notes and favourites go with it.
+         * The items themselves are rows of `vault_items`, which this step does not touch, so
+         * everything that was saved can still be searched and opened.
+         */
+        internal val MIGRATION_16_17 = object : androidx.room.migration.Migration(16, 17) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS `stash_items`")
+            }
+        }
+
+        /**
          * Every step from version 6 to the current one, in order. [context] is where the step to
          * version 14 leaves its account of what it changed ([MigrationReport]); a test that only
          * wants the steps passes none.
@@ -685,6 +694,7 @@ abstract class VaultDatabase : RoomDatabase() {
             Migration13To14 { report -> context?.let { MigrationReport.save(it, report) } },
             MIGRATION_14_15,
             MIGRATION_15_16,
+            MIGRATION_16_17,
         )
 
         fun get(context: Context): VaultDatabase {

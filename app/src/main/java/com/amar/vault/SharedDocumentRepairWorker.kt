@@ -15,21 +15,23 @@ import java.io.File
  * Indexes the text of documents that were shared into the vault before sharing read them.
  *
  * Until 2026-10 the share import handed the indexer a path it could not open, so every shared
- * PDF was saved with its name and no text — and stayed that way, because nothing looked at it
- * again. This runs at app start and gives each saved document one attempt. A document that is
+ * PDF was stored with its name and no text — and stayed that way, because nothing looked at it
+ * again. This runs at app start and gives each such document one attempt. A document that is
  * already indexed costs one read of its file (the indexer recognises it and skips the work).
  *
  * An attempt is recorded only when it finishes, so one cut short by the system is made again.
  */
 @HiltWorker
-class SavedDocumentRepairWorker @dagger.assisted.AssistedInject constructor(
+class SharedDocumentRepairWorker @dagger.assisted.AssistedInject constructor(
     @dagger.assisted.Assisted context: Context,
     @dagger.assisted.Assisted params: WorkerParameters,
     private val db: VaultDatabase,
 ) : CoroutineWorker(context, params) {
 
     companion object {
-        private const val TAG = "SavedDocumentRepair"
+        private const val TAG = "SharedDocumentRepair"
+
+        // Their old spelling on purpose: a phone that has run this keeps its record of what was tried.
         private const val WORK_NAME = "saved_document_repair"
         private const val PREFS = "saved_document_repair"
         private const val KEY_ATTEMPTED = "attempted_item_ids"
@@ -38,7 +40,7 @@ class SavedDocumentRepairWorker @dagger.assisted.AssistedInject constructor(
         fun enqueue(context: Context) {
             WorkManager.getInstance(context).enqueueUniqueWork(
                 WORK_NAME, ExistingWorkPolicy.KEEP,
-                OneTimeWorkRequestBuilder<SavedDocumentRepairWorker>().build(),
+                OneTimeWorkRequestBuilder<SharedDocumentRepairWorker>().build(),
             )
         }
     }
