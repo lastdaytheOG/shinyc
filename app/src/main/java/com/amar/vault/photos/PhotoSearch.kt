@@ -50,13 +50,13 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
     @Volatile private var generic: List<FloatArray> = emptyList()
 
     /** The models are on the device and loaded, or can be. */
-    val isReady: Boolean get() = failed == null && (index != null || files.present() || files.bundled())
+    val isReady: Boolean get() = ENGINE && failed == null && (index != null || files.present() || files.bundled())
 
     /** The [PhotoVector.model] id of the vectors in use; null without models. */
     val modelId: String? get() = files.manifest()?.id
 
     /** Why photo search is off, when it is: for Developer Tools. */
-    val problem: String? get() = failed ?: if (!files.present() && !files.bundled()) "the photo search models are not on this device" else null
+    val problem: String? get() = (if (!ENGINE) "photo search is not in this build" else null) ?: failed ?: if (!files.present() && !files.bundled()) "the photo search models are not on this device" else null
 
     /**
      * Loads the models and the stored vectors once; false when they are not here or did not load.
@@ -74,6 +74,8 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
     }
 
     private suspend fun load(): Boolean {
+        // A slim build has no ONNX Runtime: models an earlier build left on the phone stay unused.
+        if (!ENGINE) return false
         if (!files.installFromApk()) return false
         return try {
             val manifest = files.manifest() ?: error("no manifest")
@@ -113,7 +115,7 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
 
     /** Starts loading the models now, so the first search does not wait for them. */
     fun warmUp() {
-        if (index == null && failed == null && (files.present() || files.bundled())) {
+        if (ENGINE && index == null && failed == null && (files.present() || files.bundled())) {
             loader.launch { ensureLoaded() }
         }
     }
@@ -181,6 +183,7 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
         if (ensureLoaded()) query!! to photo!! else null
 
     companion object {
+        private val ENGINE = com.amar.vault.BuildConfig.PHOTO_ENGINE
         private const val TAG = "PhotoSearch"
         /** The most alike photos [PhotoGate] looks at, before it keeps the ones that match. */
         private const val CANDIDATES = 48

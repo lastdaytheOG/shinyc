@@ -22,11 +22,16 @@ plugins {
 //   -PbenchApp          install beside the real app, as com.amar.vault.bench, with its own data:
 //                       IndexingEngineBenchDeviceTest can then run on a phone without touching its vault.
 //   -PtestPhoneBuild    instrumented tests run against the `phone` build instead of `debug`.
-val phoneApk: Boolean = providers.gradleProperty("phoneApk").isPresent
+//   -PslimApk           -PphoneApk with nothing the documents need left out: no photo search engine
+//                       or chat engine, code shrunk (R8), native libraries compressed. Every reader
+//                       stays (ML Kit English and Hindi, Tesseract for scanned pages, QR), so
+//                       reading is the same; photo search says it is not in this build.
+val slimApk: Boolean = providers.gradleProperty("slimApk").isPresent
+val phoneApk: Boolean = slimApk || providers.gradleProperty("phoneApk").isPresent
 val benchApp: Boolean = providers.gradleProperty("benchApp").isPresent
 val photoSearchModels: Boolean = providers.gradleProperty("photoSearchModels").isPresent
 val noEmbeddingModel: Boolean = phoneApk || providers.gradleProperty("noEmbeddingModel").isPresent
-val abiOnly: String? = if (phoneApk) "arm64-v8a" else providers.gradleProperty("abiOnly").orNull
+val abiOnly: String? = providers.gradleProperty("abiOnly").orNull ?: if (phoneApk) "arm64-v8a" else null
 
 android {
     namespace = "com.amar.vault"
@@ -40,6 +45,8 @@ android {
         versionName = "1.0"
         if (benchApp) applicationIdSuffix = ".bench"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Whether photo search's engine (ONNX Runtime) is in this APK: a slim build leaves it out.
+        buildConfigField("boolean", "PHOTO_ENGINE", (!slimApk).toString())
 
         externalNativeBuild {
             cmake {
@@ -76,6 +83,16 @@ android {
             isJniDebuggable = false
             matchingFallbacks += listOf("debug")
             signingConfig = signingConfigs.getByName("debug")
+            if (slimApk) {
+                isMinifyEnabled = true
+                isShrinkResources = true
+                proguardFiles(
+                    getDefaultProguardFile("proguard-android-optimize.txt"),
+                    "proguard-rules.pro"
+                )
+                testProguardFiles("proguard-test-rules.pro")
+                if (providers.gradleProperty("testPhoneBuild").isPresent) proguardFile("proguard-test-support.pro")
+            }
         }
     }
     if (providers.gradleProperty("testPhoneBuild").isPresent) testBuildType = "phone"
@@ -135,6 +152,16 @@ android {
     }
 
     packaging {
+        if (slimApk) {
+            jniLibs {
+                // Stored compressed; Android unpacks them once at install.
+                useLegacyPackaging = true
+                excludes += listOf(
+                    "**/libonnxruntime.so", "**/libonnxruntime4j_jni.so",
+                    "**/libamar_llama_engine.so", "**/libllama.so", "**/libggml*.so",
+                )
+            }
+        }
         resources {
             excludes += listOf(
                 "/META-INF/{AL2.0,LGPL2.1}",
@@ -142,6 +169,8 @@ android {
                 "/META-INF/LICENSE*",
                 "/META-INF/NOTICE*"
             )
+            // Post-quantum tables PDF passwords never use: 4 MB.
+            if (slimApk) excludes += "org/bouncycastle/pqc/**"
         }
     }
 }
@@ -237,13 +266,6 @@ dependencies {
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
 
     implementation("cz.adaptech.tesseract4android:tesseract4android:4.7.0")
-
-    implementation("com.google.ai.edge.litert:litert:1.0.1")
-    implementation("com.google.ai.edge.litert:litert-support:1.0.1")
-
-    // Locked version to 0.10.2. "latest.release" can cause unexpected breaks if they
-    // bump metadata requirements again.
-    implementation("com.google.ai.edge.litertlm:litertlm-android:0.10.2")
 
     // 1.31: photo search's text model needs opset 21 and the newer quantised ops
     // (GatherBlockQuantized, MatMulNBits); the API the embedding engine uses is unchanged.
