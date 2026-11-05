@@ -17,7 +17,6 @@ import java.io.IOException
  *    text converted into vector glyph outlines (certificates, posters, vector invoices).
  */
 internal object PdfPageImageDetector {
-
     /**
      * Threshold of vector path operations (fill, stroke, fillAndStroke).
      * When a page with fewer than 3 text words contains many vector paths,
@@ -25,11 +24,22 @@ internal object PdfPageImageDetector {
      */
     const val VECTOR_PATH_THRESHOLD: Int = 20
 
+    /**
+     * Threshold of curve segments (curveTo).
+     * Catches short titles drawn as outline glyphs (e.g. one 7-letter word with curved letter contours)
+     * when accompanied by at least [MIN_FILL_FOR_CURVES] fill, while straight divider lines and table
+     * borders (0 curves) continue to skip OCR.
+     */
+    const val VECTOR_CURVE_THRESHOLD: Int = 8
+    const val MIN_FILL_FOR_CURVES: Int = 1
+
     private class VisualContentFoundException : IOException("Visual content detected on page")
 
     private class Detector(page: PDPage) : PDFGraphicsStreamEngine(page) {
         var hasVisualContent: Boolean = false
         var pathCount: Int = 0
+        var fillCount: Int = 0
+        var curveCount: Int = 0
 
         override fun drawImage(pdImage: PDImage?) {
             hasVisualContent = true
@@ -37,15 +47,25 @@ internal object PdfPageImageDetector {
         }
 
         override fun strokePath() {
-            recordPath()
+            pathCount++
+            checkThresholds()
         }
 
         override fun fillPath(p0: Path.FillType?) {
-            recordPath()
+            fillCount++
+            pathCount++
+            checkThresholds()
         }
 
         override fun fillAndStrokePath(p0: Path.FillType?) {
-            recordPath()
+            fillCount++
+            pathCount++
+            checkThresholds()
+        }
+
+        override fun curveTo(x1: Float, y1: Float, x2: Float, y2: Float, x3: Float, y3: Float) {
+            curveCount++
+            checkThresholds()
         }
 
         override fun shadingFill(shadingName: COSName?) {
@@ -53,9 +73,8 @@ internal object PdfPageImageDetector {
             throw VisualContentFoundException()
         }
 
-        private fun recordPath() {
-            pathCount++
-            if (pathCount >= VECTOR_PATH_THRESHOLD) {
+        private fun checkThresholds() {
+            if (pathCount >= VECTOR_PATH_THRESHOLD || (fillCount >= MIN_FILL_FOR_CURVES && curveCount >= VECTOR_CURVE_THRESHOLD)) {
                 hasVisualContent = true
                 throw VisualContentFoundException()
             }
@@ -65,7 +84,6 @@ internal object PdfPageImageDetector {
         override fun clip(p0: Path.FillType?) {}
         override fun moveTo(x: Float, y: Float) {}
         override fun lineTo(x: Float, y: Float) {}
-        override fun curveTo(x1: Float, y1: Float, x2: Float, y2: Float, x3: Float, y3: Float) {}
         override fun getCurrentPoint(): PointF = PointF()
         override fun closePath() {}
         override fun endPath() {}

@@ -209,6 +209,27 @@ class PdfPageImageDetectorTest {
     }
 
     @Test
+    fun testShortTitleDrawnAsOutlineGlyphsWithFewerThan20FillsRoutesToOcr() {
+        PDDocument().use { doc ->
+            val page = PDPage()
+            doc.addPage(page)
+            PDPageContentStream(doc, page).use { cs ->
+                // Draw a 5-letter word outline: 5 fills (< 20 threshold), but 10 curveTo segments (>= 8)
+                for (i in 0 until 5) {
+                    val x = 100f + i * 30f
+                    val y = 700f
+                    cs.moveTo(x, y)
+                    cs.curveTo(x + 5f, y + 20f, x + 15f, y + 20f, x + 20f, y)
+                    cs.curveTo(x + 15f, y - 20f, x + 5f, y - 20f, x, y)
+                    cs.closePath()
+                    cs.fill()
+                }
+            }
+            assertTrue(PdfPageImageDetector.hasAnyImageOrVectorOutlines(page))
+        }
+    }
+
+    @Test
     fun testTimingComparisonOnRealMultiPageDocument() {
         kotlinx.coroutines.runBlocking {
             val context = ApplicationProvider.getApplicationContext<Context>()
