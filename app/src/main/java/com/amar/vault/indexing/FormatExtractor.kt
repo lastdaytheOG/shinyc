@@ -300,6 +300,16 @@ class PdfFormatExtractor : FormatExtractor {
                         // therefore a second full document traversal that produces only blanks.
                         // Probe first/middle/last with the same trust gate; any trusted page fails
                         // closed to the legacy full-strip path, preserving mixed/text PDFs.
+                        val visualContentCache = HashMap<Int, Boolean>()
+                        suspend fun pageHasVisualContent(p: Int): Boolean {
+                            visualContentCache[p]?.let { return it }
+                            val detected = docMutex.withLock {
+                                PdfPageImageDetector.hasAnyImageOrVectorOutlines(doc.getPage(p - 1))
+                            }
+                            visualContentCache[p] = detected
+                            return detected
+                        }
+
                         val scanDominant = if (AdaptivePdfOcrControl.mode == AdaptivePdfOcrControl.Mode.SCAN_OPTIMIZED) {
                             val probeStripper = PDFTextStripper()
                             val probeStartedAt = System.nanoTime()
@@ -310,7 +320,7 @@ class PdfFormatExtractor : FormatExtractor {
                                 val result = TextTrustScorer.score(UnicodeText.nfc(sampled.trim()))
                                 val isSparseNoImages = result.reasons.size == 1 &&
                                     result.reasons[0] == TextTrustScorer.TrustFailure.TOO_FEW_WORDS &&
-                                    docMutex.withLock { !PdfPageImageDetector.hasAnyImage(doc.getPage(probePage - 1)) }
+                                    !pageHasVisualContent(probePage)
                                 if (isSparseNoImages) result.copy(trusted = true) else result
                             }
                             stripNs += System.nanoTime() - probeStartedAt
@@ -343,9 +353,7 @@ class PdfFormatExtractor : FormatExtractor {
 
                             val onlyTooFewWords = trust.reasons.size == 1 &&
                                 trust.reasons[0] == TextTrustScorer.TrustFailure.TOO_FEW_WORDS
-                            val skipOcrSparse = onlyTooFewWords && docMutex.withLock {
-                                !PdfPageImageDetector.hasAnyImage(doc.getPage(page - 1))
-                            }
+                            val skipOcrSparse = onlyTooFewWords && !pageHasVisualContent(page)
 
                             if (trust.trusted || skipOcrSparse) {
                                 IndexMetrics.increment(IndexMetrics.Event.PDF_PAGE_TRUSTED)
@@ -588,6 +596,16 @@ class PdfFormatExtractor : FormatExtractor {
                         // gate; if none is trusted, skip stripping and send every page straight to
                         // render+OCR. Any trusted probe fails closed to normal per-page stripping,
                         // preserving mixed/text PDFs (a faithful port of [extract]'s scan-dominant plan).
+                        val visualContentCache = HashMap<Int, Boolean>()
+                        suspend fun pageHasVisualContent(p: Int): Boolean {
+                            visualContentCache[p]?.let { return it }
+                            val detected = docMutex.withLock {
+                                PdfPageImageDetector.hasAnyImageOrVectorOutlines(doc.getPage(p - 1))
+                            }
+                            visualContentCache[p] = detected
+                            return detected
+                        }
+
                         val scanDominant = if (AdaptivePdfOcrControl.mode == AdaptivePdfOcrControl.Mode.SCAN_OPTIMIZED) {
                             val probeStripper = PDFTextStripper()
                             val probeStartedAt = System.nanoTime()
@@ -598,7 +616,7 @@ class PdfFormatExtractor : FormatExtractor {
                                 val result = TextTrustScorer.score(UnicodeText.nfc(sampled.trim()))
                                 val isSparseNoImages = result.reasons.size == 1 &&
                                     result.reasons[0] == TextTrustScorer.TrustFailure.TOO_FEW_WORDS &&
-                                    docMutex.withLock { !PdfPageImageDetector.hasAnyImage(doc.getPage(probePage - 1)) }
+                                    !pageHasVisualContent(probePage)
                                 if (isSparseNoImages) result.copy(trusted = true) else result
                             }
                             stripNs += System.nanoTime() - probeStartedAt
@@ -634,9 +652,7 @@ class PdfFormatExtractor : FormatExtractor {
 
                             val onlyTooFewWords = trust.reasons.size == 1 &&
                                 trust.reasons[0] == TextTrustScorer.TrustFailure.TOO_FEW_WORDS
-                            val skipOcrSparse = onlyTooFewWords && docMutex.withLock {
-                                !PdfPageImageDetector.hasAnyImage(doc.getPage(page - 1))
-                            }
+                            val skipOcrSparse = onlyTooFewWords && !pageHasVisualContent(page)
 
                             if (trust.trusted || skipOcrSparse) {
                                 IndexMetrics.increment(IndexMetrics.Event.PDF_PAGE_TRUSTED)
