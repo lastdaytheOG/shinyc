@@ -307,7 +307,11 @@ class PdfFormatExtractor : FormatExtractor {
                                 probeStripper.startPage = probePage
                                 probeStripper.endPage = probePage
                                 val sampled = docMutex.withLock { probeStripper.getText(doc) }
-                                TextTrustScorer.score(UnicodeText.nfc(sampled.trim()))
+                                val result = TextTrustScorer.score(UnicodeText.nfc(sampled.trim()))
+                                val isSparseNoImages = result.reasons.size == 1 &&
+                                    result.reasons[0] == TextTrustScorer.TrustFailure.TOO_FEW_WORDS &&
+                                    docMutex.withLock { !PdfPageImageDetector.hasAnyImage(doc.getPage(probePage - 1)) }
+                                if (isSparseNoImages) result.copy(trusted = true) else result
                             }
                             stripNs += System.nanoTime() - probeStartedAt
                             PdfExecutionPlanner.useOcrOnly(probes)
@@ -337,7 +341,13 @@ class PdfFormatExtractor : FormatExtractor {
                             )
                             prof?.pageScored(page, pageNfcNs, pageTrustNs, trust.score.toDouble(), trust.trusted)
 
-                            if (trust.trusted) {
+                            val onlyTooFewWords = trust.reasons.size == 1 &&
+                                trust.reasons[0] == TextTrustScorer.TrustFailure.TOO_FEW_WORDS
+                            val skipOcrSparse = onlyTooFewWords && docMutex.withLock {
+                                !PdfPageImageDetector.hasAnyImage(doc.getPage(page - 1))
+                            }
+
+                            if (trust.trusted || skipOcrSparse) {
                                 IndexMetrics.increment(IndexMetrics.Event.PDF_PAGE_TRUSTED)
                                 pageTexts[page] = stripped
                             } else {
@@ -585,7 +595,11 @@ class PdfFormatExtractor : FormatExtractor {
                                 probeStripper.startPage = probePage
                                 probeStripper.endPage = probePage
                                 val sampled = docMutex.withLock { probeStripper.getText(doc) }
-                                TextTrustScorer.score(UnicodeText.nfc(sampled.trim()))
+                                val result = TextTrustScorer.score(UnicodeText.nfc(sampled.trim()))
+                                val isSparseNoImages = result.reasons.size == 1 &&
+                                    result.reasons[0] == TextTrustScorer.TrustFailure.TOO_FEW_WORDS &&
+                                    docMutex.withLock { !PdfPageImageDetector.hasAnyImage(doc.getPage(probePage - 1)) }
+                                if (isSparseNoImages) result.copy(trusted = true) else result
                             }
                             stripNs += System.nanoTime() - probeStartedAt
                             PdfExecutionPlanner.useOcrOnly(probes)
@@ -618,7 +632,13 @@ class PdfFormatExtractor : FormatExtractor {
                             )
                             prof?.pageScored(page, pageNfcNs, pageTrustNs, trust.score.toDouble(), trust.trusted)
 
-                            if (trust.trusted) {
+                            val onlyTooFewWords = trust.reasons.size == 1 &&
+                                trust.reasons[0] == TextTrustScorer.TrustFailure.TOO_FEW_WORDS
+                            val skipOcrSparse = onlyTooFewWords && docMutex.withLock {
+                                !PdfPageImageDetector.hasAnyImage(doc.getPage(page - 1))
+                            }
+
+                            if (trust.trusted || skipOcrSparse) {
                                 IndexMetrics.increment(IndexMetrics.Event.PDF_PAGE_TRUSTED)
                                 pageTexts[page] = stripped
                                 emitReadyPages()
