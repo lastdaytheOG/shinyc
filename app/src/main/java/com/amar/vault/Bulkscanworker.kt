@@ -119,19 +119,15 @@ class BulkScanWorker @dagger.assisted.AssistedInject constructor(
                     }
 
                     try {
-                        val stream = applicationContext.contentResolver.openInputStream(photoUri)
-                        if (stream != null) {
-                            val bitmap = BitmapFactory.decodeStream(stream)
-                            stream.close()
-                            if (bitmap != null) {
-                                val stored = toRead[i].storedId
-                                if (stored != null) pipeline.indexChanged(bitmap, photoUri.toString(), stored)
-                                else pipeline.indexBitmap(bitmap, photoUri.toString())
-                                bitmap.recycle()
-                                indexed++
-                            } else {
-                                skipped++
-                            }
+                        val bitmap = com.amar.vault.indexing.BitmapDecoding.decodeStreamBounded(
+                            openStream = { applicationContext.contentResolver.openInputStream(photoUri) }
+                        )
+                        if (bitmap != null) {
+                            val stored = toRead[i].storedId
+                            if (stored != null) pipeline.indexChanged(bitmap, photoUri.toString(), stored)
+                            else pipeline.indexBitmap(bitmap, photoUri.toString())
+                            bitmap.recycle()
+                            indexed++
                         } else {
                             skipped++
                         }
