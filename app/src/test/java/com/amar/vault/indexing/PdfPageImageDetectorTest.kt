@@ -50,7 +50,7 @@ class PdfPageImageDetectorTest {
                 cs.showText("Chapter 1")
                 cs.endText()
             }
-            assertFalse(PdfPageImageDetector.hasAnyImage(page))
+            assertFalse(PdfPageImageDetector.hasAnyImageOrVectorOutlines(page))
         }
     }
 
@@ -65,7 +65,7 @@ class PdfPageImageDetectorTest {
                 cs.drawImage(pdImage, 50f, 50f, 10f, 10f)
             }
             bmp.recycle()
-            assertTrue(PdfPageImageDetector.hasAnyImage(page))
+            assertTrue(PdfPageImageDetector.hasAnyImageOrVectorOutlines(page))
         }
     }
 
@@ -91,7 +91,7 @@ class PdfPageImageDetectorTest {
                 pcs.drawForm(form)
             }
             bmp.recycle()
-            assertTrue(PdfPageImageDetector.hasAnyImage(page))
+            assertTrue(PdfPageImageDetector.hasAnyImageOrVectorOutlines(page))
         }
     }
 
@@ -109,7 +109,7 @@ class PdfPageImageDetectorTest {
             }
             page.setContents(PDStream(cosStream))
 
-            assertTrue(PdfPageImageDetector.hasAnyImage(page))
+            assertTrue(PdfPageImageDetector.hasAnyImageOrVectorOutlines(page))
         }
     }
 
@@ -162,8 +162,49 @@ class PdfPageImageDetectorTest {
             }
 
             // The page has an image, so it must NOT bypass OCR fallback
-            assertTrue(PdfPageImageDetector.hasAnyImage(PDDocument.load(file).use { it.getPage(0) }))
+            assertTrue(PdfPageImageDetector.hasAnyImageOrVectorOutlines(PDDocument.load(file).use { it.getPage(0) }))
             file.delete()
+        }
+    }
+
+    @Test
+    fun testVectorOutlineTextDetectedAndRoutesToOcr() {
+        PDDocument().use { doc ->
+            val page = PDPage()
+            doc.addPage(page)
+            PDPageContentStream(doc, page).use { cs ->
+                // Draw 25 vector glyph outline shapes (no font operators, no images)
+                for (i in 0 until 25) {
+                    val x = 50f + (i % 5) * 40f
+                    val y = 700f - (i / 5) * 40f
+                    cs.moveTo(x, y)
+                    cs.lineTo(x + 10f, y + 20f)
+                    cs.lineTo(x + 20f, y)
+                    cs.closePath()
+                    cs.fill()
+                }
+            }
+            assertTrue(PdfPageImageDetector.hasAnyImageOrVectorOutlines(page))
+        }
+    }
+
+    @Test
+    fun testTitlePageWithSingleDividerRuleDoesNotRouteToOcr() {
+        PDDocument().use { doc ->
+            val page = PDPage()
+            doc.addPage(page)
+            PDPageContentStream(doc, page).use { cs ->
+                cs.beginText()
+                cs.setFont(PDType1Font.HELVETICA, 12f)
+                cs.newLineAtOffset(100f, 700f)
+                cs.showText("Chapter 1")
+                cs.endText()
+                // Single decorative underline (1 path)
+                cs.moveTo(100f, 690f)
+                cs.lineTo(200f, 690f)
+                cs.stroke()
+            }
+            assertFalse(PdfPageImageDetector.hasAnyImageOrVectorOutlines(page))
         }
     }
 

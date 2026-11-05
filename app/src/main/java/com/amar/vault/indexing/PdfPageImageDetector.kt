@@ -9,19 +9,56 @@ import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImage
 import java.io.IOException
 
 /**
- * Detects whether a PDF page draws any image — including direct image XObjects,
- * nested images inside Form XObjects, patterns, and inline images (BI/ID/EI).
+ * Detects whether a PDF page draws any visual imagery or vector outline text:
+ * 1. Direct image XObjects (/Subtype /Image).
+ * 2. Nested images inside Form XObjects (/Subtype /Form) or patterns.
+ * 3. Inline images in the content stream (BI/ID/EI).
+ * 4. Dense vector path operations (fill/stroke >= [VECTOR_PATH_THRESHOLD]), which indicate
+ *    text converted into vector glyph outlines (certificates, posters, vector invoices).
  */
 internal object PdfPageImageDetector {
 
-    private class ImageFoundException : IOException("Image detected on page")
+    /**
+     * Threshold of vector path operations (fill, stroke, fillAndStroke).
+     * When a page with fewer than 3 text words contains many vector paths,
+     * the text is likely drawn as vector glyph outlines and must still route to OCR.
+     */
+    const val VECTOR_PATH_THRESHOLD: Int = 20
+
+    private class VisualContentFoundException : IOException("Visual content detected on page")
 
     private class Detector(page: PDPage) : PDFGraphicsStreamEngine(page) {
-        var hasImage: Boolean = false
+        var hasVisualContent: Boolean = false
+        var pathCount: Int = 0
 
         override fun drawImage(pdImage: PDImage?) {
-            hasImage = true
-            throw ImageFoundException()
+            hasVisualContent = true
+            throw VisualContentFoundException()
+        }
+
+        override fun strokePath() {
+            recordPath()
+        }
+
+        override fun fillPath(p0: Path.FillType?) {
+            recordPath()
+        }
+
+        override fun fillAndStrokePath(p0: Path.FillType?) {
+            recordPath()
+        }
+
+        override fun shadingFill(shadingName: COSName?) {
+            hasVisualContent = true
+            throw VisualContentFoundException()
+        }
+
+        private fun recordPath() {
+            pathCount++
+            if (pathCount >= VECTOR_PATH_THRESHOLD) {
+                hasVisualContent = true
+                throw VisualContentFoundException()
+            }
         }
 
         override fun appendRectangle(p0: PointF?, p1: PointF?, p2: PointF?, p3: PointF?) {}
@@ -32,13 +69,13 @@ internal object PdfPageImageDetector {
         override fun getCurrentPoint(): PointF = PointF()
         override fun closePath() {}
         override fun endPath() {}
-        override fun strokePath() {}
-        override fun fillPath(p0: Path.FillType?) {}
-        override fun fillAndStrokePath(p0: Path.FillType?) {}
-        override fun shadingFill(shadingName: COSName?) {}
     }
 
-    fun hasAnyImage(page: PDPage): Boolean {
+    /**
+     * True if the page draws any raster images (direct, nested, inline) or contains
+     * dense vector paths indicative of text drawn as vector glyph outlines.
+     */
+    fun hasAnyImageOrVectorOutlines(page: PDPage): Boolean {
         // Fast path: check page resources directly for image XObjects
         val resources = page.resources
         if (resources != null) {
@@ -47,16 +84,16 @@ internal object PdfPageImageDetector {
             }
         }
 
-        // Full content stream execution: processes operators to detect inline images (BI/ID/EI)
-        // and nested Form XObjects.
+        // Full content stream execution: processes operators to detect inline images (BI/ID/EI),
+        // nested Form XObjects, and vector path outline bursts.
         val detector = Detector(page)
         return try {
             detector.processPage(page)
-            detector.hasImage
-        } catch (e: ImageFoundException) {
+            detector.hasVisualContent
+        } catch (e: VisualContentFoundException) {
             true
         } catch (e: Exception) {
-            // Fail closed: assume image exists on any unexpected parsing error
+            // Fail closed: assume visual content exists on any unexpected parsing error
             true
         }
     }
