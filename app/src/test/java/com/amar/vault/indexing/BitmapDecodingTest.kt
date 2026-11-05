@@ -1,15 +1,18 @@
 package com.amar.vault.indexing
 
+import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
+import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [32])
 class BitmapDecodingTest {
@@ -34,40 +37,66 @@ class BitmapDecodingTest {
         // 108 MP camera photo (12000x9000): short side 9000 > 3200 -> sampleSize 4 (decodes as 3000x2250)
         assertEquals(4, BitmapDecoding.calculateInSampleSize(12000, 9000))
     }
-
     @Test
     fun decodeBoundedPreservesScrollingScreenshotAtFullResolution() {
-        val original = Bitmap.createBitmap(1080, 9000, Bitmap.Config.ARGB_8888)
+        val original = Bitmap.createBitmap(108, 900, Bitmap.Config.ARGB_8888)
         val bytes = ByteArrayOutputStream().use { out ->
             original.compress(Bitmap.CompressFormat.PNG, 100, out)
             out.toByteArray()
         }
         original.recycle()
 
-        val decoded = BitmapDecoding.decodeStreamBounded(
-            openStream = { ByteArrayInputStream(bytes) }
-        )
+        val decoded = BitmapDecoding.decodeStreamBounded(maxShortSide = 320) {
+            ByteArrayInputStream(bytes)
+        }
         assertNotNull(decoded)
-        assertEquals(1080, decoded!!.width)
-        assertEquals(9000, decoded.height)
+        assertEquals(108, decoded!!.width)
+        assertEquals(900, decoded.height)
         decoded.recycle()
     }
 
     @Test
-    fun decodeBoundedPreserves12MpCameraPhotoAtFullResolution() {
-        val original = Bitmap.createBitmap(4000, 3000, Bitmap.Config.ARGB_8888)
+    fun decodeBoundedDownsamplesWhenShortSideExceedsCap() {
+        val original = Bitmap.createBitmap(400, 300, Bitmap.Config.ARGB_8888)
         val bytes = ByteArrayOutputStream().use { out ->
             original.compress(Bitmap.CompressFormat.JPEG, 85, out)
             out.toByteArray()
         }
         original.recycle()
 
-        val decoded = BitmapDecoding.decodeStreamBounded(
-            openStream = { ByteArrayInputStream(bytes) }
-        )
+        val decoded = BitmapDecoding.decodeStreamBounded(maxShortSide = 200) {
+            ByteArrayInputStream(bytes)
+        }
         assertNotNull(decoded)
-        assertEquals(4000, decoded!!.width)
-        assertEquals(3000, decoded.height)
+        assertEquals(200, decoded!!.width)
+        assertEquals(150, decoded.height)
         decoded.recycle()
+    }
+
+    @Test
+    fun loadSoftwareMatchesOpenStoredUnderBoundedCap() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val original = Bitmap.createBitmap(800, 600, Bitmap.Config.ARGB_8888)
+        val file = java.io.File(context.cacheDir, "test_load_software_match.jpg")
+        file.outputStream().use { out ->
+            original.compress(Bitmap.CompressFormat.JPEG, 85, out)
+        }
+        original.recycle()
+
+        val uri = Uri.fromFile(file)
+        val fromLoadSoftware = BitmapDecoding.loadSoftware(context, uri, maxShortSide = 300)
+        val fromOpenStored = BitmapDecoding.decodeStreamBounded(maxShortSide = 300) {
+            file.inputStream()
+        }
+
+        assertNotNull(fromLoadSoftware)
+        assertNotNull(fromOpenStored)
+        assertEquals(fromOpenStored!!.width, fromLoadSoftware!!.width)
+        assertEquals(fromOpenStored.height, fromLoadSoftware.height)
+        assertTrue(SamePicture.of(fromLoadSoftware, fromOpenStored))
+
+        fromLoadSoftware.recycle()
+        fromOpenStored.recycle()
+        file.delete()
     }
 }

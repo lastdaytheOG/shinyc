@@ -82,18 +82,44 @@ object BitmapDecoding {
     /**
      * @param mutable maps to `ImageDecoder.isMutableRequired`. When false (default) the decoder is
      *   left at its default, exactly as the immutable callers did (they never set the flag).
+     * Bounds dimensions by [maxShortSide] and [maxTotalPixels] to match [decodeStreamBounded],
+     * preventing out-of-memory errors on large camera images and keeping dimensions identical for duplicate detection.
      */
-    fun loadSoftware(context: Context, uri: Uri, mutable: Boolean = false): Bitmap? {
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                val source = ImageDecoder.createSource(context.contentResolver, uri)
-                ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+    fun loadSoftware(
+        context: Context,
+        uri: Uri,
+        mutable: Boolean = false,
+        maxShortSide: Int = MAX_SHORT_SIDE,
+        maxTotalPixels: Long = MAX_TOTAL_PIXELS
+    ): Bitmap? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            try {
+                val source = if (uri.scheme == "file" && uri.path != null) {
+                    ImageDecoder.createSource(java.io.File(uri.path!!))
+                } else {
+                    ImageDecoder.createSource(context.contentResolver, uri)
+                }
+                return ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
                     decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE // required for ML Kit / Tesseract
                     if (mutable) decoder.isMutableRequired = true
+                    val sample = calculateInSampleSize(info.size.width, info.size.height, maxShortSide, maxTotalPixels)
+                    if (sample > 1) {
+                        decoder.setTargetSampleSize(sample)
+                    }
                 }
-            } else {
-                @Suppress("DEPRECATION")
-                MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
+            } catch (e: Exception) {
+                // Fall through to bounded stream decode
+            }
+        }
+        return try {
+            decodeStreamBounded(maxShortSide, maxTotalPixels) {
+                context.contentResolver.openInputStream(uri)
+            }?.let { bmp ->
+                if (mutable && !bmp.isMutable) {
+                    val copy = bmp.copy(bmp.config ?: Bitmap.Config.ARGB_8888, true)
+                    bmp.recycle()
+                    copy
+                } else bmp
             }
         } catch (e: Exception) {
             null
