@@ -15,28 +15,28 @@ import java.io.ByteArrayOutputStream
 class BitmapDecodingTest {
 
     @Test
-    fun sampleSizePreservesLongScrollingScreenshot() {
-        // 1080x9000 scrolling screenshot: short side is 1080 (<= 2160), total pixels 9.72 MP (<= 16 MP)
+    fun sampleSizePreservesLongScrollingScreenshotAnd12MpPhotos() {
+        // 1080x9000 scrolling screenshot: short side is 1080 (<= 3200), total pixels 9.72 MP (<= 20 MP)
         assertEquals(1, BitmapDecoding.calculateInSampleSize(1080, 9000))
         // Horizontal orientation
         assertEquals(1, BitmapDecoding.calculateInSampleSize(9000, 1080))
         // Typical modern phone screenshot
         assertEquals(1, BitmapDecoding.calculateInSampleSize(1080, 2400))
+        // 12 MP camera photo (4000x3000): short side 3000 <= 3200, total 12 MP <= 20 MP -> kept at full 1:1 detail
+        assertEquals(1, BitmapDecoding.calculateInSampleSize(4000, 3000))
+        assertEquals(1, BitmapDecoding.calculateInSampleSize(3000, 4000))
     }
 
     @Test
-    fun sampleSizeDownsamplesHighMegapixelPhotos() {
-        // 12 MP camera photo (4000x3000): short side 3000 > 2160 -> sampleSize 2 (decodes as 2000x1500)
-        assertEquals(2, BitmapDecoding.calculateInSampleSize(4000, 3000))
-        assertEquals(2, BitmapDecoding.calculateInSampleSize(3000, 4000))
-
-        // 48 MP camera photo (8000x6000): short side 6000, total 48 MP -> sampleSize 4 (decodes as 2000x1500)
-        assertEquals(4, BitmapDecoding.calculateInSampleSize(8000, 6000))
+    fun sampleSizeDownsamplesOnly48MpPlusPhotos() {
+        // 48 MP camera photo (8000x6000): short side 6000 > 3200 -> sampleSize 2 (decodes as 4000x3000)
+        assertEquals(2, BitmapDecoding.calculateInSampleSize(8000, 6000))
+        // 108 MP camera photo (12000x9000): short side 9000 > 3200 -> sampleSize 4 (decodes as 3000x2250)
+        assertEquals(4, BitmapDecoding.calculateInSampleSize(12000, 9000))
     }
 
     @Test
     fun decodeBoundedPreservesScrollingScreenshotAtFullResolution() {
-        // Create a 1080x9000 bitmap and compress to in-memory PNG
         val original = Bitmap.createBitmap(1080, 9000, Bitmap.Config.ARGB_8888)
         val bytes = ByteArrayOutputStream().use { out ->
             original.compress(Bitmap.CompressFormat.PNG, 100, out)
@@ -54,8 +54,7 @@ class BitmapDecodingTest {
     }
 
     @Test
-    fun decodeBoundedDownsamplesLargeCameraPhoto() {
-        // Create a 4000x3000 bitmap and compress to in-memory JPEG
+    fun decodeBoundedPreserves12MpCameraPhotoAtFullResolution() {
         val original = Bitmap.createBitmap(4000, 3000, Bitmap.Config.ARGB_8888)
         val bytes = ByteArrayOutputStream().use { out ->
             original.compress(Bitmap.CompressFormat.JPEG, 85, out)
@@ -67,8 +66,8 @@ class BitmapDecodingTest {
             openStream = { ByteArrayInputStream(bytes) }
         )
         assertNotNull(decoded)
-        assertEquals(2000, decoded!!.width)
-        assertEquals(1500, decoded.height)
+        assertEquals(4000, decoded!!.width)
+        assertEquals(3000, decoded.height)
         decoded.recycle()
     }
 }

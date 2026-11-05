@@ -19,11 +19,11 @@ import java.io.InputStream
  */
 object BitmapDecoding {
 
-    /** Maximum short-side resolution allowed before downsampling (2160 px covers full 1080p, 1440p displays). */
-    const val MAX_SHORT_SIDE: Int = 2160
+    /** Maximum short-side resolution allowed before downsampling (3200 px preserves 12 MP camera photos at full 100% detail). */
+    const val MAX_SHORT_SIDE: Int = 3200
 
-    /** Maximum total pixels before downsampling (16 MP allows long scrolling screenshots up to ~1080x14000). */
-    const val MAX_TOTAL_PIXELS: Long = 16_000_000L
+    /** Maximum total pixels before downsampling (20 MP allows long scrolling screenshots up to ~1080x18000). */
+    const val MAX_TOTAL_PIXELS: Long = 20_000_000L
 
     /**
      * Calculates the power-of-two [BitmapFactory.Options.inSampleSize] required to bring [width] and [height]
