@@ -53,8 +53,9 @@ class IndexingPipeline private constructor(private val context: Context) {
     private val duplicateDetector = com.amar.vault.indexing.DuplicateDetector(dao) { stored ->
         try {
             val file = if (stored.startsWith("/")) java.io.File(stored) else null
-            (file?.inputStream() ?: context.contentResolver.openInputStream(android.net.Uri.parse(stored)))
-                ?.use { android.graphics.BitmapFactory.decodeStream(it) }
+            com.amar.vault.indexing.BitmapDecoding.decodeStreamBounded {
+                file?.inputStream() ?: context.contentResolver.openInputStream(android.net.Uri.parse(stored))
+            }
         } catch (e: Exception) {
             null
         }

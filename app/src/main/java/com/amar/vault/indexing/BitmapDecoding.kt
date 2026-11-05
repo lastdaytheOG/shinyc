@@ -55,9 +55,9 @@ object BitmapDecoding {
      * Uses two passes: bounds inspection, then bounded decoding.
      */
     fun decodeStreamBounded(
-        openStream: () -> InputStream?,
         maxShortSide: Int = MAX_SHORT_SIDE,
-        maxTotalPixels: Long = MAX_TOTAL_PIXELS
+        maxTotalPixels: Long = MAX_TOTAL_PIXELS,
+        openStream: () -> InputStream?
     ): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         try {
