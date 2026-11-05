@@ -34,10 +34,8 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
 
     // Stats from DB
-    val allItems by VaultDatabase.get(context).vaultDao().getAllItems()
-        .collectAsState(initial = emptyList())
-
-    val totalCount = allItems.size
+    val totalCount by VaultDatabase.get(context).vaultDao().observeCount()
+        .collectAsState(initial = 0)
 
     val prefs by ScanPreferences.prefsFlow(context).collectAsState(initial = null)
     val developerMode = prefs?.developerMode == true

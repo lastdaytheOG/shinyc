@@ -94,7 +94,7 @@ class SearchPrecisionDeviceTest {
     /** This test's documents and pictures listed for [typed], best first. */
     private fun typed(typed: String, chip: String = SearchFilter.ALL): List<String> = runBlocking {
         val only: ((VaultItem) -> Boolean)? =
-            if (chip == SearchFilter.ALL) null else { item -> SearchFilter.accepts(chip, item, saved = null) }
+            if (chip == SearchFilter.ALL) null else { item -> SearchFilter.accepts(chip, item) }
         services.retrievalService().retrieve(RetrievalRequest.forResultList(typed, only)).items.documents()
     }
 

@@ -218,6 +218,11 @@ private fun PdfViewerScreen(
     var pageCount by remember { mutableIntStateOf(0) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
+    // A locked PDF: what was typed for it, how many tries, and what is said above the place to type it.
+    var password by remember { mutableStateOf<String?>(null) }
+    var tries by remember { mutableIntStateOf(0) }
+    var lockedNote by remember { mutableStateOf<String?>(null) }
+
     // Where the file is opened from: the address it was added at, until that leads nowhere
     // and the user shows where the file is now.
     var openFrom by remember { mutableStateOf(uri) }
@@ -255,14 +260,32 @@ private fun PdfViewerScreen(
     var broughtIntoView by remember { mutableStateOf(false) }
 
     // Open the PDF
-    LaunchedEffect(openFrom) {
+    LaunchedEffect(openFrom, tries) {
         errorMessage = null
         canFind = false
         withContext(Dispatchers.IO) {
             try {
                 val fd = context.contentResolver.openFileDescriptor(openFrom, "r")
                     ?: throw IllegalStateException("Cannot open PDF")
-                val pdfRenderer = PdfRenderer(fd)
+                val pdfRenderer = try {
+                    PdfRenderer(fd)
+                } catch (locked: SecurityException) {
+                    // The file opened, so this is not a lost permission: the PDF itself refuses.
+                    fd.close()
+                    val fingerprint = com.amar.vault.indexing.PdfSourceReuseCache.fingerprint(context, openFrom)
+                    val key = password ?: fingerprint?.let(com.amar.vault.indexing.PdfPasswords::forViewing)
+                    val copy = key?.let { com.amar.vault.indexing.LockedPdfCopy.make(context, openFrom, it) }
+                    if (copy == null) {
+                        lockedNote = if (password == null) LockedPdfWords.VIEWER_LOCKED else LockedPdfWords.VIEWER_WRONG
+                        return@withContext
+                    }
+                    lockedNote = null
+                    if (fingerprint != null) com.amar.vault.indexing.PdfPasswords.opens(fingerprint, key)
+                    val unlocked = ParcelFileDescriptor.open(copy, ParcelFileDescriptor.MODE_READ_ONLY)
+                    // Open, it stays readable; deleted, nothing of it is left once the app is gone.
+                    copy.delete()
+                    PdfRenderer(unlocked)
+                }
                 // The count first: the list is built the moment the renderer is set, and a list
                 // built with no pages yet would drop the starting page above.
                 pageCount = pdfRenderer.pageCount
@@ -281,6 +304,9 @@ private fun PdfViewerScreen(
                         "This file is damaged or is not a PDF, so it cannot be shown. Its text can still be searched."
                     else -> "The file could not be opened: ${e.message}"
                 }
+            } catch (tooBig: OutOfMemoryError) {
+                // Taking the lock off a very large PDF: something to say, not a reason to stop.
+                errorMessage = "This file is too big for the memory this phone has free, so it cannot be shown. Its text can still be searched."
             }
         }
     }
@@ -362,6 +388,21 @@ private fun PdfViewerScreen(
                         findNote?.let { note ->
                             Spacer(Modifier.height(12.dp))
                             Text(text = note, color = WarmBrownDark, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+
+                lockedNote != null -> {
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(32.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        Text(text = lockedNote!!, color = CharcoalSoft, fontSize = 15.sp, lineHeight = 22.sp)
+                        PdfPasswordField(buttonText = "Open") { typed ->
+                            password = typed
+                            tries++
                         }
                     }
                 }

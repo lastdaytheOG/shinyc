@@ -133,6 +133,9 @@ data class TextForTagging(
     val qrPayload: String?,
 )
 
+/** A whole item that has been read: where it came from and when ([com.amar.vault.indexing.DiscoveryEngine.toRead]). */
+data class ItemRead(val id: String, val uri: String, val timestamp: Long)
+
 /** What the keyword engine is filled from when the app starts ([com.amar.vault.retrieval.KeywordText]). */
 data class VaultItemSearchData(
     val rowId: Long,
@@ -153,10 +156,10 @@ interface VaultDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(items: List<VaultItem>)
     
-    // A shared PDF is one standalone row (the saved item) plus one row per chunk, and both
-    // kinds carry the file's hash. The three lookups below each mean one kind only: the saved
-    // item must never be counted as a chunk or deleted as one (its Stash entry would go with
-    // it), and a chunk must never be handed back as "the item with this hash".
+    // A shared PDF is one standalone row plus one row per chunk, and both kinds carry the file's
+    // hash. The three lookups below each mean one kind only: the standalone row must never be
+    // counted as a chunk or deleted as one, and a chunk must never be handed back as "the item
+    // with this hash".
 
     /** The standalone item with this hash — never one of a document's chunk rows. */
     @Query("SELECT * FROM vault_items WHERE contentHash = :hash AND parentDocumentId IS NULL LIMIT 1")
@@ -245,6 +248,9 @@ interface VaultDao {
     @Query("SELECT COUNT(*) FROM vault_items")
     suspend fun getCount(): Int
 
+    @Query("SELECT COUNT(*) FROM vault_items")
+    fun observeCount(): Flow<Int>
+
     /** How many pictures — screenshots and photos — are in the vault. */
     @Query("SELECT COUNT(*) FROM vault_items WHERE parentDocumentId IS NULL AND itemType IN ('screenshot', 'photo')")
     fun observePictureCount(): Flow<Int>
@@ -254,6 +260,10 @@ interface VaultDao {
 
     @Query("SELECT * FROM vault_items WHERE pHash = :hash LIMIT 1")
     suspend fun findByPHash(hash: Long): VaultItem?
+
+    /** The whole items with this perceptual hash: pictures that look alike at eight by eight, or the same one. */
+    @Query("SELECT * FROM vault_items WHERE pHash = :hash AND parentDocumentId IS NULL")
+    suspend fun picturesWithHash(hash: Long): List<VaultItem>
 
     // ── Deciding again what a stored picture is (PictureTypeUpkeep) ──
 
@@ -301,6 +311,17 @@ interface VaultDao {
 
     @Query("SELECT uri FROM vault_items")
     suspend fun getAllUris(): List<String>
+
+    /**
+     * The whole items that have been read to the end, oldest first: those with text, and those
+     * read and found to have none. One whose reading was cut short has neither.
+     */
+    @Query("""
+        SELECT id, uri, timestamp FROM vault_items
+        WHERE parentDocumentId IS NULL AND (ocrText != '' OR lang = 'zxx')
+        ORDER BY timestamp
+    """)
+    suspend fun itemsRead(): List<ItemRead>
 
     @Query("SELECT * FROM vault_items WHERE originalUri = :uri LIMIT 1")
     suspend fun findByOriginalUri(uri: String): VaultItem?
@@ -417,13 +438,12 @@ interface VaultRelationshipDao {
         com.amar.vault.action.storage.AgentActionSnapshot::class,
         LocalModel::class,
         ChatMessageEntity::class,
-        StashItem::class,
         IngestionSession::class,
         IngestionAttachment::class,
         com.amar.vault.indexing.DocumentImport::class,
         com.amar.vault.photos.PhotoVector::class,
     ],
-    version = 16,
+    version = 17,
     exportSchema = true
 )
 @TypeConverters(ItemTypeConverter::class)
@@ -435,7 +455,6 @@ abstract class VaultDatabase : RoomDatabase() {
     abstract fun canonicalEntityStatsDao(): CanonicalEntityStatsDao
     abstract fun canonicalReviewQueueDao(): CanonicalReviewQueueDao
     abstract fun vaultRelationshipDao(): VaultRelationshipDao
-    abstract fun stashItemDao(): StashItemDao
     abstract fun eventSnapshotDao(): com.amar.vault.events.engine.EventSnapshotDao
     abstract fun timelineSnapshotDao(): com.amar.vault.timeline.engine.TimelineSnapshotDao
     abstract fun timelineEntrySnapshotDao(): com.amar.vault.timeline.engine.TimelineEntrySnapshotDao
@@ -654,6 +673,17 @@ abstract class VaultDatabase : RoomDatabase() {
         }
 
         /**
+         * Version 17 drops the Saved screen's table: its folders, notes and favourites go with it.
+         * The items themselves are rows of `vault_items`, which this step does not touch, so
+         * everything that was saved can still be searched and opened.
+         */
+        internal val MIGRATION_16_17 = object : androidx.room.migration.Migration(16, 17) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS `stash_items`")
+            }
+        }
+
+        /**
          * Every step from version 6 to the current one, in order. [context] is where the step to
          * version 14 leaves its account of what it changed ([MigrationReport]); a test that only
          * wants the steps passes none.
@@ -664,6 +694,7 @@ abstract class VaultDatabase : RoomDatabase() {
             Migration13To14 { report -> context?.let { MigrationReport.save(it, report) } },
             MIGRATION_14_15,
             MIGRATION_15_16,
+            MIGRATION_16_17,
         )
 
         fun get(context: Context): VaultDatabase {

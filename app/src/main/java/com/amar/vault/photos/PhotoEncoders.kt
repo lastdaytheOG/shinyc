@@ -124,6 +124,7 @@ object PhotoPixels {
     fun of(bitmap: Bitmap, size: Int): FloatArray {
         val w = bitmap.width
         val h = bitmap.height
+        PhotoResize.of(bitmap, tapsFor(w, size), tapsFor(h, size), size)?.let { return it }
         val argb = IntArray(w * h)
         bitmap.getPixels(argb, 0, w, 0, 0, w, h)
         return resized(argb, w, h, size)
@@ -135,8 +136,8 @@ object PhotoPixels {
      */
     fun resized(argb: IntArray, w: Int, h: Int, size: Int): FloatArray {
         require(argb.size == w * h)
-        val xs = Taps(w, size)
-        val ys = Taps(h, size)
+        val xs = tapsFor(w, size)
+        val ys = tapsFor(h, size)
         val mid = IntArray(h * size * 3)
         for (y in 0 until h) {
             val row = y * w
@@ -184,10 +185,26 @@ object PhotoPixels {
 
     private fun clip8(v: Float): Int = (v + 0.5f).toInt().coerceIn(0, 255)
 
+    /** The filter for this resize: pictures from one camera all ask for the same two. */
+    private val tables = HashMap<Long, Taps>()
+
+    private fun tapsFor(inSize: Int, outSize: Int): Taps = synchronized(tables) {
+        val key = (inSize.toLong() shl 32) or outSize.toLong()
+        tables[key] ?: Taps(inSize, outSize).also {
+            if (tables.size >= 16) tables.clear()
+            tables[key] = it
+        }
+    }
+
     /** PIL's bicubic taps (a = -0.5) for one axis, widened by the scale when shrinking. */
-    private class Taps(inSize: Int, outSize: Int) {
+    internal class Taps(inSize: Int, outSize: Int) {
         val start = IntArray(outSize)
         val weights: Array<FloatArray>
+
+        /** [weights] one after another, and where each output's begin and how many it has: what native code reads. */
+        val offset: IntArray
+        val count: IntArray
+        val flat: FloatArray
 
         init {
             val scale = inSize.toDouble() / outSize
@@ -202,6 +219,15 @@ object PhotoPixels {
                 val sum = w.sum()
                 FloatArray(w.size) { j -> (if (sum != 0.0) w[j] / sum else 0.0).toFloat() }
             }
+            offset = IntArray(outSize)
+            count = IntArray(outSize) { weights[it].size }
+            flat = FloatArray(count.sum())
+            var at = 0
+            for (i in 0 until outSize) {
+                offset[i] = at
+                weights[i].copyInto(flat, at)
+                at += count[i]
+            }
         }
 
         private fun cubic(x: Double): Double {
@@ -213,6 +239,15 @@ object PhotoPixels {
                 else -> 0.0
             }
         }
+    }
+
+    /** [of] in Kotlin whatever the bitmap is, where [of] would use native code: to compare the two. */
+    internal fun ofInKotlin(bitmap: Bitmap, size: Int): FloatArray {
+        val w = bitmap.width
+        val h = bitmap.height
+        val argb = IntArray(w * h)
+        bitmap.getPixels(argb, 0, w, 0, 0, w, h)
+        return resized(argb, w, h, size)
     }
 
     fun fromArgb(argb: IntArray, size: Int): FloatArray {
@@ -227,4 +262,38 @@ object PhotoPixels {
         }
         return out
     }
+}
+
+/**
+ * [PhotoPixels.of] in native code, reading the bitmap where it lies: the same bits, without its
+ * pixels copied to the Java heap (48 MB for a 12 MP photo) and several times faster.
+ *
+ * Only for a bitmap whose memory holds what `getPixels` would return: 8-bit RGBA, opaque (so
+ * premultiplying changed nothing) and in sRGB (`getPixels` converts anything else). Any other
+ * bitmap, or a build without the library (unit tests on the JVM), gets null and the Kotlin path.
+ */
+internal object PhotoResize {
+
+    private val native: Boolean = try {
+        System.loadLibrary("amar_vector_engine")
+        true
+    } catch (e: Throwable) {
+        false
+    }
+
+    private val srgb by lazy { android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB) }
+
+    fun of(bitmap: Bitmap, xs: PhotoPixels.Taps, ys: PhotoPixels.Taps, size: Int): FloatArray? {
+        if (!native || bitmap.config != Bitmap.Config.ARGB_8888 || bitmap.hasAlpha() || bitmap.colorSpace != srgb) return null
+        val out = FloatArray(3 * size * size)
+        val done = nativeResize(bitmap, size, xs.start, xs.offset, xs.count, xs.flat, ys.start, ys.offset, ys.count, ys.flat, out)
+        return if (done) out else null
+    }
+
+    @JvmStatic private external fun nativeResize(
+        bitmap: Bitmap, size: Int,
+        xStart: IntArray, xOffset: IntArray, xCount: IntArray, xWeights: FloatArray,
+        yStart: IntArray, yOffset: IntArray, yCount: IntArray, yWeights: FloatArray,
+        out: FloatArray,
+    ): Boolean
 }

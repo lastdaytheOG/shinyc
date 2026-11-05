@@ -87,7 +87,12 @@ fun DocumentPickerScreen() {
     val queue = remember { DocumentImportQueue.get(context) }
     val relink = remember { DocumentRelink.get(context) }
     val imports by remember { db.documentImportDao().observeAll() }.collectAsState(initial = emptyList())
-    val reading = imports.count { !it.isFinished }
+    val reading = imports.count { !it.isFinished && !it.waitsForCharger }
+    // One place to type a password at a time: twelve locked statements must not make twelve forms,
+    // and a password that opens one is tried on the rest anyway.
+    val locked = imports.filter { it.state == ImportState.FAILED && it.failure == ImportFailure.LOCKED }
+    var chosenLocked by remember { mutableStateOf<String?>(null) }
+    val formFor = chosenLocked?.takeIf { id -> locked.any { it.id == id } } ?: locked.firstOrNull()?.id
 
     // Documents whose file is no longer where it was added from, and what the last search for
     // them found. Looked for again whenever a reading ends: a file that just failed as "gone"
@@ -199,7 +204,15 @@ fun DocumentPickerScreen() {
             }
 
             items(imports, key = { it.id }) { import ->
-                ImportCard(import, onTryAgain = { scope.launch(Dispatchers.IO) { queue.retry(import.id) } })
+                ImportCard(
+                    import,
+                    onTryAgain = { scope.launch(Dispatchers.IO) { queue.retry(import.id) } },
+                    onReadRestNow = { scope.launch(Dispatchers.IO) { queue.readRestNow(import.id) } },
+                    onPassword = { password -> scope.launch(Dispatchers.IO) { queue.unlock(import.id, password) } },
+                    passwordFormHere = import.id == formFor,
+                    otherLockedFiles = locked.size > 1,
+                    onWantsPasswordForm = { chosenLocked = import.id },
+                )
             }
         }
     }
@@ -264,13 +277,23 @@ private fun MissingFilesCard(missing: List<VaultDocument>, result: String?, find
 }
 
 @Composable
-private fun ImportCard(import: DocumentImport, onTryAgain: () -> Unit) {
+private fun ImportCard(
+    import: DocumentImport,
+    onTryAgain: () -> Unit,
+    onReadRestNow: () -> Unit,
+    onPassword: (String) -> Unit,
+    passwordFormHere: Boolean,
+    otherLockedFiles: Boolean,
+    onWantsPasswordForm: () -> Unit,
+) {
     val failure = import.failure ?: ImportFailure.OTHER
     // A file with no words in it is in the vault under its name: a caution, not a failure.
     val noWords = import.state == ImportState.FAILED && failure == ImportFailure.NO_TEXT
+    // Nothing went wrong with a locked file: it is waiting for its password.
+    val locked = import.state == ImportState.FAILED && failure == ImportFailure.LOCKED
     val containerColor = when {
         import.state == ImportState.DONE -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-        import.state == ImportState.ALREADY_THERE || noWords -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.4f)
+        import.state == ImportState.ALREADY_THERE || noWords || locked -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.4f)
         import.state == ImportState.FAILED -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
         else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
     }
@@ -280,14 +303,25 @@ private fun ImportCard(import: DocumentImport, onTryAgain: () -> Unit) {
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = containerColor)
     ) {
-        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            // Beside a form the icon stays with the file's name, not halfway down the card.
+            verticalAlignment = if (locked && passwordFormHere) Alignment.Top else Alignment.CenterVertically,
+        ) {
             when {
                 import.state == ImportState.DONE ->
                     Icon(Icons.Default.CheckCircle, "Read", Modifier.size(28.dp), tint = MaterialTheme.colorScheme.primary)
+                locked ->
+                    Icon(Icons.Default.Warning, "Locked", Modifier.size(28.dp), tint = MaterialTheme.colorScheme.tertiary)
                 import.state == ImportState.ALREADY_THERE || noWords ->
                     Icon(Icons.Default.Warning, "Note", Modifier.size(28.dp), tint = MaterialTheme.colorScheme.tertiary)
                 import.state == ImportState.FAILED ->
                     Icon(Icons.Default.Close, "Not read", Modifier.size(28.dp), tint = MaterialTheme.colorScheme.error)
+                // Nothing is happening to it just now, so nothing spins.
+                import.waitsForCharger -> CircularProgressIndicator(
+                    progress = { import.pagesDone.toFloat() / (import.pageCount ?: import.pagesDone).coerceAtLeast(1) },
+                    modifier = Modifier.size(24.dp), strokeWidth = 2.dp,
+                )
                 else -> CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
             }
 
@@ -306,7 +340,20 @@ private fun ImportCard(import: DocumentImport, onTryAgain: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (import.state == ImportState.FAILED) {
+                if (locked && passwordFormHere) {
+                    Spacer(Modifier.height(8.dp))
+                    PdfPasswordField(buttonText = "Unlock and read", onPassword = onPassword)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        (if (otherLockedFiles) LockedPdfWords.OTHERS_TOO + " " else "") + LockedPdfWords.WHAT_IS_KEPT,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else if (locked) {
+                    TextButton(onClick = onWantsPasswordForm, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
+                        Text("Type its password")
+                    }
+                } else if (import.state == ImportState.FAILED) {
                     Text(
                         ImportWords.whatToDo(failure, import.origin),
                         style = MaterialTheme.typography.bodySmall,
@@ -318,6 +365,11 @@ private fun ImportCard(import: DocumentImport, onTryAgain: () -> Unit) {
                             Spacer(Modifier.width(4.dp))
                             Text("Try again")
                         }
+                    }
+                }
+                if (import.waitsForCharger) {
+                    TextButton(onClick = onReadRestNow, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
+                        Text("Read the rest now")
                     }
                 }
             }

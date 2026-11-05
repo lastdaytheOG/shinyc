@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.amar.vault.ItemType
-import com.amar.vault.StashItem
 import com.amar.vault.VaultDatabase
 import com.amar.vault.VaultDocument
 import com.amar.vault.VaultItem
@@ -189,23 +188,21 @@ class DocumentRecordTest {
     }
 
     @Test
-    fun theSavedItemOfASharedDocumentIsNotOneOfItsPieces() = runBlocking {
-        // The saved item has the document's id and its hash, and a Saved entry hangs off it.
-        val saved = VaultItem(
+    fun theOwnRowOfASharedDocumentIsNotOneOfItsPieces() = runBlocking {
+        // The file's own row has the document's id and its hash.
+        val shared = VaultItem(
             id = "bill", uri = "/files/shared_imports/x.pdf", ocrText = "", lang = "en", itemType = ItemType.PDF,
             sourceFile = "Bill.pdf", timestamp = 1L, contentHash = "h1", sharedAt = 1L, title = "Bill.pdf",
         )
-        db.vaultDao().insert(saved)
-        db.stashItemDao().insertOrUpdate(StashItem(id = "stash", vaultItemId = "bill", category = "Bills", savedAt = 1L, sourceApp = ""))
+        db.vaultDao().insert(shared)
 
         val bill = document("bill", "h1")
         val removed = persister.persistDocument(bill, pieces(bill, 0..2)) +
             persister.beginDocument(bill) +                 // read again from the start
             persister.deletePartialByContentHash("h1")      // and repaired
-        assertTrue("the saved item is never among the rows removed: $removed", "bill" !in removed)
+        assertTrue("the file's own row is never among the rows removed: $removed", "bill" !in removed)
 
-        assertEquals(listOf(saved), db.vaultDao().getAll())
-        assertEquals(listOf("stash"), db.stashItemDao().getStashItemsByType("SAVED").first().map { it.stashId })
+        assertEquals(listOf(shared), db.vaultDao().getAll())
         assertNull(db.vaultDocumentDao().getById("bill"))
     }
 }

@@ -71,15 +71,6 @@ class ShareImportWorker @dagger.assisted.AssistedInject constructor(
                             .addShared(vaultItem, localPath)
                     }
                     // Videos, audio, general files skip heavy OCR/indexing for now, but are "COMPLETE"
-
-                    // Try fetching thumbnail if it's a URL and we have a stash item for it
-                    val stashItem = db.stashItemDao().getByVaultItemId(vaultItem.id)
-                    if (stashItem != null && stashItem.thumbnailPath == null) {
-                        val thumbPath = ThumbnailFetcher.fetchThumbnail(applicationContext, uriStr, stashItem.id)
-                        if (thumbPath != null) {
-                            db.stashItemDao().updateThumbnailPath(stashItem.id, thumbPath)
-                        }
-                    }
                 }
 
                 attachmentDao.updateStatus(attachment.id, AttachmentStatus.COMPLETE)
@@ -92,7 +83,7 @@ class ShareImportWorker @dagger.assisted.AssistedInject constructor(
                     uri = attachment.localPath ?: attachment.originalUri,
                     throwable = e,
                     reason = "Stage-2 enrichment failed for attachment ${attachment.id}",
-                    recovery = "attachment marked FAILED; Stage-1 saved item remains fully usable"
+                    recovery = "attachment marked FAILED; the item from Stage 1 remains fully usable"
                 )
                 attachmentDao.updateStatus(attachment.id, AttachmentStatus.FAILED)
                 allEnriched = false

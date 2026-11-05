@@ -9,7 +9,7 @@ import android.util.Log
  * id, so a full capture can be reconstructed from logcat:
  *
  *   RECEIVED → PERMISSION_GRANTED → COPIED → METADATA_EXTRACTED → HASH_GENERATED
- *   → DEDUP_COMPLETE → VAULT_SAVED → STASH_SAVED → WORKER_QUEUED → WORKER_COMPLETE
+ *   → DEDUP_COMPLETE → VAULT_SAVED → WORKER_QUEUED → WORKER_COMPLETE
  *
  * Failures never happen silently: [failure] records the stage, mime, uri,
  * exception, human reason and the recovery path taken.
@@ -27,7 +27,6 @@ object CaptureTelemetry {
         HASH_GENERATED,
         DEDUP_COMPLETE,
         VAULT_SAVED,
-        STASH_SAVED,
         WORKER_QUEUED,
         WORKER_COMPLETE,
         ENRICH_COMPLETE,

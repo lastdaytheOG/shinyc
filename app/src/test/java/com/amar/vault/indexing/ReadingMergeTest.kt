@@ -14,7 +14,7 @@ import org.junit.Test
  */
 class ReadingMergeTest {
 
-    /** The merge as it was, copied from ImageContentExtractor.mergeAllOcrResults. */
+    /** The merge as it was until 2026-11 (ImageContentExtractor.mergeAllOcrResults, now gone), to compare with. */
     private fun formerMerge(readings: List<String>): List<String> {
         val seen = mutableSetOf<String>()
         val unique = mutableListOf<String>()
@@ -179,5 +179,99 @@ class ReadingMergeTest {
         val twice = readings.flatMap { words.findAll(it.lowercase()).map { w -> w.value }.toSet() }.groupingBy { it }.eachCount().filterValues { it >= 2 }.keys
         assertEquals(emptySet<String>(), twice.filterNot { it in stored }.toSet())
         assertEquals(4, stored.lines().size)
+    }
+
+    // ── A number is never a repeat until it is stored as often as its reading says it ──
+
+    private fun timesOf(number: String, text: String) = text.split(Regex("[^\\p{L}\\p{N}]+")).count { it == number }
+
+    @Test
+    fun anAmountATableSaysTwiceIsStoredTwice() {
+        // One reader joined the row and the other split it: "493 910" adds no word to "493" and "910".
+        val stored = ReadingMerge.text(listOf("1321 910\n493 910", "1321 910\n493\n910"))
+        assertEquals(2, timesOf("910", stored))
+        assertEquals(1, timesOf("493", stored))
+    }
+
+    @Test
+    fun aQuantityOfOneDigitIsKept() {
+        assertEquals(1, timesOf("5", ReadingMerge.text(listOf("Ink bottle 5", "Ink bottle\n5"))))
+        assertEquals(1, timesOf("8", ReadingMerge.text(listOf("Paid Rs 8\nTotal", "Total"))))
+    }
+
+    @Test
+    fun aDateWhoseDayIsOnThePageAlreadyIsKept() {
+        val stored = ReadingMerge.text(listOf("01/02/2024 UPI 133643320358\n01/11/2024 UPI 488742918625", "01/02/2024 UPI 133643320358"))
+        assertEquals(2, timesOf("01", stored))
+        assertTrue(stored, "488742918625" in stored)
+    }
+
+    @Test
+    fun aRowJoinedByOneReaderIsNotStoredAThirdTime() {
+        val stored = ReadingMerge.text(listOf("Total Rs 450", "Total Rs\n450"))
+        assertEquals(1, timesOf("450", stored))
+        assertEquals(listOf("Total Rs 450"), stored.lines())
+    }
+
+    @Test
+    fun aNumberReadInTwoGroupingsAsOftenIsKeptBothWaysTheFinerFirst() {
+        assertEquals(listOf("Rs 98,516.43", "Rs 98,51643"), ReadingMerge.text(listOf("Rs 98,51643", "Rs 98,516.43")).lines())
+        assertEquals(listOf("+91 82396 11246", "+91 8239611246"), ReadingMerge.text(listOf("+91 8239611246", "+91 82396 11246")).lines())
+        // Finer is not always right: here a reader put a space into 11.
+        assertEquals(
+            listOf("due on 17/1 1/2023", "due on 17/11/2023"),
+            ReadingMerge.text(listOf("due on 17/1 1/2023", "due on 17/11/2023")).lines(),
+        )
+    }
+
+    @Test
+    fun aGroupingFewerReadingsGaveIsLeftOut() {
+        assertEquals(
+            listOf("due on 17/11/2023"),
+            ReadingMerge.text(listOf("due on 17/11/2023", "due on 17/1 1/2023", "due on 17/11/2023")).lines(),
+        )
+    }
+
+    @Test
+    fun aSecondGroupingIsKeptOnlyForANumberTheFirstDoesNotHave() {
+        // "Total2023" groups no digits the first does not: it is not stored beside "Total 2023".
+        assertEquals(listOf("Total 2023"), ReadingMerge.text(listOf("Total2023", "Total 2023")).lines())
+    }
+
+    @Test
+    fun theSameLineWithTheHindiReadersDigitsIsOneLineOnceTheyArePutRight() {
+        val english = "01/11/2024 UPI 488742918625 83"
+        val hindi = LookAlikeDigits.repaired("\u09E61/11/2024 UPI 488742918625 83")
+        assertEquals(listOf(english), ReadingMerge.text(listOf(english, hindi)).lines())
+    }
+
+    @Test
+    fun aHindiDigitOnALineWithNoHindiIsALetterReadWrong() {
+        assertEquals(
+            listOf("a clerk's ledger, kept in order."),
+            ReadingMerge.text(listOf("a clerk's ledger, kept in order.", "३ clerks ledger, kept in order")).lines(),
+        )
+        assertEquals(
+            listOf("Principles of the ledger, printed in"),
+            ReadingMerge.text(listOf("Principles of the ledger, printed in", "१Pinciples of the ledger, pinted in")).lines(),
+        )
+    }
+
+    @Test
+    fun aHindiNumberOnAHindiLineIsStillANumber() {
+        // Two rooms, not one room read twice.
+        assertEquals(
+            listOf("कमरा २०४ खुला है", "कमरा २०५ खुला है"),
+            ReadingMerge.text(listOf("कमरा २०४ खुला है\nकमरा २०५ खुला है", "कमरा २०४ खुला है\nकमरा २०५ खुला है")).lines(),
+        )
+        assertEquals(
+            listOf("कमरा २०४ खुला है", "कमरा २०५ खुला है"),
+            ReadingMerge.text(listOf("कमरा २०४ खुला है", "कमरा २०५ खुला है")).lines(),
+        )
+        // A page number alone on its line, which only the Hindi reader can read.
+        assertEquals(
+            listOf("वार्षिक रिपोर्ट", "२"),
+            ReadingMerge.text(listOf("वार्षिक रिपोर्ट", "वार्षिक रिपोर्ट\n२")).lines(),
+        )
     }
 }

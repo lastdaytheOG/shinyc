@@ -9,7 +9,6 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -111,7 +110,7 @@ class ShareSeveralFilesDeviceTest {
             runCatching { db.vaultDocumentDao().getById(item.id)?.let { db.vaultDocumentDao().deleteByContentHash(it.contentHash) } }
             runCatching { com.amar.vault.indexing.PdfSourceReuseCache.forget(context, item.contentHash) }
             runCatching { db.documentImportDao().delete(item.id) }
-            db.vaultDao().deleteById(item.id)   // its Saved entry goes with it
+            db.vaultDao().deleteById(item.id)
             bm25.removeDocument(item.id)
             File(item.uri).delete()
         }
@@ -140,9 +139,6 @@ class ShareSeveralFilesDeviceTest {
         }
         Log.i(TAG, "saved: ${saved.map { it.sourceFile }}")
         assertEquals("each shared file is an item of its own", files.keys.sorted(), saved.map { it.sourceFile }.sorted())
-        val entries = db.stashItemDao().getStashItemsByType("SAVED").first().filter { entry -> saved.any { it.id == entry.vaultItemId } }
-        assertEquals("…with its own Saved entry", files.size, entries.size)
-        assertEquals("…all in the one folder that was chosen", 1, entries.map { it.category }.toSet().size)
 
         // Read: each one's own word finds that file.
         val readBy = SystemClock.uptimeMillis() + 120_000

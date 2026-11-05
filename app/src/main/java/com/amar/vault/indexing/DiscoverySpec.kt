@@ -12,9 +12,9 @@ package com.amar.vault.indexing
  *                             entry) means "no folder filter" — scan everything in scope.
  * @property sinceEpochSeconds incremental floor: only rows with `DATE_ADDED > sinceEpochSeconds`
  *                             (MediaStore stores DATE_ADDED in **seconds**). null = no floor.
- * @property dedupAgainstIndexed  when true, pre-filter candidates against the already-indexed URI
- *                             set (Room). When false, emit every candidate and rely on the indexing
- *                             pipeline's own pHash dedup (the bulk path's intentional behaviour).
+ * @property dedupAgainstIndexed  when true, [DiscoveryEngine.discover] pre-filters candidates against
+ *                             the already-indexed URI set (Room). When false, it emits every candidate.
+ *                             The bulk path asks [DiscoveryEngine.toRead] instead.
  */
 data class DiscoverySpec(
     val mediaScope: MediaScope,

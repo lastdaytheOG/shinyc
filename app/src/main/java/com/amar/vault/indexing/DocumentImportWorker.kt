@@ -31,8 +31,14 @@ import java.util.concurrent.atomic.AtomicLong
  * minutes. When it cannot (it was started again by the system with the app closed), it is
  * stopped after ten minutes like any background work — and started again, and each time it
  * carries on from the page it reached ([com.amar.vault.ReadingLog]).
+ *
+ * It runs once for each [ImportLane]: at once for what was just added, and, for what is left of a
+ * long scan, as work that the system starts when the phone is put on charge and stops when it is
+ * taken off.
  */
 class DocumentImportWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+
+    private val lane = if (inputData.getBoolean(KEY_ON_CHARGE, false)) ImportLane.ON_CHARGE else ImportLane.AT_ONCE
 
     override suspend fun getForegroundInfo(): ForegroundInfo =
         foregroundInfo(ImportNotices.reading(applicationContext, null, 0))
@@ -41,14 +47,24 @@ class DocumentImportWorker(context: Context, params: WorkerParameters) : Corouti
         val app = applicationContext
         val db = VaultDatabase.get(app)
         val indexer = DocumentIndexer.getInstance(app)
-        val waiting = db.documentImportDao().countUnfinished()
-        if (waiting == 0) return Result.success()
+        suspend fun leftInThisLane() = db.documentImportDao().unfinished().count(lane::takes)
+        val waiting = leftInThisLane()
+        if (waiting == 0) {
+            handOverToTheCharger(db)
+            return Result.success()
+        }
 
         ImportNotices.ensureChannels(app)
+        val onCharge = lane == ImportLane.ON_CHARGE
         // Refused when the app is not on screen (Android 12 and later): the work then runs as
         // ordinary background work, in ten-minute stretches.
-        var inForeground = showReading(ImportNotices.reading(app, null, waiting))
+        //
+        // Never on the charger. WorkManager ignores a stop for work in the foreground, and that
+        // stop is how this lane ends when the charger is pulled: it would read on, on battery, or
+        // with the app closed freeze still saying it is reading. Its progress is a plain notification.
+        var inForeground = !onCharge && showReading(ImportNotices.reading(app, null, waiting))
         if (!inForeground) VaultLog.i(TAG, "Reading in the background")
+        if (onCharge) ImportNotices.showOnCharge(app, ImportNotices.reading(app, null, waiting))
 
         val startedAt = System.currentTimeMillis()
         val lastShown = AtomicLong(0)
@@ -58,20 +74,32 @@ class DocumentImportWorker(context: Context, params: WorkerParameters) : Corouti
                 baseId = import.id, displayName = import.name, log = log,
             )
         })
-        val ended = reader.readAll(readers = READERS) { row ->
-            if (!inForeground || row.isFinished) return@readAll
-            // A scan finishes a page every few seconds and a text PDF hundreds a second; the
-            // notification is redrawn at most once a second.
-            val now = System.currentTimeMillis()
-            val last = lastShown.get()
-            if (now - last >= 1000 && lastShown.compareAndSet(last, now)) {
-                val left = db.documentImportDao().countUnfinished()
-                inForeground = showReading(ImportNotices.reading(app, row, left))
+        val readers = if (onCharge) 1 else READERS
+        val ended = try {
+            reader.readAll(readers, lane) { row ->
+                if (!(inForeground || onCharge) || row.isFinished || row.waitsForCharger) return@readAll
+                // A scan finishes a page every few seconds and a text PDF hundreds a second; the
+                // notification is redrawn at most once a second.
+                val now = System.currentTimeMillis()
+                val last = lastShown.get()
+                if (now - last >= 1000 && lastShown.compareAndSet(last, now)) {
+                    val notice = ImportNotices.reading(app, row, leftInThisLane())
+                    if (onCharge) ImportNotices.showOnCharge(app, notice) else inForeground = showReading(notice)
+                }
             }
+        } finally {
+            if (onCharge) ImportNotices.clearOnCharge(app)
         }
 
         ImportNotices.ended(app, ended, tookMs = System.currentTimeMillis() - startedAt)
+        handOverToTheCharger(db)
         return Result.success()
+    }
+
+    private suspend fun handOverToTheCharger(db: VaultDatabase) {
+        if (lane == ImportLane.AT_ONCE && db.documentImportDao().countWaitingForCharger() > 0) {
+            startOnCharge(applicationContext)
+        }
     }
 
     /** Puts the work in the foreground under [notification]; false when the system does not allow it. */
@@ -94,8 +122,22 @@ class DocumentImportWorker(context: Context, params: WorkerParameters) : Corouti
     companion object {
         private const val TAG = "DocumentImportWorker"
         const val WORK_NAME = "document_import"
+        private const val ON_CHARGE_WORK_NAME = "document_import_on_charge"
+        private const val KEY_ON_CHARGE = "on_charge"
         /** As many files at a time as the import screen read before there was a queue. */
         private const val READERS = 2
+
+        /** What is left of the long scans is read when the phone is on charge, and stops when it is taken off. */
+        private fun startOnCharge(context: Context) {
+            val request = OneTimeWorkRequestBuilder<DocumentImportWorker>()
+                .setConstraints(androidx.work.Constraints.Builder().setRequiresCharging(true).build())
+                .setInputData(androidx.work.workDataOf(KEY_ON_CHARGE to true))
+                .setBackoffCriteria(BackoffPolicy.LINEAR, 10, TimeUnit.SECONDS)
+                .addTag(ON_CHARGE_WORK_NAME)
+                .build()
+            WorkManager.getInstance(context)
+                .enqueueUniqueWork(ON_CHARGE_WORK_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+        }
 
         /**
          * Sets the reading going. Called for every file added: work already running is left to
@@ -119,6 +161,7 @@ internal object ImportNotices {
     private const val RESULT_CHANNEL = "document_results"
     const val READING_ID = 9002
     private const val RESULT_ID = 9003
+    private const val READING_ON_CHARGE_ID = 9004
     /** A reading shorter than this ends without a notification: the screen showed it happen. */
     private const val WORTH_TELLING_MS = 20_000L
 
@@ -155,14 +198,31 @@ internal object ImportNotices {
             .build()
     }
 
+    /** Shows where the reading on the charger stands; it runs beside the other lane, under its own id. */
+    fun showOnCharge(context: Context, notification: android.app.Notification) {
+        runCatching {
+            if (NotificationManagerCompat.from(context).areNotificationsEnabled()) {
+                NotificationManagerCompat.from(context).notify(READING_ON_CHARGE_ID, notification)
+            }
+        }
+    }
+
+    fun clearOnCharge(context: Context) {
+        runCatching { NotificationManagerCompat.from(context).cancel(READING_ON_CHARGE_ID) }
+    }
+
     /** Says how the files that ended in one run of the worker ended, if it is worth saying. */
     fun ended(context: Context, ended: List<DocumentImport>, tookMs: Long) {
         // A file with no words in it is in the vault under its name: listed, not announced.
         val failed = ended.filter { it.state == ImportState.FAILED && it.failure != ImportFailure.NO_TEXT }
         val read = ended.filter { it.state == ImportState.DONE }
-        if (failed.isEmpty() && (read.isEmpty() || tookMs < WORTH_TELLING_MS)) return
+        // Said once and quietly: someone who shared a long scan and went away should know why
+        // part of it cannot be found yet.
+        val paused = ended.firstOrNull { it.waitsForCharger }
+        val onlyPaused = failed.isEmpty() && read.isEmpty() && paused != null
+        if (!onlyPaused && failed.isEmpty() && (read.isEmpty() || tookMs < WORTH_TELLING_MS)) return
 
-        val (title, body) = words(failed, read)
+        val (title, body) = if (onlyPaused) wordsAboutThePause(paused!!) else words(failed, read)
         runCatching {
             ensureChannels(context)
             if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
@@ -172,11 +232,17 @@ internal object ImportNotices {
                 .setContentText(body.lineSequence().first())
                 .setStyle(NotificationCompat.BigTextStyle().bigText(body))
                 .setAutoCancel(true)
+                .setSilent(onlyPaused)
                 .setContentIntent(openApp(context))
                 .build()
             NotificationManagerCompat.from(context).notify(RESULT_ID, notification)
         }.onFailure { VaultLog.w("ImportNotices", "No notification: ${it.message}") }
     }
+
+    /** The title and the text of the notification about a long scan that now waits for the charger. */
+    internal fun wordsAboutThePause(row: DocumentImport): Pair<String, String> =
+        "${row.name}: ${row.pagesDone} of ${row.pageCount} pages read" to
+            "You can search those now. The rest is read while the phone charges."
 
     /** The title and the text of the notification about [failed] and [read]. */
     internal fun words(failed: List<DocumentImport>, read: List<DocumentImport>): Pair<String, String> {

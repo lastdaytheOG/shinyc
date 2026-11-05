@@ -46,7 +46,7 @@ enum class ItemType(val stored: String) {
         /**
          * What an item was called before there was one list, where that name alone says what
          * it is. Each of the seven places that index a picture named it its own way — after
-         * the folder it was found in, or the screen that indexed it — and a saved link was
+         * the folder it was found in, or the screen that indexed it — and a shared link was
          * named after its site.
          */
         private val FORMER_NAMES: Map<String, ItemType> = mapOf(

@@ -16,7 +16,7 @@ class OcrAblationMathTest {
 
     private fun run(s: OcrStrategy, text: String, ms: Double) = RecordedRun(s, text, ms)
 
-    // ── mergeLines mirrors the production merge ───────────────────────────────
+    // ── mergeLines is the production merge ───────────────────────────────
 
     @Test
     fun `merge dedupes case and whitespace variants`() {
@@ -25,16 +25,13 @@ class OcrAblationMathTest {
     }
 
     @Test
-    fun `merge evicts substrings from the dedup set but keeps already-emitted lines`() {
-        // Production semantics: when a longer superset line arrives, the shorter line is removed
-        // from `seen` (so future dedup checks use the longer one) but it has ALREADY been emitted
-        // — both lines appear in the merged output. The mirror must reproduce this exactly.
+    fun `merge keeps a line that adds a number and its shorter reading`() {
         val merged = OcrAblationMath.mergeLines(listOf("total", "grand total 450"))
         assertEquals(listOf("total", "grand total 450"), merged)
     }
 
     @Test
-    fun `merge skips lines already covered by an earlier longer line`() {
+    fun `merge leaves out a line that repeats words already stored`() {
         val merged = OcrAblationMath.mergeLines(listOf("grand total 450", "total"))
         assertEquals(listOf("grand total 450"), merged)
     }
@@ -146,10 +143,10 @@ class OcrAblationMathTest {
     @Test
     fun `full merged text matches production join semantics`() {
         val runs = listOf(
-            run(OcrStrategy.RAW, "Line A\nline b", 10.0),
-            run(OcrStrategy.GRAYSCALE, "LINE B\nLine C", 10.0),
+            run(OcrStrategy.RAW, "Line alpha\nline beta", 10.0),
+            run(OcrStrategy.GRAYSCALE, "LINE BETA\nLine gamma", 10.0),
         )
         val img = OcrAblationMath.evaluate("img7", runs)!!
-        assertEquals("Line A\nline b\nLine C", img.fullMergedText)
+        assertEquals("Line alpha\nline beta\nLine gamma", img.fullMergedText)
     }
 }

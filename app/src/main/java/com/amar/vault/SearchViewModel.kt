@@ -15,16 +15,13 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.UUID
 import javax.inject.Inject
-import com.amar.vault.pipeline.stages.RepositoryMapper
-import com.amar.vault.ui.renderengine.core.RichSavedItemBuilder
-import com.amar.vault.ui.renderengine.models.RichSavedItem
 
 /**
  * One row of the search result list: the card to show and, when a document was found by the
  * words on one of its pages, where in it — so the card can say so and a tap can open that page.
  */
 data class SearchHit(
-    val row: StashItemWithVaultItem,
+    val row: VaultItem,
     /**
      * The PDF page (1-based) the query was found on. Null when no page's text matched (the
      * document was found by its name) and for anything that is not a PDF.
@@ -109,37 +106,27 @@ internal object MatchExcerpt {
 
 /**
  * Turns matched rows into result cards, one per document: the first of a document's pages in
- * [rows]' order stands for it, shown as the Saved item the document belongs to when it has one.
- * A shared PDF found by the words on one of its pages is then the PDF the user saved, with its
- * folder, note and favourite — not a separate, nameless page.
- *
- * [matched] are the items [rows] were built from; they carry each row's owning document, and
- * the page and text that [queryWords] are looked for in.
+ * [rows]' order stands for it. A card carries the page and the words [queryWords] were found by.
  */
 internal fun oneCardPerDocument(
-    rows: List<StashItemWithVaultItem>,
-    matched: List<VaultItem>,
-    savedByVaultId: Map<String, StashItemWithVaultItem>,
+    rows: List<VaultItem>,
     queryWords: List<String> = emptyList(),
 ): List<SearchHit> {
-    val matchedById = matched.associateBy { it.id }
     val shown = HashSet<String>()
     return rows.mapNotNull { row ->
-        val found = matchedById[row.vaultItemId]
-        val document = found?.parentDocumentId
-        if (!shown.add(document ?: row.vaultItemId)) return@mapNotNull null
-        val exact = found?.let { MatchExcerpt.of(it.ocrText, queryWords) }
+        if (!shown.add(row.parentDocumentId ?: row.id)) return@mapNotNull null
+        val exact = MatchExcerpt.of(row.ocrText, queryWords)
         // No typed word on the page, and none in the name either: it is here for a word spelt
         // nearly the same, or else for a tag.
-        val unexplained = found?.takeIf { exact == null }?.takeIf { item ->
+        val unexplained = row.takeIf { exact == null }?.takeIf { item ->
             val name = com.amar.vault.retrieval.SearchableName.of(item).lowercase()
             queryWords.none { name.contains(it) }
         }
         val similar = unexplained?.let { MatchExcerpt.similarWord(it.ocrText, queryWords) }
-        val excerpt = exact ?: if (found != null && similar != null) MatchExcerpt.of(found.ocrText, listOf(similar)) else null
+        val excerpt = exact ?: similar?.let { MatchExcerpt.of(row.ocrText, listOf(it)) }
         SearchHit(
-            row = document?.let(savedByVaultId::get) ?: row,
-            page = found?.pdfPage?.takeIf { excerpt != null },
+            row = row,
+            page = row.pdfPage?.takeIf { excerpt != null },
             excerpt = excerpt,
             similarWord = similar,
             filedUnder = unexplained?.takeIf { similar == null }?.let { MatchExcerpt.tag(it.tags, queryWords) },
@@ -216,97 +203,12 @@ class SearchViewModel @Inject constructor(
     private val modelDao = db.localModelDao()
     private val gson = Gson()
 
+    // Every write to the table reads all of it again, text and all, so only while a screen is
+    // looking: left running, it went on for as long as the app was open once Photos had been seen,
+    // over and over during a scan.
     val allItems: StateFlow<List<VaultItem>> = db.vaultDao()
         .getAllItems()
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-
-    val stashItems: StateFlow<List<StashItemWithVaultItem>> = db.stashItemDao()
-        .getStashItemsByType("SAVED")
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-
-    // Derived facts (resolution/pages/size) are stable per file — cache so we don't
-    // re-inspect files on every DB emission of the Saved list.
-    private val derivedFactsCache =
-        java.util.concurrent.ConcurrentHashMap<String, com.amar.vault.ui.renderengine.models.SavedDerivedFacts>()
-
-    /** True until the Saved feed has resolved for the first time (drives the skeleton). */
-    val isSavedLoading = MutableStateFlow(true)
-
-    // Batched metadata query + cached file-fact derivation, shared by the Saved and
-    // Archive feeds so both avoid the old N+1 storm.
-    private suspend fun toRichItems(items: List<StashItemWithVaultItem>): List<RichSavedItem> {
-        if (items.isEmpty()) return emptyList()
-        return withContext(Dispatchers.IO) {
-            val metaByItem = db.vaultMetadataDao()
-                .getByItemIds(items.map { it.vaultItemId })
-                .groupBy { it.vaultItemId }
-            items.map { item ->
-                val universalMetadata = RepositoryMapper.fromVaultMetadata(
-                    metaByItem[item.vaultItemId] ?: emptyList()
-                )
-                val derived = derivedFactsCache.getOrPut(item.vaultItemId) {
-                    com.amar.vault.ui.renderengine.core.SavedFactDeriver.derive(context, item)
-                }
-                RichSavedItemBuilder.build(item, universalMetadata, derived)
-            }
-        }
-    }
-
-    @OptIn(ExperimentalCoroutinesApi::class)
-    val richStashItems: StateFlow<List<RichSavedItem>> = stashItems
-        .mapLatest { toRichItems(it) }
-        .onEach { if (isSavedLoading.value) isSavedLoading.value = false }
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-
-    // ── Archive feed (reuses vaultType = "ARCHIVED") ──────────────────────────
-    @OptIn(ExperimentalCoroutinesApi::class)
-    val archivedRichItems: StateFlow<List<RichSavedItem>> = db.stashItemDao()
-        .getStashItemsByType("ARCHIVED")
-        .mapLatest { toRichItems(it) }
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-
-    val archivedCountFlow: StateFlow<Int> = db.stashItemDao()
-        .getArchivedCount()
-        .stateIn(viewModelScope, SharingStarted.Lazily, 0)
-
-    // ── Saved organizational preferences (order/pins/recent/sort) ─────────────
-    val savedPrefs: StateFlow<SavedPreferences.Prefs> = SavedPreferences.prefsFlow(context)
-        .stateIn(viewModelScope, SharingStarted.Lazily, SavedPreferences.Prefs())
-
-    // ── Undo (in-memory snapshots; no soft-delete column needed) ──────────────
-    private var pendingDeleteSnapshots: List<StashItem> = emptyList()
-    private var pendingArchiveIds: List<String> = emptyList()
-    val savedUndo = MutableStateFlow<SavedUndo?>(null)
-
-    val categoryCountsFlow: StateFlow<List<CategoryCount>> = db.stashItemDao()
-        .getCategoriesWithCounts()
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-
-    // Album-style category tiles (cover / count / last-updated), computed in-memory
-    // from the already-loaded feed — no extra queries, no schema change.
-    val categorySummaries: StateFlow<List<CategorySummary>> =
-        combine(richStashItems, categoryCountsFlow, savedPrefs) { items, counts, prefs ->
-            val byCat = items.groupBy { it.rawStashItem.category }
-            val fromItems = counts.map { cc ->
-                val group = byCat[cc.category].orEmpty()
-                // Real item thumbnails feed the smart-preview collage (#5).
-                val thumbs = group.mapNotNull { it.thumbnail }.take(4)
-                CategorySummary(
-                    category = cc.category,
-                    count = cc.count,
-                    lastUpdated = group.maxOfOrNull { it.savedAtMillis } ?: 0L,
-                    coverThumbnail = thumbs.firstOrNull(),
-                    previewThumbnails = thumbs
-                )
-            }
-            // Surface user-created folders that have no items yet (#3), so a freshly
-            // created empty folder still appears in the grid.
-            val present = counts.map { it.category }.toSet()
-            val emptyKnown = prefs.knownFolders
-                .filter { it.isNotBlank() && it !in present }
-                .map { name -> CategorySummary(category = name, count = 0, lastUpdated = 0L, coverThumbnail = null) }
-            fromItems + emptyKnown
-        }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     // Chat history Flow with source restoration
     val chatMessages: StateFlow<List<ChatMessage>> = chatDao
@@ -400,7 +302,6 @@ class SearchViewModel @Inject constructor(
 
     val activeFilter = MutableStateFlow(SearchFilter.ALL)
     val recentSearches = MutableStateFlow<List<String>>(emptyList())
-    val searchSuggestions = MutableStateFlow<List<String>>(emptyList())
     val quickFilters = SearchFilter.CHIPS
 
     /**
@@ -453,7 +354,7 @@ class SearchViewModel @Inject constructor(
      * ([com.amar.vault.retrieval.RetrievalResult.photos]), shown as a band above the result list.
      * They are found by what is in them, not by a word they say, and the band says so.
      */
-    val photoMatches = MutableStateFlow<List<StashItemWithVaultItem>>(emptyList())
+    val photoMatches = MutableStateFlow<List<VaultItem>>(emptyList())
 
     /**
      * Takes one reading back. A filter that was written out (`type:pdf`) is taken out of the
@@ -484,13 +385,7 @@ class SearchViewModel @Inject constructor(
         .distinctUntilChanged()
         .transformLatest { (q, chip, more) ->
             val asWords = more.second
-            // Update suggestions whenever query changes (if we wanted to do it instantly, we could put this in an onEach before debounce, but this is fine)
-            if (q.isBlank()) {
-                recentSearches.value = com.amar.vault.search.core.HistoryManager.getRecentSearches()
-                searchSuggestions.value = emptyList()
-            } else {
-                searchSuggestions.value = com.amar.vault.search.core.SuggestionEngine.generateSuggestions(q, com.amar.vault.search.core.SearchIndexManager)
-            }
+            if (q.isBlank()) recentSearches.value = com.amar.vault.search.core.HistoryManager.getRecentSearches()
 
             // Advanced-search operators: parsed additively. The cleaned free-text drives retrieval.
             val ops = SearchOperators.parse(q)
@@ -514,17 +409,8 @@ class SearchViewModel @Inject constructor(
                 yield()
                 // SINGLE retrieval pipeline: RetrievalService → HybridSearchService (BM25 + OCR/substring +
                 // fuzzy + vector + metadata boosts + temporal re-rank) — the same engine the agentic path
-                // uses, so PDFs, OCR screenshots, images, saved links, notes and receipts all search through
-                // one place. Retrieval returns VaultItems; reuse the real Saved row when the item is saved,
-                // otherwise synthesize a wrapper (content-only items such as PDF/document chunks) so every
-                // content type renders without losing any VaultItem information.
-                //
-                // Sourced from Room directly (not the lazily-shared StateFlow snapshots): the shared flows
-                // only start when some screen collects them, so on screens that collect neither (e.g. the
-                // search overlay) `.value` was permanently the initial emptyList — operator-only queries
-                // returned nothing and saved-row reuse silently degraded to synthetic wrappers.
-                val savedByVaultId = db.stashItemDao().getStashItemsByType("SAVED").first()
-                    .associateBy { it.vaultItemId }
+                // uses, so PDFs, OCR screenshots, images, shared links, notes and receipts all search
+                // through one place.
                 val request = com.amar.vault.retrieval.RetrievalRequest.forResultList(effectiveQuery, asWords)
                 val meanings = AcronymDictionary.understoodIn(request.query, asWords)
                 val read = request.plan?.understood.orEmpty()
@@ -536,17 +422,16 @@ class SearchViewModel @Inject constructor(
                 // The chip is asked inside the engine, before its caps: filtered afterwards, a
                 // vault with more documents than the list is long would show no images at all.
                 val only: ((VaultItem) -> Boolean)? = if (chip == SearchFilter.ALL) null else { item ->
-                    SearchFilter.accepts(chip, item, savedByVaultId[item.id] ?: item.parentDocumentId?.let(savedByVaultId::get))
+                    SearchFilter.accepts(chip, item)
                 }
                 // Operators refine (narrow) the ranked results — never re-rank or bypass.
                 // How many results the filters written into the query hide, when they hide all.
                 var hiddenByFilters = 0
                 suspend fun toRows(items: List<VaultItem>): List<SearchHit> {
-                    val base = items.map { vi -> savedByVaultId[vi.id] ?: vi.toStashWrapper() }
-                    val kept = if (ops.hasAny) applyOperators(base, ops) else base
-                    hiddenByFilters = if (kept.isEmpty() && base.isNotEmpty())
-                        oneCardPerDocument(base, items, savedByVaultId, queryWords).size else 0
-                    return oneCardPerDocument(kept, items, savedByVaultId, queryWords)
+                    val kept = if (ops.hasAny) applyOperators(items, ops) else items
+                    hiddenByFilters = if (kept.isEmpty() && items.isNotEmpty())
+                        oneCardPerDocument(items, queryWords).size else 0
+                    return oneCardPerDocument(kept, queryWords)
                 }
                 if (effectiveQuery.isBlank()) {
                     // Operator-only query (e.g. "type:pdf"): no free-text to rank — nothing for the
@@ -571,7 +456,7 @@ class SearchViewModel @Inject constructor(
                         if (isFinal) {
                             // Photos come with the last stage only: the photo model is the slow part.
                             // Filters written into the query narrow them as they narrow the list.
-                            val photoRows = update.result.photos.map { savedByVaultId[it.item.id] ?: it.item.toStashWrapper() }
+                            val photoRows = update.result.photos.map { it.item }
                             photoMatches.value = if (ops.hasAny) applyOperators(photoRows, ops) else photoRows
                             // A period or an amount that left nothing is no longer in force:
                             // its chip goes, and the screen says what is shown instead.
@@ -600,38 +485,9 @@ class SearchViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     /** The same list as plain rows, for the screens that only draw the cards. */
-    val results: StateFlow<List<StashItemWithVaultItem>> = searchHits
+    val results: StateFlow<List<VaultItem>> = searchHits
         .map { hits -> hits.map(SearchHit::row) }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-
-    /**
-     * Adapts a retrieval [VaultItem] into the UI's [StashItemWithVaultItem] shape for content-only
-     * items that have no Saved row (e.g. PDF/document chunks). All VaultItem fields are carried over;
-     * a stable synthetic stashId ("search_<id>") keeps LazyColumn keys unique and makes Saved-only
-     * actions (favorite/delete) safe no-ops on non-saved results.
-     */
-    private fun VaultItem.toStashWrapper(): StashItemWithVaultItem = StashItemWithVaultItem(
-        stashId = "search_$id",
-        sessionId = null,
-        vaultItemId = id,
-        vaultType = "SAVED",
-        category = "",
-        savedAt = timestamp,
-        sourceApp = sourceApp ?: "",
-        isFavorite = false,
-        createdAt = timestamp,
-        userNote = null,
-        thumbnailPath = null,
-        uri = uri,
-        ocrText = ocrText,
-        itemType = itemType,
-        sourceFile = sourceFile,
-        timestamp = timestamp,
-        title = title,
-        mimeType = mimeType,
-        tags = tags,
-        parentDocumentId = parentDocumentId,
-    )
 
     /**
      * Post-filters existing ranked results by parsed operators. Item-field operators (type/ext,
@@ -640,9 +496,9 @@ class SearchViewModel @Inject constructor(
      * fusion, retrieval, or index is touched — this only narrows the already-ranked list.
      */
     private suspend fun applyOperators(
-        items: List<StashItemWithVaultItem>,
+        items: List<VaultItem>,
         ops: ParsedOperators
-    ): List<StashItemWithVaultItem> = withContext(Dispatchers.IO) {
+    ): List<VaultItem> = withContext(Dispatchers.IO) {
         val metaDao = db.vaultMetadataDao()
 
         var allow: Set<String>? = null
@@ -674,9 +530,9 @@ class SearchViewModel @Inject constructor(
                 (ops.after == null || item.timestamp >= ops.after) &&
                 (ops.before == null || item.timestamp < ops.before) &&
                 (!ops.requireOcr || item.ocrText.isNotBlank()) &&
-                (ops.source == null || sequenceOf(item.uri, item.sourceApp, item.sourceFile)
+                (ops.source == null || sequenceOf(item.uri, item.sourceApp.orEmpty(), item.sourceFile)
                     .any { it.contains(ops.source, ignoreCase = true) }) &&
-                (a == null || item.vaultItemId in a)
+                (a == null || item.id in a)
         }
     }
 
@@ -686,38 +542,11 @@ class SearchViewModel @Inject constructor(
         }
     }
 
-    fun toggleSavedFavorite(stashId: String, isFavorite: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) {
-            db.stashItemDao().updateFavorite(stashId, isFavorite)
-            if (isFavorite) SavedPreferences.recordFavorited(context, listOf(stashId))
-        }
-    }
-
-    fun moveSavedCategory(stashId: String, category: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching { db.stashItemDao().updateCategory(stashId, category) }
-                .onSuccess { SavedPreferences.recordMoved(context, listOf(stashId)) }
-                .onFailure { android.util.Log.w("SearchVM", "Move category failed", it) }
-        }
-    }
-
-    fun updateNote(stashId: String, note: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            db.stashItemDao().updateNote(stashId, note)
-        }
-    }
-
-    fun updateThumbnailPath(stashId: String, path: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            db.stashItemDao().updateThumbnailPath(stashId, path)
-        }
-    }
-
     /**
      * Takes [row] out of the vault — the whole document when it is a page of one — and runs
-     * the search again. For a result that is not a Saved entry; [onDone] is told what went.
+     * the search again. [onDone] is told what went.
      */
-    fun removeFromVault(row: StashItemWithVaultItem, onDone: (String?) -> Unit = {}) {
+    fun removeFromVault(row: VaultItem, onDone: (String?) -> Unit = {}) {
         viewModelScope.launch(Dispatchers.IO) {
             val removal = com.amar.vault.indexing.VaultRemoval(
                 db = db,
@@ -734,167 +563,12 @@ class SearchViewModel @Inject constructor(
                         uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
                     )
                 },
+                deleteCopy = { address -> com.amar.vault.indexing.SharedCopy.delete(context.filesDir, address) },
             )
-            val removed = runCatching {
-                if (row.parentDocumentId != null) removal.removeDocument(row.parentDocumentId)
-                else removal.removeItem(row.vaultItemId)
-            }.onFailure { android.util.Log.e("SearchVM", "Could not remove ${row.vaultItemId}", it) }.getOrNull()
+            val removed = runCatching { removal.remove(row) }.onFailure { android.util.Log.e("SearchVM", "Could not remove ${row.id}", it) }.getOrNull()
             refreshSearch()
             withContext(Dispatchers.Main) { onDone(removed?.name) }
         }
-    }
-
-    fun deleteSavedItem(stashId: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            db.stashItemDao().deleteById(stashId)
-        }
-    }
-
-    // ══════════════════════════════════════════════════════════════════════════
-    // Phase 3 — Saved management (bulk ops, categories, archive, undo)
-    // ══════════════════════════════════════════════════════════════════════════
-
-    private fun snapshotsFor(ids: Collection<String>): List<StashItem> {
-        val byId = (richStashItems.value + archivedRichItems.value).associateBy { it.id }
-        return ids.mapNotNull { byId[it]?.rawStashItem?.toStashItem() }
-    }
-
-    fun bulkMove(ids: List<String>, category: String) {
-        if (ids.isEmpty()) return
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching { db.stashItemDao().bulkSetCategory(ids, category) }
-                .onSuccess { SavedPreferences.recordMoved(context, ids) }
-                .onFailure { android.util.Log.w("SearchVM", "bulkMove failed", it) }
-        }
-    }
-
-    fun bulkFavorite(ids: List<String>, favorite: Boolean) {
-        if (ids.isEmpty()) return
-        viewModelScope.launch(Dispatchers.IO) {
-            db.stashItemDao().bulkSetFavorite(ids, favorite)
-            if (favorite) SavedPreferences.recordFavorited(context, ids)
-        }
-    }
-
-    fun bulkArchive(ids: List<String>) {
-        if (ids.isEmpty()) return
-        viewModelScope.launch(Dispatchers.IO) {
-            pendingArchiveIds = ids.toList()
-            runCatching { db.stashItemDao().bulkSetType(ids, "ARCHIVED") }
-                .onFailure { android.util.Log.w("SearchVM", "archive failed", it) }
-            savedUndo.value = SavedUndo(
-                message = if (ids.size == 1) "1 item archived" else "${ids.size} items archived",
-                kind = SavedUndo.Kind.ARCHIVE
-            )
-        }
-    }
-
-    fun bulkUnarchive(ids: List<String>) {
-        if (ids.isEmpty()) return
-        viewModelScope.launch(Dispatchers.IO) { db.stashItemDao().bulkSetType(ids, "SAVED") }
-    }
-
-    fun bulkDelete(ids: List<String>) {
-        if (ids.isEmpty()) return
-        viewModelScope.launch(Dispatchers.IO) {
-            pendingDeleteSnapshots = snapshotsFor(ids)
-            runCatching { db.stashItemDao().bulkDelete(ids) }
-                .onFailure { android.util.Log.w("SearchVM", "bulkDelete failed", it) }
-            savedUndo.value = SavedUndo(
-                message = if (ids.size == 1) "1 item deleted" else "${ids.size} items deleted",
-                kind = SavedUndo.Kind.DELETE
-            )
-        }
-    }
-
-    /** Re-applies the most recent destructive action's inverse. */
-    fun performUndo() {
-        val undo = savedUndo.value ?: return
-        viewModelScope.launch(Dispatchers.IO) {
-            when (undo.kind) {
-                SavedUndo.Kind.DELETE -> {
-                    pendingDeleteSnapshots.forEach { db.stashItemDao().insertOrUpdate(it) }
-                    pendingDeleteSnapshots = emptyList()
-                }
-                SavedUndo.Kind.ARCHIVE -> {
-                    if (pendingArchiveIds.isNotEmpty()) {
-                        db.stashItemDao().bulkSetType(pendingArchiveIds, "SAVED")
-                        pendingArchiveIds = emptyList()
-                    }
-                }
-            }
-            savedUndo.value = null
-        }
-    }
-
-    fun clearUndo() {
-        savedUndo.value = null
-        pendingDeleteSnapshots = emptyList()
-        pendingArchiveIds = emptyList()
-    }
-
-    // ── Category management ────────────────────────────────────────────────────
-
-    fun renameCategory(oldName: String, newName: String) {
-        val clean = newName.trim()
-        if (clean.isBlank() || clean == oldName) return
-        viewModelScope.launch(Dispatchers.IO) {
-            db.stashItemDao().renameCategory(oldName, clean)
-            SavedPreferences.onCategoryRenamed(context, oldName, clean)
-        }
-    }
-
-    /** Merge = fold one category's items into another (rename into an existing name). */
-    fun mergeCategory(from: String, into: String) {
-        if (from == into) return
-        viewModelScope.launch(Dispatchers.IO) {
-            db.stashItemDao().renameCategory(from, into)
-            SavedPreferences.onCategoryRenamed(context, from, into)
-        }
-    }
-
-    /** Delete a category by moving its items to Uncategorized (empty category). */
-    fun deleteCategory(name: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            db.stashItemDao().renameCategory(name, "")
-            SavedPreferences.onCategoryRemoved(context, name)
-        }
-    }
-
-    fun togglePinCategory(name: String) {
-        viewModelScope.launch(Dispatchers.IO) { SavedPreferences.togglePin(context, name) }
-    }
-
-    /** Create a folder with a chosen appearance (#3/#4). Persists to DataStore and
-     * registers the name so an empty folder still surfaces in the grid. */
-    fun createFolder(name: String, meta: FolderMeta) {
-        val clean = name.trim()
-        if (clean.isBlank()) return
-        viewModelScope.launch(Dispatchers.IO) { SavedPreferences.saveFolderMeta(context, clean, meta) }
-    }
-
-    fun setCategoryOrder(order: List<String>) {
-        viewModelScope.launch(Dispatchers.IO) { SavedPreferences.setCategoryOrder(context, order) }
-    }
-
-    // ── Sort + recently-opened ─────────────────────────────────────────────────
-
-    fun setSavedSort(sort: SavedSortOption) {
-        viewModelScope.launch(Dispatchers.IO) { SavedPreferences.setSort(context, sort) }
-    }
-
-    fun recordOpened(stashId: String) {
-        viewModelScope.launch(Dispatchers.IO) { SavedPreferences.recordOpened(context, stashId) }
-    }
-
-    /** Related attachments = other items captured in the same share session. */
-    suspend fun fetchRelated(item: RichSavedItem): List<RichSavedItem> {
-        val sessionId = item.rawStashItem.sessionId ?: return emptyList()
-        if (sessionId.isBlank()) return emptyList()
-        val rows = withContext(Dispatchers.IO) {
-            db.stashItemDao().getBySessionId(sessionId, item.id)
-        }
-        return toRichItems(rows)
     }
 
     fun sendAgenticQuery(queryText: String) {

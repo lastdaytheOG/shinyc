@@ -126,8 +126,12 @@ class ImportFailureTest {
         assertEquals("Read", ImportWords.progress(row.copy(state = ImportState.DONE)))
         assertEquals("Already in your vault", ImportWords.progress(row.copy(state = ImportState.ALREADY_THERE)))
         assertEquals(
-            "This PDF is locked with a password, so its text cannot be read.",
+            "This PDF is locked with a password.",
             ImportWords.progress(row.copy(state = ImportState.FAILED, failure = ImportFailure.LOCKED)),
+        )
+        assertEquals(
+            "That password did not open this PDF.",
+            ImportWords.progress(row.copy(state = ImportState.FAILED, failure = ImportFailure.LOCKED, failureDetail = DocumentImport.WRONG_PASSWORD)),
         )
     }
 
@@ -138,8 +142,7 @@ class ImportFailureTest {
         val (title, body) = ImportNotices.words(failed = listOf(locked), read = emptyList())
         assertEquals("Could not read Statement.pdf", title)
         assertEquals(
-            "This PDF is locked with a password, so its text cannot be read. " +
-                "Open it in another app with its password, print it to a new PDF, and add that one.",
+            "This PDF is locked with a password. Open Import documents and type its password.",
             body,
         )
 

@@ -57,7 +57,7 @@ class PictureReadingDeviceTest {
     private val word = Regex("[\\p{L}\\p{M}\\p{N}]+")
     private fun wordsOf(text: String) = word.findAll(text.lowercase()).map { it.value }.toList()
 
-    /** The merge as it was, copied from ImageContentExtractor.mergeAllOcrResults. */
+    /** The merge as it was until 2026-11 (ImageContentExtractor.mergeAllOcrResults, now gone), to compare with. */
     private fun formerMerge(readings: List<String>): List<String> {
         val seen = mutableSetOf<String>()
         val unique = mutableListOf<String>()

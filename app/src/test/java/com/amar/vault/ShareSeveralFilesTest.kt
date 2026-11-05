@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.room.Room
 import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -52,23 +51,21 @@ class ShareSeveralFilesTest {
     )
 
     /** Saves a share the way the capture does, inside its transaction. */
-    private suspend fun save(attachments: List<IngestionAttachment>, folder: String = "Bills"): List<IngestionAttachment> {
+    private suspend fun save(attachments: List<IngestionAttachment>): List<IngestionAttachment> {
         val toSave = SharedFiles.toSave(resolver.resolve(attachments).primaryAttachment, attachments)
         db.withTransaction {
             db.ingestionSessionDao().insert(session)
             toSave.forEachIndexed { position, attachment ->
                 ShareCaptureManager.saveOne(
-                    db, session, attachment, resolver.resolve(listOf(attachment)), folder, userNote = "tax 2026", at = 100L + position,
+                    db, session, attachment, resolver.resolve(listOf(attachment)), at = 100L + position,
                 )
             }
         }
         return toSave
     }
 
-    private suspend fun saved() = db.stashItemDao().getStashItemsByType("SAVED").first()
-
     @Test
-    fun everyFileOfAShareBecomesAnItemWithItsOwnSavedEntry() = runBlocking {
+    fun everyFileOfAShareBecomesAnItem() = runBlocking {
         save(listOf(
             file("Rent.pdf", "application/pdf"), file("Power.pdf", "application/pdf"),
             file("Receipt.jpg", "image/jpeg"), file("Budget.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
@@ -78,11 +75,6 @@ class ShareSeveralFilesTest {
         assertEquals(listOf("Rent.pdf", "Power.pdf", "Receipt.jpg", "Budget.xlsx"), items.map { it.sourceFile })
         assertEquals(listOf(ItemType.PDF, ItemType.PDF, ItemType.PHOTO, ItemType.EXCEL), items.map { it.itemType })
         assertEquals("each is opened from its own copy", 4, items.map { it.uri }.toSet().size)
-
-        val entries = saved()
-        assertEquals(items.map { it.id }.toSet(), entries.map { it.vaultItemId }.toSet())
-        assertEquals(setOf("Bills"), entries.map { it.category }.toSet())
-        assertEquals(setOf("tax 2026"), entries.map { it.userNote }.toSet())
     }
 
     @Test
@@ -106,7 +98,6 @@ class ShareSeveralFilesTest {
         assertEquals("hash-Rent.pdf", item.contentHash)
         assertEquals("Rent.pdf", item.title)
         assertEquals(5L, item.sharedAt)
-        assertEquals(1, saved().size)
     }
 
     @Test
@@ -142,7 +133,6 @@ class ShareSeveralFilesTest {
         ))
 
         assertEquals(2, db.vaultDao().getAll().size)
-        assertEquals(2, saved().size)
     }
 
     @Test

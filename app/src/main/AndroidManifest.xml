@@ -68,12 +68,6 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Direct Share / Sharing Shortcuts declaration (Phase 5C #2). Must live
-                 on the launcher activity; the <share-target> + runtime shortcuts do
-                 the rest. Adds a share surface only — no navigation change. -->
-            <meta-data
-                android:name="android.app.shortcuts"
-                android:resource="@xml/shortcuts" />
         </activity>
 
         <activity

@@ -2,6 +2,7 @@ package com.amar.vault.indexing
 
 import android.graphics.Bitmap
 import com.amar.vault.VaultDao
+import com.amar.vault.VaultItem
 import java.security.MessageDigest
 
 /**
@@ -9,9 +10,11 @@ import java.security.MessageDigest
  * orchestrators. The image and document paths solve different problems and are intentionally NOT
  * unified:
  *
- *  - **Image path → perceptual hash (pHash).** Near-identical screenshots collapse to the same
- *    64-bit hash; an exact-hash existence check skips re-indexing. The pHash is also the value
- *    stored on the item, so [imageVerdict] returns it alongside the verdict.
+ *  - **Image path → perceptual hash (pHash), then the pixels.** A picture with the same 64-bit hash
+ *    as a stored one is looked at beside it ([SamePicture]), and only the same picture is skipped.
+ *    The hash is eight by eight cells of light and dark: on 36 system screens, All Apps and a dark
+ *    Settings home had the hash of a screen that looks nothing like either, and were never stored
+ *    and could never be found. The pHash is also the value stored on the item.
  *  - **Document path → exact content hash + partial-repair.** SHA-256 of the joined page text,
  *    plus a chunk-count comparison distinguishing a *complete* duplicate (skip) from a *partial*
  *    prior index (a crash mid-loop left half the chunks — repair by deleting the partial rows and
@@ -22,16 +25,33 @@ import java.security.MessageDigest
  * write owned by [IndexPersister], invoked by the orchestrator when the verdict is [DocVerdict.Partial]
  * — keeping IndexPersister the sole indexing-path Room writer (Phase 0 boundary, unchanged).
  */
-class DuplicateDetector(private val dao: VaultDao) {
+class DuplicateDetector(
+    private val dao: VaultDao,
+    /** A stored picture as it is on the phone; null when it cannot be read any more. */
+    private val openStored: (uri: String) -> Bitmap? = { null },
+) {
 
-    // ── Image path: perceptual hash ───────────────────────────────────────────
+    // ── Image path: perceptual hash, then the pixels ──────────────────────────
 
-    /** The computed pHash and whether an item with that exact pHash already exists. */
-    data class ImageVerdict(val pHash: Long, val isDuplicate: Boolean)
+    fun hashOf(bitmap: Bitmap): Long = computePHash(bitmap)
 
-    suspend fun imageVerdict(bitmap: Bitmap): ImageVerdict {
-        val hash = computePHash(bitmap)
-        return ImageVerdict(hash, dao.hashExists(hash))
+    /** Whether a stored item has this hash, whatever it looks like. */
+    suspend fun hashStored(hash: Long): Boolean = dao.hashExists(hash)
+
+    /**
+     * The row this very picture is already stored under, if there is one: the one with its address,
+     * or one with its hash that has its pixels. [bitmap] is the picture at [uri], decoded.
+     */
+    suspend fun storedCopy(bitmap: Bitmap, hash: Long, uri: String): VaultItem? {
+        val rows = dao.picturesWithHash(hash)
+        return rows.firstOrNull { it.uri == uri } ?: rows.firstOrNull { row ->
+            val stored = openStored(row.uri) ?: return@firstOrNull false
+            try {
+                SamePicture.of(bitmap, stored)
+            } finally {
+                stored.recycle()
+            }
+        }
     }
 
     // ── Document path: content hash + partial-repair ──────────────────────────
@@ -87,5 +107,60 @@ class DuplicateDetector(private val dao: VaultDao) {
     private fun String.sha256(): String {
         val d = MessageDigest.getInstance("SHA-256"); val h = d.digest(toByteArray(Charsets.UTF_8))
         return h.joinToString("") { "%02x".format(it) }
+    }
+}
+
+/**
+ * Whether two decoded pictures are the same picture: the same size, and nowhere different by more
+ * than a re-save at high quality makes them. Blocks are compared rather than the whole, so that one
+ * changed figure on a receipt, which hardly moves an average over the picture, still makes it another
+ * picture. Two screenshots that differ only in the clock are two pictures: nothing here can tell that
+ * a clock does not matter and an amount does.
+ */
+internal object SamePicture {
+
+    private const val BLOCK = 16
+
+    /** How far a block's pixels may differ on average, of 255, in any colour. */
+    private const val MOST_A_BLOCK_MAY_DIFFER = 4
+
+    fun of(a: Bitmap, b: Bitmap): Boolean {
+        if (a.width != b.width || a.height != b.height) return false
+        val w = a.width
+        val pa = IntArray(w * BLOCK)
+        val pb = IntArray(w * BLOCK)
+        var y = 0
+        while (y < a.height) {
+            val rows = minOf(BLOCK, a.height - y)
+            a.getPixels(pa, 0, w, 0, y, w, rows)
+            b.getPixels(pb, 0, w, 0, y, w, rows)
+            if (!rowsAlike(pa, pb, w, rows)) return false
+            y += rows
+        }
+        return true
+    }
+
+    /** [a] and [b] are [rows] rows of [w] pixels, up to [BLOCK] of them: is every block of them alike? */
+    internal fun rowsAlike(a: IntArray, b: IntArray, w: Int, rows: Int): Boolean {
+        val sums = IntArray(w / BLOCK + 1)
+        val counts = IntArray(sums.size)
+        for (r in 0 until rows) {
+            val at = r * w
+            for (x in 0 until w) {
+                val p = a[at + x]
+                val q = b[at + x]
+                if (p == q) {
+                    counts[x / BLOCK]++
+                    continue
+                }
+                val dr = kotlin.math.abs(((p shr 16) and 0xFF) - ((q shr 16) and 0xFF))
+                val dg = kotlin.math.abs(((p shr 8) and 0xFF) - ((q shr 8) and 0xFF))
+                val db = kotlin.math.abs((p and 0xFF) - (q and 0xFF))
+                sums[x / BLOCK] += maxOf(dr, dg, db)
+                counts[x / BLOCK]++
+            }
+        }
+        for (i in sums.indices) if (sums[i] > MOST_A_BLOCK_MAY_DIFFER * counts[i]) return false
+        return true
     }
 }

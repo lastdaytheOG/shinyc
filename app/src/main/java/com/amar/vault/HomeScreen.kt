@@ -1,7 +1,5 @@
 package com.amar.vault
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -13,8 +11,6 @@ import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -31,40 +27,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.rememberAsyncImagePainter
 import com.amar.vault.ui.theme.*
 import com.amar.vault.bounceClick
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.ui.draw.shadow
-
-private val BookmarkIcon = ImageVector.Builder(
-    name = "Bookmark",
-    defaultWidth = 24.dp,
-    defaultHeight = 24.dp,
-    viewportWidth = 24f,
-    viewportHeight = 24f
-).path(
-    fill = SolidColor(Color.Black)
-) {
-    moveTo(17f, 3f)
-    lineTo(7f, 3f)
-    curveTo(5.9f, 3f, 5f, 3.9f, 5f, 5f)
-    lineTo(5f, 21f)
-    lineTo(12f, 18f)
-    lineTo(19f, 21f)
-    lineTo(19f, 5f)
-    curveTo(19f, 3.9f, 18.1f, 3f, 17f, 3f)
-    close()
-}.build()
 
 /** A page with a folded corner and two lines of text. */
 private val DocumentIcon = ImageVector.Builder(
@@ -104,11 +76,8 @@ private val DocumentIcon = ImageVector.Builder(
 
 @Composable
 fun HomeScreen(
-    stashItems: List<StashItemWithVaultItem>,
     isSyncing: Boolean,
     onSearchTriggerClick: () -> Unit,
-    onSavedClick: () -> Unit,
-    onRecentItemClick: (StashItemWithVaultItem) -> Unit,
     onAgenticClick: () -> Unit,
     onPhotosClick: () -> Unit,
     onDocumentsClick: () -> Unit,
@@ -182,45 +151,7 @@ fun HomeScreen(
             onDocumentsClick = onDocumentsClick,
         )
 
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 12.dp, bottom = 36.dp),
-            contentAlignment = Alignment.BottomCenter
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier
-                    .bounceClick { onSavedClick() }
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .shadow(4.dp, shape = CircleShape)
-                        .background(
-                            brush = Brush.radialGradient(
-                                colors = listOf(WarmBrown, WarmBrownDark)
-                            ),
-                            shape = CircleShape
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = BookmarkIcon,
-                        contentDescription = "Stash",
-                        tint = Cream,
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "Stash",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = WarmBrownDark
-                )
-            }
-        }
+        Spacer(Modifier.height(24.dp))
     }
 }
 
@@ -281,7 +212,7 @@ private fun HomeGlance(modifier: Modifier, onSearch: (String) -> Unit, onDocumen
     val pictures by remember { db.vaultDao().observePictureCount() }.collectAsState(initial = -1)
     val newest by remember { db.vaultDocumentDao().observeNewest(4) }.collectAsState(initial = emptyList())
     val imports by remember { db.documentImportDao().observeAll() }.collectAsState(initial = emptyList())
-    val reading = imports.filter { !it.isFinished }
+    val reading = imports.filter { !it.isFinished && !it.waitsForCharger }
     val searches = remember { com.amar.vault.search.core.HistoryManager.getRecentSearches().take(6) }
 
     Column(modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
@@ -412,96 +343,5 @@ private fun openDocument(context: android.content.Context, document: VaultDocume
                 sourceFile = document.name, timestamp = document.addedAt, title = document.name,
             ),
         )
-    }
-}
-
-@Composable
-private fun SavedItemRowCard(item: StashItemWithVaultItem, onClick: () -> Unit) {
-    Card(
-        modifier = Modifier
-            .width(140.dp)
-            .height(130.dp)
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = CreamLight),
-        border = BorderStroke(1.dp, CreamDark)
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .background(Color(0xFFE5DCD0)),
-                contentAlignment = Alignment.Center
-            ) {
-                if (item.itemType.isImage) {
-                    val painter = rememberAsyncImagePainter(model = item.uri)
-                    Image(
-                        painter = painter,
-                        contentDescription = "Saved item",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
-                    val emoji = when (item.itemType) {
-                        ItemType.LINK -> when (LinkSite.of(item.uri)) {
-                            LinkSite.YOUTUBE -> "🎥"
-                            LinkSite.REDDIT -> "🤖"
-                            LinkSite.OTHER -> "🔗"
-                        }
-                        ItemType.TEXT -> "📝"
-                        ItemType.PDF -> "📄"
-                        else -> "📁"
-                    }
-                    Text(text = emoji, fontSize = 28.sp)
-                }
-            }
-            Column(modifier = Modifier.padding(8.dp)) {
-                val displayTitle = item.title ?: item.sourceFile.takeIf { it.isNotBlank() } ?: when (item.itemType) {
-                    ItemType.SCREENSHOT -> "Screenshot"
-                    ItemType.PHOTO -> "Photo"
-                    ItemType.LINK -> when (LinkSite.of(item.uri)) {
-                        LinkSite.YOUTUBE -> "YouTube"
-                        LinkSite.REDDIT -> "Reddit"
-                        LinkSite.OTHER -> "Document"
-                    }
-                    ItemType.TEXT -> "Text Note"
-                    ItemType.PDF -> "PDF Document"
-                    else -> "Document"
-                }
-                Text(
-                    text = displayTitle,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = CharcoalSoft,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(2.dp))
-                val appLabel = if (item.sourceApp.isNotBlank()) "from ${item.sourceApp}" else formatRelativeTime(item.savedAt)
-                Text(
-                    text = appLabel,
-                    fontSize = 10.sp,
-                    color = WarmBrown,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-    }
-}
-
-private fun formatRelativeTime(timestamp: Long): String {
-    val diff = System.currentTimeMillis() - timestamp
-    val seconds = diff / 1000
-    val minutes = seconds / 60
-    val hours = minutes / 60
-    val days = hours / 24
-
-    return when {
-        days > 0 -> "$days days ago"
-        hours > 0 -> "$hours hr ago"
-        minutes > 0 -> "$minutes min ago"
-        else -> "Just now"
     }
 }

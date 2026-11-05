@@ -74,7 +74,7 @@ class ContentPriorityResolver {
     }
 
     /**
-     * What the saved item is. A link is a link whichever site it points to ([LinkSite] tells
+     * What the shared item is. A link is a link whichever site it points to ([LinkSite] tells
      * the site from the address when it is shown).
      */
     private fun determinePreviewType(attachment: IngestionAttachment): ItemType {

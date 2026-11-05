@@ -26,7 +26,11 @@ import kotlin.math.min
  * nothing here can tell which is the misreading. And a line that most readings do not have
  * is kept when it says a word nothing else says — that is what the extra readings are for —
  * and left out only when it repeats words already stored, which is what a second engine's
- * joining of two neighbouring lines looks like.
+ * joining of two neighbouring lines looks like. On a line half the readings have, a number repeats
+ * nothing until it is stored as often as its own reading says it: a table says 910 twice, and a
+ * quantity can be one digit. With two readers that is any line one of them has. One read in four
+ * or five is not enough: on real screens those were mostly digits misread. And when as many
+ * readings group a line's digits one way as another, both are stored.
  *
  * Lines come out in the order the readings had them: a line only a later reading saw goes
  * after the line that reading had before it, or, when it is that reading's first, before the
@@ -54,21 +58,33 @@ object ReadingMerge {
         val told = read.count { it.isNotEmpty() }
         if (told < 2) return spots.map { Line(it.sightings[0].text, it.sightings[0].reading, 1) }
 
+        // How often each reading says each number, however many of its lines that takes.
+        val numbersIn = read.map { lines ->
+            HashMap<String, Int>().also { times -> lines.forEach { line -> numbersOf(keyOf(line)).forEach { times.merge(it, 1, Int::plus) } } }
+        }
+
         // What most readings have is the text. Its words are said.
         val kept = HashMap<Spot, List<Sighting>>()
         val said = HashSet<String>()
+        val numbersSaid = HashMap<String, Int>()
+        fun say(sighting: Sighting) {
+            said += wordsOf(sighting.key)
+            numbersOf(sighting.key).forEach { numbersSaid.merge(it, 1, Int::plus) }
+        }
         for (spot in spots) {
             if (spot.sightings.size * 2 <= told) continue
-            kept[spot] = spot.wordings().onEach { said += wordsOf(it.key) }
+            kept[spot] = spot.wordings().onEach(::say)
         }
         // What fewer have is kept for the words it adds, the better attested first.
         val fewer = spots.withIndex().filter { it.value !in kept }.sortedWith(compareBy({ -it.value.sightings.size }, { it.index }))
         for ((_, spot) in fewer) {
-            val wording = spot.wording()
-            val new = wordsOf(wording.key).filter { it !in said }
-            if (new.isEmpty()) continue
-            said += new
-            kept[spot] = listOf(wording)
+            val keep = spot.leading().filter { wording ->
+                val addsAWord = wordsOf(wording.key).any { it !in said }
+                val addsANumber = spot.sightings.size * 2 >= told &&
+                    numbersOf(wording.key).any { (numbersSaid[it] ?: 0) < numbersIn[wording.reading].getValue(it) }
+                (addsAWord || addsANumber).also { if (it) say(wording) }
+            }
+            if (keep.isNotEmpty()) kept[spot] = keep
         }
         return spots.flatMap { spot -> kept[spot].orEmpty().map { Line(it.text, it.reading, spot.sightings.size) } }
     }
@@ -76,33 +92,54 @@ object ReadingMerge {
     // ── Lining a reading up with the readings before it ──
 
     private class Sighting(val reading: Int, val text: String, val key: String) {
-        val digits: String by lazy { key.filter(Char::isDigit) }
+        val digits: String by lazy { key.filter(digitOf(key)) }
     }
 
     /** One line of the picture, and each reading of it. */
     private class Spot(first: Sighting) {
         val sightings = arrayListOf(first)
 
-        /** The wording most readings gave; between equals the one nearest the others, then the earliest. */
-        fun wording(): Sighting {
-            if (sightings.size == 1) return sightings[0]
+        /**
+         * The wording most readings gave; between equals the one nearest the others, then the one
+         * with its digits in the most groups, then the earliest. After it, any other of those
+         * equals with a number none before it has: the readings of a line all have the same
+         * digits, but can group them differently, and nothing here can tell which grouping is
+         * right. A reader drops a dot ("98,51643" for 98,516.43) and adds a space ("17/1 1/2023"
+         * for 17/11/2023); a number stored only the wrong way cannot be found.
+         */
+        fun leading(): List<Sighting> {
+            if (sightings.size == 1) return sightings
             val byText = sightings.groupBy { it.text }.values
             val most = byText.maxOf { it.size }
             val leading = byText.filter { it.size == most }.map { it[0] }
-            if (leading.size == 1) return leading[0]
-            return leading.minWith(compareBy<Sighting>({ one -> sightings.sumOf { edits(one.key, it.key, Int.MAX_VALUE) ?: 0 } }, { it.reading }))
+            if (leading.size == 1) return leading
+            val ranked = leading.sortedWith(compareBy<Sighting>(
+                { one -> sightings.sumOf { edits(one.key, it.key, Int.MAX_VALUE) ?: 0 } },
+                { one -> -numbersOf(one.key).size },
+                { it.reading },
+            ))
+            val chosen = arrayListOf(ranked[0])
+            val numbers = numbersOf(ranked[0].key).toMutableSet()
+            for (one in ranked.drop(1)) {
+                val its = numbersOf(one.key)
+                if (its.any { it !in numbers }) {
+                    chosen += one
+                    numbers += its
+                }
+            }
+            return chosen
         }
 
         /**
-         * [wording], and after it any other wording needed for a word two readings agree on
-         * that it does not have: "will it", read so twice, beside "willit", read so three times.
+         * [leading], and after it any other wording needed for a word two readings agree on
+         * that none of those has: "will it", read so twice, beside "willit", read so three times.
          */
         fun wordings(): List<Sighting> {
-            val chosen = arrayListOf(wording())
+            val chosen = ArrayList(leading())
             if (sightings.size < 3) return chosen
             val words = sightings.associateWith { wordsOf(it.key).toSet() }
             val agreed = words.values.flatten().groupingBy { it }.eachCount().filterValues { it >= 2 }.keys.toMutableSet()
-            agreed -= words.getValue(chosen[0])
+            chosen.forEach { agreed -= words.getValue(it) }
             while (agreed.isNotEmpty()) {
                 val next = sightings.maxWith(compareBy<Sighting>({ one -> words.getValue(one).count { it in agreed } }, { -it.reading }))
                 chosen += next
@@ -214,6 +251,32 @@ object ReadingMerge {
      * word "queue" read by the wrong alphabet.
      */
     private fun wordsOf(key: String): List<String> = key.split(' ').filter { it.length >= 2 && it.isOneScript() }
+
+    /**
+     * The words of a line that are all digits, of any length: "8" is what a bill says for eight.
+     * Not "০Search", a word read by the wrong alphabet, nor a Bengali digit, which this text cannot have.
+     */
+    private fun numbersOf(key: String): List<String> {
+        val digit = digitOf(key)
+        return key.split(' ').filter { word ->
+            word.isNotEmpty() && word.all { (it in '0'..'9' || it in '\u0966'..'\u096F') && digit(it) }
+        }
+    }
+
+    /**
+     * Which characters of a line are digits. 0 to 9 always are, and so is a digit of another
+     * alphabet, except on a line with letters and none of them of its alphabet: "\u0969 clerks ledger"
+     * is "a clerk's ledger" read by the Hindi reader, and with the \u0969 counted as a digit the two
+     * would never be found to be one line. "\u0968" alone on a line is a page number.
+     */
+    private fun digitOf(key: String): (Char) -> Boolean {
+        var scripts: Set<Character.UnicodeScript>? = null
+        return { c ->
+            c in '0'..'9' || c.isDigit() && (scripts
+                ?: key.filter(Char::isLetter).mapTo(HashSet()) { Character.UnicodeScript.of(it.code) }.also { scripts = it })
+                .let { it.isEmpty() || Character.UnicodeScript.of(c.code) in it }
+        }
+    }
 
     private fun String.isOneScript(): Boolean {
         var script: Character.UnicodeScript? = null

@@ -23,7 +23,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
@@ -63,17 +62,10 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CollectibleDetailView(
-    item: StashItemWithVaultItem,
+    item: VaultItem,
     onBack: () -> Unit,
     onDelete: () -> Unit,
-    onFavoriteToggle: () -> Unit,
-    onNoteChange: (String) -> Unit = {},
     modifier: Modifier = Modifier,
-    /**
-     * False for an item that is in the vault and was never saved to a folder: it has no
-     * favourite to toggle, and what its delete button does is take it out of the vault.
-     */
-    isSaved: Boolean = true,
 ) {
     val context = LocalContext.current
     val species = remember(item) { ContentSpecies.classify(item) }
@@ -115,15 +107,6 @@ fun CollectibleDetailView(
                 actions = {
                     IconButton(onClick = { ContentOpenManager.share(context, item) }) {
                         Icon(imageVector = Icons.Default.Share, contentDescription = "Share", tint = WarmBrownDark)
-                    }
-                    // A favourite is something a saved item has. On anything else the heart
-                    // was a button that did nothing.
-                    if (isSaved) IconButton(onClick = onFavoriteToggle) {
-                        Icon(
-                            imageVector = Icons.Default.Favorite,
-                            contentDescription = "Favorite",
-                            tint = if (item.isFavorite) species.dotColor else WarmBrown
-                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Cream)
@@ -176,7 +159,7 @@ fun CollectibleDetailView(
                         item.title ?: item.sourceFile.substringAfterLast('/')
                     }
                     Text(
-                        text = displayName.ifBlank { "${species.label} Saved Item" },
+                        text = displayName.ifBlank { species.label },
                         fontSize = 18.sp,
                         fontFamily = FontFamily.Serif,
                         fontWeight = FontWeight.Bold,
@@ -194,7 +177,7 @@ fun CollectibleDetailView(
                             .fillMaxWidth()
                             .verticalScroll(rememberScrollState())
                     ) {
-                        DetailMetadataPanel(item, species, onNoteChange)
+                        DetailMetadataPanel(item, species)
 
                         Spacer(Modifier.height(20.dp))
 
@@ -204,7 +187,7 @@ fun CollectibleDetailView(
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             Button(
-                                onClick = { ContentOpenManager.openOriginal(context, item) },
+                                onClick = { ContentOpenManager.open(context, item) },
                                 modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.buttonColors(containerColor = species.dotColor),
                                 shape = RoundedCornerShape(8.dp)
@@ -219,7 +202,7 @@ fun CollectibleDetailView(
                                 border = BorderStroke(1.dp, Color.Red.copy(alpha = 0.5f)),
                                 shape = RoundedCornerShape(8.dp)
                             ) {
-                                Text(if (isSaved) "Delete Item" else "Remove from vault", fontWeight = FontWeight.Bold)
+                                Text("Remove from vault", fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -231,7 +214,7 @@ fun CollectibleDetailView(
 
 // ── DETAIL VIDEO PLAYER (REEL) ──────────────────────────────────────────────
 @Composable
-private fun DetailReelMedia(item: StashItemWithVaultItem) {
+private fun DetailReelMedia(item: VaultItem) {
     val context = LocalContext.current
     val player = remember(item.uri) {
         ExoPlayer.Builder(context).build().apply {
@@ -266,7 +249,7 @@ private fun DetailReelMedia(item: StashItemWithVaultItem) {
 
 // ── DETAIL PDF PAGE FLIP ────────────────────────────────────────────────────
 @Composable
-private fun DetailPdfMedia(item: StashItemWithVaultItem) {
+private fun DetailPdfMedia(item: VaultItem) {
     val context = LocalContext.current
     
     val pageCount = remember(item.uri) {
@@ -368,7 +351,7 @@ private fun renderPdfPage(context: Context, uriString: String, pageIndex: Int): 
 
 // ── DETAIL LOCATION ─────────────────────────────────────────────────────────
 @Composable
-private fun DetailLocationMedia(item: StashItemWithVaultItem) {
+private fun DetailLocationMedia(item: VaultItem) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -391,14 +374,14 @@ private fun DetailLocationMedia(item: StashItemWithVaultItem) {
                 modifier = Modifier.size(54.dp)
             )
             Spacer(Modifier.height(8.dp))
-            Text("Saved Location Pin", fontWeight = FontWeight.Bold, color = CharcoalSoft)
+            Text("Location Pin", fontWeight = FontWeight.Bold, color = CharcoalSoft)
         }
     }
 }
 
 // ── DETAIL AUDIO ────────────────────────────────────────────────────────────
 @Composable
-private fun DetailAudioMedia(item: StashItemWithVaultItem) {
+private fun DetailAudioMedia(item: VaultItem) {
     val details = remember(item.title) { extractSpotifyDetails(item.title) }
 
     Column(
@@ -459,7 +442,7 @@ private fun DetailAudioMedia(item: StashItemWithVaultItem) {
 
 // ── DETAIL YOUTUBE ──────────────────────────────────────────────────────────
 @Composable
-private fun DetailYouTubeMedia(item: StashItemWithVaultItem) {
+private fun DetailYouTubeMedia(item: VaultItem) {
     val videoId = remember(item.uri) { extractYouTubeVideoId(item.uri) }
     val thumbnailUrl = "https://img.youtube.com/vi/$videoId/hqdefault.jpg"
 
@@ -490,7 +473,7 @@ private fun DetailYouTubeMedia(item: StashItemWithVaultItem) {
 
 // ── DETAIL PRODUCT ──────────────────────────────────────────────────────────
 @Composable
-private fun DetailProductMedia(item: StashItemWithVaultItem) {
+private fun DetailProductMedia(item: VaultItem) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -510,7 +493,7 @@ private fun DetailProductMedia(item: StashItemWithVaultItem) {
 
 // ── DETAIL SCREENSHOT (Full-bleed Zoomable) ──────────────────────────────────
 @Composable
-private fun DetailScreenshotMedia(item: StashItemWithVaultItem) {
+private fun DetailScreenshotMedia(item: VaultItem) {
     var scale by remember { mutableStateOf(1f) }
     var offsetX by remember { mutableStateOf(0f) }
     var offsetY by remember { mutableStateOf(0f) }
@@ -545,7 +528,7 @@ private fun DetailScreenshotMedia(item: StashItemWithVaultItem) {
 
 // ── DETAIL DEFAULT ──────────────────────────────────────────────────────────
 @Composable
-private fun DetailDefaultMedia(item: StashItemWithVaultItem) {
+private fun DetailDefaultMedia(item: VaultItem) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -564,19 +547,17 @@ private fun DetailDefaultMedia(item: StashItemWithVaultItem) {
 
 // ── METADATA PANEL COMPONENT ────────────────────────────────────────────────
 @Composable
-private fun DetailMetadataPanel(item: StashItemWithVaultItem, species: ContentSpecies, onNoteChange: (String) -> Unit) {
+private fun DetailMetadataPanel(item: VaultItem, species: ContentSpecies) {
     val context = LocalContext.current
     var extractedMetadata by remember { mutableStateOf<List<VaultMetadata>>(emptyList()) }
     // How many pages the document has, as counted when it was read; null when that is not known.
     var pageCount by remember { mutableStateOf<Int?>(null) }
-    var isEditingNote by remember { mutableStateOf(false) }
-    var editNoteText by remember { mutableStateOf(item.userNote ?: "") }
 
-    LaunchedEffect(item.vaultItemId) {
+    LaunchedEffect(item.id) {
         withContext(Dispatchers.IO) {
             val db = VaultDatabase.get(context)
-            extractedMetadata = db.vaultMetadataDao().getByItemId(item.vaultItemId)
-            pageCount = db.vaultDocumentDao().getById(item.parentDocumentId ?: item.vaultItemId)?.pageCount
+            extractedMetadata = db.vaultMetadataDao().getByItemId(item.id)
+            pageCount = db.vaultDocumentDao().getById(item.parentDocumentId ?: item.id)?.pageCount
                 // A document read before pages were counted: the file itself knows.
                 ?: if (species != ContentSpecies.PDF) null else runCatching {
                     val uri = com.amar.vault.share.open.ShareContentUri.resolve(context, item.uri) ?: return@runCatching null
@@ -588,79 +569,14 @@ private fun DetailMetadataPanel(item: StashItemWithVaultItem, species: ContentSp
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // User Note Section (if present or editing)
-        if (isEditingNote || !item.userNote.isNullOrBlank()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(species.dotColor.copy(alpha = 0.1f))
-                    .border(1.dp, species.dotColor.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
-                    .clickable { if (!isEditingNote) isEditingNote = true }
-                    .padding(12.dp)
-            ) {
-                Column {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "📝 Your Note",
-                            color = species.dotColor,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp
-                        )
-                        if (isEditingNote) {
-                            Text(
-                                text = "Save",
-                                color = species.dotColor,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp,
-                                modifier = Modifier.clickable {
-                                    isEditingNote = false
-                                    onNoteChange(editNoteText)
-                                }.padding(4.dp)
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    if (isEditingNote) {
-                        OutlinedTextField(
-                            value = editNoteText,
-                            onValueChange = { editNoteText = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = CharcoalSoft),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = species.dotColor,
-                                unfocusedBorderColor = species.dotColor.copy(alpha = 0.5f)
-                            )
-                        )
-                    } else {
-                        Text(
-                            text = item.userNote ?: "",
-                            fontSize = 13.sp,
-                            color = CharcoalSoft,
-                            lineHeight = 18.sp
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-        }
-
         // A file added from the phone's own storage came from no app: its address is the
         // storage provider's, and naming an app from that gave "Com".
-        if (item.sourceApp.isBlank() && !item.uri.startsWith("http", ignoreCase = true)) {
+        if (item.sourceApp.isNullOrBlank() && !item.uri.startsWith("http", ignoreCase = true)) {
             DetailRow(label = "Added from", value = "Files on this phone")
         } else {
             DetailRow(label = "Source App", value = SourceResolver.getReadableAppName(item.sourceApp, item.uri))
         }
-        DetailRow(label = "Date Collected", value = formatFullTime(item.savedAt))
-
-        if (item.category.isNotBlank()) {
-            DetailRow(label = "Vault Category", value = item.category)
-        }
+        DetailRow(label = "Date Collected", value = formatFullTime(item.timestamp))
 
         // Render species specific items
         when (species) {

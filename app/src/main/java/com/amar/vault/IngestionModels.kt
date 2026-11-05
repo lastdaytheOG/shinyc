@@ -89,5 +89,4 @@ data class CaptureResult(
     val sessionId: String,
     val successfulAttachments: List<IngestionAttachment>,
     val failedAttachments: List<IngestionAttachment>,
-    val stashItemId: String?
 )

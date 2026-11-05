@@ -43,7 +43,7 @@ class Migration13To14Test {
     /** Opens the version-13 file with this build, which migrates it. */
     private fun migrate(): VaultDatabase =
         Room.databaseBuilder(context, VaultDatabase::class.java, name)
-            .addMigrations(Migration13To14 { report = it }, VaultDatabase.MIGRATION_14_15, VaultDatabase.MIGRATION_15_16)
+            .addMigrations(Migration13To14 { report = it }, VaultDatabase.MIGRATION_14_15, VaultDatabase.MIGRATION_15_16, VaultDatabase.MIGRATION_16_17)
             .allowMainThreadQueries()
             .build()
             .also { opened = it; it.openHelper.writableDatabase }
@@ -213,15 +213,9 @@ class Migration13To14Test {
     }
 
     @Test
-    fun savedEntriesAndExtractedFactsAreUntouched() = runBlocking {
+    fun extractedFactsAreUntouched() = runBlocking {
         aVersion13Vault()
         val db = migrate()
-
-        val saved = db.stashItemDao().getStashItemsByType("SAVED").first().associateBy { it.stashId }
-        assertEquals(setOf("stash-bill", "stash-video"), saved.keys)
-        assertEquals(listOf("Bills", "keep this", true), saved.getValue("stash-bill").let { listOf(it.category, it.userNote, it.isFavorite) })
-        assertEquals(ItemType.PDF, saved.getValue("stash-bill").itemType)
-        assertEquals(ItemType.LINK, saved.getValue("stash-video").itemType)
 
         val facts = db.vaultMetadataDao().getByItemIds(listOf("dev")).associate { it.type to it.value }
         assertEquals("a picture's source type is its type again", mapOf("SOURCE_TYPE" to "PHOTO", "DOCUMENT_CLASS" to "UNKNOWN"), facts)

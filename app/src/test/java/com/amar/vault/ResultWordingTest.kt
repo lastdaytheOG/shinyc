@@ -12,11 +12,9 @@ import org.junit.Test
 class ResultWordingTest {
 
     private fun hit(text: String, file: String = "x.pdf") = SearchHit(
-        row = StashItemWithVaultItem(
-            stashId = "s", sessionId = null, vaultItemId = "v", vaultType = "pdf", category = "", savedAt = 0,
-            sourceApp = "", isFavorite = false, createdAt = 0, userNote = null, thumbnailPath = null,
-            uri = "content://x", ocrText = text, itemType = ItemType.PDF, sourceFile = file, timestamp = 0,
-            title = null, mimeType = null,
+        row = VaultItem(
+            id = "v", uri = "content://x", ocrText = text, lang = "en", itemType = ItemType.PDF,
+            sourceFile = file, timestamp = 0,
         ),
     )
 

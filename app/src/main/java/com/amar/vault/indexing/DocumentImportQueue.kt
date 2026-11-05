@@ -10,10 +10,12 @@ import com.amar.vault.VaultItem
 import com.amar.vault.VaultLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
@@ -70,6 +72,9 @@ class DocumentImportQueue(
             startWorker()
             return true
         }
+        // The start-up repair asks about every saved file once. Read again, one that was read would
+        // change from "Read" to "Already in your vault" with nothing wrong with it.
+        if (earlier?.state == ImportState.DONE && earlier.uri == address) return true
         dao.upsert(
             DocumentImport(
                 id = item.id, uri = address, name = name.ifBlank { "document" }, mimeType = mimeType,
@@ -83,6 +88,17 @@ class DocumentImportQueue(
     /** Reads a file that failed once more, from its first page. */
     suspend fun retry(id: String) {
         if (dao.retry(id, now()) > 0) startWorker()
+    }
+
+    /** Reads a locked file with the [password] the user typed for it; see [PdfPasswords]. */
+    suspend fun unlock(id: String, password: String) {
+        PdfPasswords.typed(id, password)
+        if (dao.retry(id, now()) > 0) startWorker() else PdfPasswords.forget(id)
+    }
+
+    /** The rest of a long scan that waits for the charger is read now, on battery, because the user asked. */
+    suspend fun readRestNow(id: String) {
+        if (dao.readRestNow(id, now()) > 0) startWorker()
     }
 
     /** Sets the reading going again if anything is left; called when the app starts. */
@@ -107,6 +123,21 @@ class DocumentImportQueue(
 }
 
 /**
+ * Which files a reader takes. A long scan must neither run the battery down nor keep other files
+ * waiting for hours, so no file gets more than [DocumentImportReader.READ_AT_ONCE_MS] of reading
+ * pictures at once: text PDFs and short scans simply finish, and what is left of a long one goes
+ * to the lane that runs on the charger.
+ */
+enum class ImportLane {
+    /** Everything just added, and what was cut short. A reading here stops at its time. */
+    AT_ONCE,
+    /** What stopped at its time. Runs while the phone charges, and is not timed. */
+    ON_CHARGE;
+
+    fun takes(row: DocumentImport): Boolean = row.waitsForCharger == (this == ON_CHARGE)
+}
+
+/**
  * Reads the files that are written down, one after another, and writes down how each ended.
  * No part of it knows about WorkManager: [DocumentImportWorker] runs it, and so does a test.
  *
@@ -117,28 +148,35 @@ class DocumentImportReader(
     private val db: VaultDatabase,
     private val read: suspend (DocumentImport, ReadingLog) -> IndexResult,
     private val now: () -> Long = System::currentTimeMillis,
+    private val readAtOnceMs: Long = READ_AT_ONCE_MS,
 ) {
     private val dao get() = db.documentImportDao()
-    private val claim = Mutex()
-    private val claimed = HashSet<String>()
 
     /**
-     * Reads until nothing is left, [readers] files at a time. [onChange] is told after every
-     * change worth showing (a file begun, a page done, a file ended), with the row as it now
-     * is. Returns the rows that ended during this call.
+     * Reads until nothing is left in [lane], [readers] files at a time. [onChange] is told after
+     * every change worth showing (a file begun, a page done, a file ended), with the row as it
+     * now is. Returns the rows that ended or stopped for the charger during this call.
      *
      * Cancelling it stops at once and loses nothing: a file that was being read stays written
-     * down as [ImportState.READING] with the last page it finished.
+     * down as [ImportState.READING] with the last page it finished; in [ImportLane.ON_CHARGE],
+     * where cancelling means the charger was pulled, it goes back to waiting for the charger.
      */
-    suspend fun readAll(readers: Int = 1, onChange: suspend (DocumentImport) -> Unit = {}): List<DocumentImport> {
+    suspend fun readAll(
+        readers: Int = 1,
+        lane: ImportLane = ImportLane.AT_ONCE,
+        onChange: suspend (DocumentImport) -> Unit = {},
+    ): List<DocumentImport> {
         val ended = java.util.Collections.synchronizedList(ArrayList<DocumentImport>())
         coroutineScope {
             repeat(readers.coerceAtLeast(1)) {
                 launch(Dispatchers.IO) {
                     while (true) {
-                        val next = nextUnclaimed() ?: break
+                        val next = nextUnclaimed(lane) ?: break
                         try {
-                            ended += readOne(next, onChange)
+                            val triedAPassword = PdfPasswords.of(next.id) != null
+                            val row = readOne(next, lane, onChange)
+                            // The user is at the card that asks for it: no notification about it too.
+                            if (!(triedAPassword && row.failure == ImportFailure.LOCKED)) ended += row
                         } finally {
                             claim.withLock { claimed -= next.id }
                         }
@@ -149,16 +187,31 @@ class DocumentImportReader(
         return ended.toList()
     }
 
-    private suspend fun nextUnclaimed(): DocumentImport? = claim.withLock {
-        dao.unfinished().firstOrNull { it.id !in claimed }?.also { claimed += it.id }
+    private suspend fun nextUnclaimed(lane: ImportLane): DocumentImport? = claim.withLock {
+        dao.unfinished().firstOrNull { it.id !in claimed && lane.takes(it) }?.also { claimed += it.id }
     }
 
     /** Reads one file and writes down how it ended. */
-    suspend fun readOne(import: DocumentImport, onChange: suspend (DocumentImport) -> Unit = {}): DocumentImport {
+    suspend fun readOne(
+        import: DocumentImport,
+        lane: ImportLane = ImportLane.AT_ONCE,
+        onChange: suspend (DocumentImport) -> Unit = {},
+    ): DocumentImport {
         val id = import.id
         suspend fun changed(): DocumentImport = (dao.getById(id) ?: import).also { onChange(it) }
 
+        // Read before reading begins: beginning clears it.
+        val askedForNow = import.readsRestNow
+        val password = PdfPasswords.of(id)
+        val timed = lane == ImportLane.AT_ONCE && !askedForNow
+        val startedAt = now()
+        val pagesThisStretch = java.util.concurrent.atomic.AtomicInteger()
+
         val log = object : ReadingLog {
+            // Not before a page has been finished in this stretch: every stop moves the file on.
+            override suspend fun shouldPause(): Boolean =
+                timed && pagesThisStretch.get() > 0 && now() - startedAt >= readAtOnceMs
+
             override suspend fun pagesDone(fingerprint: String?): Int {
                 val row = dao.getById(id) ?: return 0
                 // Another file is at this address now: what was read of the old one is not of this one.
@@ -185,6 +238,7 @@ class DocumentImportReader(
 
             override suspend fun pageDone(page: Int, pieces: Int) {
                 dao.markPageDone(id, page, pieces, now())
+                pagesThisStretch.incrementAndGet()
                 changed()
             }
         }
@@ -199,30 +253,72 @@ class DocumentImportReader(
                 ),
             )
         } else try {
-            read(import, log)
+            if (password == null) read(import, log) else withContext(PdfPassword(password)) { read(import, log) }
         } catch (stopped: CancellationException) {
+            // The charger was pulled, or a reading asked for went on past the system's patience.
+            // Neither is the fault of the page it was on, and each goes back to where it was.
+            val goesBackTo = when {
+                lane == ImportLane.ON_CHARGE -> DocumentImport.WAITS_FOR_CHARGER
+                askedForNow -> DocumentImport.READ_REST_NOW
+                else -> null
+            }
+            if (goesBackTo != null) withContext(NonCancellable) { dao.markWaiting(id, goesBackTo, now()) }
             throw stopped
         } catch (e: Exception) {
             VaultLog.e(TAG, "Reading ${import.name} threw", e)
             IndexResult.Failure(import.name, com.amar.vault.IndexError.StorageFailed(e))
         }
         when (result) {
-            is IndexResult.Success ->
+            is IndexResult.Success -> {
                 dao.finish(id, ImportState.DONE, result.chunkCount, null, null, now())
-            is IndexResult.Duplicate ->
+                PdfPasswords.forget(id)
+                if (password != null) {
+                    dao.getById(id)?.fingerprint?.let { PdfPasswords.opens(it, password) }
+                    tryOnOtherLockedFiles(password)
+                }
+            }
+            is IndexResult.Duplicate -> {
                 dao.finish(id, ImportState.ALREADY_THERE, 0, null, null, now())
+                PdfPasswords.forget(id)
+            }
+            is IndexResult.Paused ->
+                dao.markWaiting(id, DocumentImport.WAITS_FOR_CHARGER, now())
             is IndexResult.Failure -> {
                 val (failure, detail) = ImportFailure.of(result.error, import.name)
-                dao.finish(id, ImportState.FAILED, dao.getById(id)?.pieces ?: 0, failure, detail, now())
+                val locked = failure == ImportFailure.LOCKED
+                // Said only of a password typed for this file, not of one tried on it in passing.
+                val said = if (locked && PdfPasswords.wasTypedFor(id)) DocumentImport.WRONG_PASSWORD else detail
+                dao.finish(id, ImportState.FAILED, dao.getById(id)?.pieces ?: 0, failure, said, now())
+                // Kept for any other failure: "Try again" is to work without typing it again.
+                if (locked) PdfPasswords.forget(id)
             }
         }
         return changed()
+    }
+
+    /** Statements of one bank share a password: twelve files should not ask for it twelve times. */
+    private suspend fun tryOnOtherLockedFiles(password: String) {
+        for (other in dao.locked()) {
+            if (PdfPasswords.of(other.id) != null) continue
+            PdfPasswords.tryOn(other.id, password)
+            dao.retry(other.id, now())
+        }
     }
 
     companion object {
         private const val TAG = "DocumentImport"
         /** How many times reading may begin and stop without finishing a page before that page is given up on. */
         const val STARTS_WITHOUT_A_PAGE = 4
+        /**
+         * How long a file may be read at once before the next page to be read off a picture stops
+         * it. Long enough for a short scan to finish; a page with a text layer never stops a reading.
+         */
+        const val READ_AT_ONCE_MS = 3 * 60_000L
+
+        // One file is read by one reader, in this whole process: the two lanes are two workers,
+        // and the indexer takes a second reading of a file already being read for a duplicate.
+        private val claim = Mutex()
+        private val claimed = HashSet<String>()
     }
 }
 

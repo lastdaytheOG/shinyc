@@ -19,8 +19,6 @@ object ShareCaptureManager {
         context: Context,
         session: IngestionSession,
         attachments: List<IngestionAttachment>,
-        category: String,
-        userNote: String? = null
     ) {
         scope.launch {
             val db = VaultDatabase.get(context)
@@ -57,8 +55,6 @@ object ShareCaptureManager {
 
                 val finalSessionStatus = if (failedAttachments.isNotEmpty()) SessionStatus.PARTIAL_SUCCESS else SessionStatus.READY
 
-                var finalStashItemId: String? = null
-
                 // 2. Transactionally save everything
                 db.withTransaction {
                     // Save Session & Attachments
@@ -67,17 +63,16 @@ object ShareCaptureManager {
                         if (it.status == AttachmentStatus.READY) it.copy(status = AttachmentStatus.READY) else it
                     })
 
-                    // One vault item and one Saved entry for each thing that was shared. Until
-                    // 2026-10 only the first was kept: of five PDFs shared together, four were
-                    // copied into the app and then never seen again.
+                    // One vault item for each thing that was shared. Until 2026-10 only the first
+                    // was kept: of five PDFs shared together, four were copied into the app and
+                    // then never seen again.
                     val firstAt = System.currentTimeMillis()
                     toSave.forEachIndexed { position, attachment ->
-                        val stashItemId = saveOne(
-                            db, session, attachment, resolver.resolve(listOf(attachment)), category, userNote,
+                        saveOne(
+                            db, session, attachment, resolver.resolve(listOf(attachment)),
                             // In the order they were shared, when the list is sorted by time.
                             at = firstAt + position,
                         )
-                        if (finalStashItemId == null) finalStashItemId = stashItemId
                     }
 
                     captureResult = CaptureResult(
@@ -85,11 +80,10 @@ object ShareCaptureManager {
                         sessionId = session.id,
                         successfulAttachments = validAttachments,
                         failedAttachments = failedAttachments,
-                        stashItemId = finalStashItemId
                     )
                 }
 
-                android.util.Log.i(TAG, "Capture transaction committed for session ${session.id}. StashId: $finalStashItemId")
+                android.util.Log.i(TAG, "Capture transaction committed for session ${session.id}.")
 
                 // 3. Enqueue Background Enrichment (Stage 2)
                 enqueueImportWorker(context, session.id)
@@ -120,19 +114,16 @@ object ShareCaptureManager {
     }
 
     /**
-     * Saves one shared thing: its vault item (or the one already there with the same
-     * contents) and its Saved entry. Returns the Saved entry's id. Called inside the capture's
-     * transaction.
+     * Saves one shared thing as its vault item, or as the one already there with the same
+     * contents. Called inside the capture's transaction.
      */
     internal suspend fun saveOne(
         db: VaultDatabase,
         session: IngestionSession,
         attachment: IngestionAttachment,
         resolution: ContentResolution,
-        category: String,
-        userNote: String?,
         at: Long = System.currentTimeMillis(),
-    ): String {
+    ) {
         val vaultDao = db.vaultDao()
         // For a link, originalUri already holds the extracted URL. For a file,
         // never keep the transient content:// as the openable target — the local
@@ -174,21 +165,6 @@ object ShareCaptureManager {
             vaultDao.insert(newItem)
         }
         CaptureTelemetry.stage(session.id, CaptureTelemetry.Stage.VAULT_SAVED, "vaultId=$vaultItemId type=${resolution.previewType.stored}")
-
-        // Create StashItem
-        val stashItemId = UUID.randomUUID().toString()
-        val stashItem = StashItem(
-            id = stashItemId,
-            sessionId = session.id,
-            vaultItemId = vaultItemId,
-            category = category,
-            savedAt = at,
-            sourceApp = session.sourcePackage,
-            userNote = userNote
-        )
-        db.stashItemDao().insertOrUpdate(stashItem)
-        CaptureTelemetry.stage(session.id, CaptureTelemetry.Stage.STASH_SAVED, "stashId=$stashItemId category=$category")
-        return stashItemId
     }
 
     private fun enqueueImportWorker(context: Context, sessionId: String) {

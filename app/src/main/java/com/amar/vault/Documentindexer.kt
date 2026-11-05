@@ -26,6 +26,8 @@ sealed interface IndexResult {
     data class Success(val fileName: String, val chunkCount: Int, val durationMs: Long) : IndexResult
     data class Duplicate(val fileName: String, val contentHash: String) : IndexResult
     data class Failure(val fileName: String, val error: IndexError) : IndexResult
+    /** Stopped between pages because [ReadingLog.shouldPause] said so. What was read is stored and can be searched. */
+    data class Paused(val fileName: String) : IndexResult
 }
 
 sealed interface IndexError {
@@ -51,6 +53,12 @@ interface ReadingLog {
     suspend fun pageCount(pages: Int)
     /** [page] and every page before it are stored; the document has [pieces] pieces so far. */
     suspend fun pageDone(page: Int, pieces: Int)
+    /**
+     * Asked before a page that has to be read off its picture, the slow kind. True stops the reading
+     * there: the pages already begun are finished and stored, and the indexer answers
+     * [IndexResult.Paused]. A page with a text layer never stops a reading.
+     */
+    suspend fun shouldPause(): Boolean = false
 }
 
 data class IndexProgress(
@@ -406,6 +414,8 @@ class DocumentIndexer private constructor(private val context: Context) {
             log?.pageCount(it)
         }
         val onPageDone: suspend (Int) -> Unit = { page -> log?.pageDone(page, committed) }
+        var paused = false
+        val pauseBefore: suspend () -> Boolean = { (log?.shouldPause() == true).also { if (it) paused = true } }
         // Stored when no text could be read at all — a scan the OCR found nothing in, or a file
         // that would not open. With no row the document could not be found even by its name.
         // Such a file is not recorded as complete, so importing it again reads it again.
@@ -416,8 +426,8 @@ class DocumentIndexer private constructor(private val context: Context) {
             // coroutine-context element (exactly as the batch path does), so PdfFormatExtractor
             // attributes its per-page/sub-stage timings to this document. Null → plain call.
             IndexMetrics.timed(IndexMetrics.Timing.DOC_EXTRACT) {
-                if (prof == null) contentExtractor.extractStreaming(context, uri, mimeType, onPageCount, from, onPageDone, onBatch)
-                else withContext(prof) { contentExtractor.extractStreaming(context, uri, mimeType, onPageCount, from, onPageDone, onBatch) }
+                if (prof == null) contentExtractor.extractStreaming(context, uri, mimeType, onPageCount, from, onPageDone, pauseBefore, onBatch)
+                else withContext(prof) { contentExtractor.extractStreaming(context, uri, mimeType, onPageCount, from, onPageDone, pauseBefore, onBatch) }
             }
         } catch (ce: CancellationException) {
             throw ce
@@ -434,6 +444,14 @@ class DocumentIndexer private constructor(private val context: Context) {
             return IndexResult.Failure(fileName, IndexError.ExtractionFailed(e))
         }
         prof?.stageMs(ProfilerStage.EXTRACT, System.currentTimeMillis() - tExtract)
+
+        if (paused) {
+            // Only blank pages so far: it can still be found by its name while it waits.
+            if (committed == 0) onBatch(nameOnly)
+            Log.d(TAG, "Paused $fileName with $committed pieces stored")
+            prof?.let { IndexingProfiler.publish(it.build(System.currentTimeMillis() - startMs, "paused")) }
+            return IndexResult.Paused(fileName)
+        }
 
         if (committed == 0) {
             onBatch(nameOnly)

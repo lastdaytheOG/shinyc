@@ -5,7 +5,6 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.amar.vault.HomeWords
 import com.amar.vault.ItemType
-import com.amar.vault.StashItem
 import com.amar.vault.VaultDatabase
 import com.amar.vault.VaultDocument
 import com.amar.vault.VaultItem
@@ -14,6 +13,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -35,6 +35,7 @@ class VaultRemovalTest {
     private val forgottenFiles = ArrayList<String>()
     private val forgottenVectors = ArrayList<String>()
     private val letGo = ArrayList<String>()
+    private val deletedCopies = ArrayList<String>()
     private lateinit var removal: VaultRemoval
 
     @Before
@@ -43,7 +44,7 @@ class VaultRemovalTest {
             .allowMainThreadQueries().build()
         removal = VaultRemoval(
             db, forgetKeywords = { forgottenKeywords += it }, forgetFile = { forgottenFiles += it },
-            forgetVectors = { forgottenVectors += it }, letGo = { letGo += it },
+            forgetVectors = { forgottenVectors += it }, letGo = { letGo += it }, deleteCopy = { deletedCopies += it },
         )
     }
 
@@ -95,15 +96,104 @@ class VaultRemovalTest {
         assertEquals(emptyList<String>(), ids())
     }
 
-    @Test
-    fun theButtonThatDidNothingLeftEverythingInPlace() = runBlocking {
-        // The control: all "Delete Item" did for a document that was never saved — delete a
-        // Saved entry by an id no Saved entry has.
-        document("act", pages = 3)
-        db.stashItemDao().deleteById("search_act_chunk0")
+    // ── What was shared into the app: a row of its own, under the document's id, and a copy ──
 
-        assertEquals(3, ids().size)
-        assertTrue(db.vaultDocumentDao().getById("act") != null)
+    private val copyPath = "/data/user/0/com.amar.vault/files/shared_imports/bill.pdf"
+
+    private fun sharedRow(id: String = "bill", type: ItemType = ItemType.PDF, uri: String = copyPath) = VaultItem(
+        id = id, uri = uri, ocrText = "", lang = "en", itemType = type,
+        sourceFile = "Bill.pdf", timestamp = 1L, contentHash = "hash-$id", title = "Bill.pdf",
+    )
+
+    @Test
+    fun aPageOfASharedDocumentRemovesAllOfIt() = runBlocking {
+        db.vaultDao().insert(sharedRow())
+        document("bill", pages = 2, uri = "file://$copyPath")
+        val page = db.vaultDao().getByIds(listOf("bill_chunk1")).single()
+
+        assertEquals(VaultRemoval.Removed("bill.pdf", 3), removal.remove(page))
+
+        assertEquals("no row of it is left to be found by its name", emptyList<String>(), ids())
+        assertNull(db.vaultDocumentDao().getById("bill"))
+        assertNull(db.documentImportDao().getById("bill"))
+        assertEquals(listOf("bill", "bill_chunk0", "bill_chunk1"), forgottenKeywords.sorted())
+        assertEquals(listOf(copyPath), deletedCopies)
+        assertEquals("start-up repair has nothing to read again", emptyList<VaultItem>(), db.vaultDao().getStandaloneLocalFiles())
+    }
+
+    @Test
+    fun aSharedDocumentFoundByItsNameRemovesItsPagesToo() = runBlocking {
+        val own = sharedRow()
+        db.vaultDao().insert(own)
+        document("bill", pages = 2, uri = "file://$copyPath")
+
+        removal.remove(own)
+
+        assertEquals(emptyList<String>(), ids())
+        assertNull(db.vaultDocumentDao().getById("bill"))
+    }
+
+    @Test
+    fun theOwnRowAloneWouldLeaveThePagesBehind() = runBlocking {
+        // The control: what removing the row by itself does, and why a shared document is not
+        // removed that way.
+        db.vaultDao().insert(sharedRow())
+        document("bill", pages = 2, uri = "file://$copyPath")
+
+        removal.removeItem("bill")
+
+        assertEquals(listOf("bill_chunk0", "bill_chunk1"), ids())
+    }
+
+    @Test
+    fun aSharedFileStillWaitingToBeReadIsNotReadAfterwards() = runBlocking {
+        val own = sharedRow()
+        db.vaultDao().insert(own)
+        db.documentImportDao().upsert(
+            DocumentImport(id = "bill", uri = copyPath, name = "Bill.pdf", mimeType = "application/pdf",
+                origin = ImportOrigin.SHARED, state = ImportState.WAITING, addedAt = 1L)
+        )
+
+        assertEquals("Bill.pdf", removal.remove(own)?.name)
+
+        assertEquals(emptyList<String>(), ids())
+        assertNull(db.documentImportDao().getById("bill"))
+        assertEquals(listOf(copyPath), deletedCopies)
+    }
+
+    @Test
+    fun aSharedLinkIsRemovedByItself() = runBlocking {
+        val link = sharedRow("link", ItemType.LINK, "https://example.org/a-long-read")
+        db.vaultDao().insert(link)
+        document("act", pages = 1)
+
+        removal.remove(link)
+
+        assertEquals(listOf("act_chunk0"), ids())
+    }
+
+    @Test
+    fun onlyTheAppsOwnCopyIsDeleted() {
+        val filesDir = ApplicationProvider.getApplicationContext<Context>().filesDir
+        val folder = java.io.File(filesDir, "shared_imports").apply { mkdirs() }
+        val copy = java.io.File(folder, "bill.pdf").apply { writeText("x") }
+        val other = java.io.File(filesDir, "keep.pdf").apply { writeText("x") }
+
+        assertFalse(SharedCopy.delete(filesDir, other.absolutePath))
+        assertFalse("not by a way round", SharedCopy.delete(filesDir, java.io.File(folder, "../keep.pdf").path))
+        assertFalse(SharedCopy.delete(filesDir, "content://media/external/images/media/1"))
+        assertFalse(SharedCopy.delete(filesDir, "https://example.org/shared_imports/bill.pdf"))
+        assertTrue(other.exists())
+
+        assertTrue(SharedCopy.delete(filesDir, "file://" + copy.absolutePath))
+        assertFalse(copy.exists())
+    }
+
+    @Test
+    fun theWordsSayWhatIsBeingRemoved() {
+        assertTrue(RemovalWords.whatHappens(isDocument = true, isPicture = false).contains("add it again"))
+        assertTrue(RemovalWords.whatHappens(isDocument = false, isPicture = true).contains("picture"))
+        assertFalse("a link is not a picture", RemovalWords.whatHappens(isDocument = false, isPicture = false).contains("picture"))
     }
 
     @Test
@@ -122,7 +212,6 @@ class VaultRemovalTest {
         val shot = VaultItem(id = "shot", uri = "content://media/1", ocrText = "paid 450 to ravi", lang = "en",
             itemType = ItemType.SCREENSHOT, sourceFile = "Screenshot_1.png", timestamp = 1L)
         db.vaultDao().insert(shot)
-        db.stashItemDao().insertOrUpdate(StashItem(id = "stash", vaultItemId = "shot", category = "Bills", savedAt = 1L, sourceApp = ""))
         document("act", pages = 1)
         // What the picture looks like, and what another picture looks like.
         for (id in listOf("shot", "beach")) {

@@ -6,7 +6,6 @@ import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.amar.vault.photos.PhotoVector
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.After
@@ -98,21 +97,19 @@ class Migration15To16Test {
     @Test
     fun everythingStoredIsStillThereAndTheNewTableIsEmpty() = runBlocking {
         aVaultWithPictures()
-        val db = open(VaultDatabase.MIGRATION_15_16)
+        val db = open(VaultDatabase.MIGRATION_15_16, VaultDatabase.MIGRATION_16_17)
 
         val items = db.vaultDao().getAll().associateBy { it.id }
         assertEquals(setOf("beach", "receipt", "note"), items.keys)
         assertEquals("Paid to Ravi 450", items.getValue("receipt").ocrText)
         assertEquals(ItemType.PHOTO, items.getValue("beach").itemType)
-        val saved = db.stashItemDao().getStashItemsByType("SAVED").first().single()
-        assertEquals(listOf("receipt", "Bills", "keep"), listOf(saved.vaultItemId, saved.category, saved.userNote))
         assertEquals(0, db.photoVectorDao().countOf("m1"))
     }
 
     @Test
     fun thePhotosStillToEmbedAreThePhotosOnly() = runBlocking {
         aVaultWithPictures()
-        val db = open(VaultDatabase.MIGRATION_15_16)
+        val db = open(VaultDatabase.MIGRATION_15_16, VaultDatabase.MIGRATION_16_17)
         val dao = db.photoVectorDao()
 
         // Only the photo: the screenshot ("receipt") is found by the words on it.
@@ -135,7 +132,7 @@ class Migration15To16Test {
         // The reason there is no cascade: the indexer writes a picture's row again (INSERT OR
         // REPLACE) once its text has been read, and that must not take its vector with it.
         aVaultWithPictures()
-        val db = open(VaultDatabase.MIGRATION_15_16)
+        val db = open(VaultDatabase.MIGRATION_15_16, VaultDatabase.MIGRATION_16_17)
         db.photoVectorDao().upsert(vector("beach"))
         val beach = db.vaultDao().getAll().single { it.id == "beach" }
         db.vaultDao().insert(beach.copy(ocrText = "SURF SHOP"))
@@ -145,7 +142,7 @@ class Migration15To16Test {
     @Test
     fun vectorsOfPicturesThatAreGoneAreRemoved() = runBlocking {
         aVaultWithPictures()
-        val db = open(VaultDatabase.MIGRATION_15_16)
+        val db = open(VaultDatabase.MIGRATION_15_16, VaultDatabase.MIGRATION_16_17)
         val dao = db.photoVectorDao()
         dao.upsert(vector("beach"))
         dao.upsert(vector("ghost"))
@@ -168,7 +165,7 @@ class Migration15To16Test {
     fun aVersion13VaultGoesAllTheWay() = runBlocking {
         V13Vault.create(context, name).close()
         val db = open(*VaultDatabase.migrations())
-        assertEquals(16, db.openHelper.readableDatabase.version)
+        assertEquals(17, db.openHelper.readableDatabase.version)
         assertEquals(0, db.photoVectorDao().countOf("m1"))
     }
 }

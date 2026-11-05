@@ -1,10 +1,7 @@
 package com.amar.vault
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.widget.Toast
 import com.amar.vault.share.open.OpenStrategyResolver
 import com.amar.vault.share.open.OpenTarget
@@ -18,41 +15,16 @@ import com.amar.vault.share.open.ShareContentUri
  * implementations). This object only builds an [OpenTarget] and delegates, so
  * adding a new platform never touches this file.
  *
- * Public API is unchanged for existing callers (SavedScreen, CollectibleDetailView,
- * VaultNavHost, DocumentPickerScreen, OpenDispatcher).
+ * Public API is unchanged for existing callers (CollectibleDetailView, VaultNavHost,
+ * DocumentPickerScreen).
  */
 object ContentOpenManager {
 
     private val resolver: OpenStrategyResolver by lazy { OpenStrategyResolver.default() }
 
-    fun open(context: Context, item: StashItemWithVaultItem) = open(context, item.toVaultItem())
-
     fun open(context: Context, item: VaultItem) {
         resolver.open(context, OpenTarget.from(context, item))
     }
-
-    fun openOriginal(context: Context, item: StashItemWithVaultItem) = open(context, item)
-
-    /** Copies the item's canonical link (or its uri) to the clipboard. */
-    fun copyLink(context: Context, item: StashItemWithVaultItem) {
-        val target = OpenTarget.from(context, item.toVaultItem())
-        val link = target.url ?: item.uri
-        if (link.isBlank()) {
-            Toast.makeText(context, "No link to copy", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-        clipboard?.setPrimaryClip(ClipData.newPlainText("link", link))
-        Toast.makeText(context, "Link copied", Toast.LENGTH_SHORT).show()
-    }
-
-    /** True when the item carries a shareable/openable web link. */
-    fun hasLink(context: Context, item: StashItemWithVaultItem): Boolean {
-        return OpenTarget.from(context, item.toVaultItem()).url != null ||
-            item.uri.startsWith("http", ignoreCase = true)
-    }
-
-    fun share(context: Context, item: StashItemWithVaultItem) = share(context, item.toVaultItem())
 
     fun share(context: Context, item: VaultItem) {
         val target = OpenTarget.from(context, item)

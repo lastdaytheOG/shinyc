@@ -192,6 +192,7 @@ object DeveloperIndexController {
                     when (val result = docIndexer.indexDocument(uri, mime.orEmpty())) {
                         is IndexResult.Success -> bump(indexed = 1)
                         is IndexResult.Duplicate -> bump(skipped = 1)
+                        is IndexResult.Paused -> bump(skipped = 1) // only a reading with a log can pause
                         is IndexResult.Failure ->
                             if (result.error is IndexError.UnsupportedFormat) bump(skipped = 1) else bump(failed = 1)
                     }

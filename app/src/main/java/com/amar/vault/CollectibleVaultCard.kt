@@ -12,7 +12,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -40,7 +39,7 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun CollectibleVaultCard(
-    item: StashItemWithVaultItem,
+    item: VaultItem,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     screenBg: Color,
@@ -118,7 +117,7 @@ private fun CardChrome(
 // ── 1. REEL CARD CONTENT (9:16 aspect, caption overlaid on dark strip) ─────
 @Composable
 private fun ReelCardContent(
-    item: StashItemWithVaultItem,
+    item: VaultItem,
     species: ContentSpecies,
     primaryText: Color,
     secondaryText: Color,
@@ -138,12 +137,11 @@ private fun ReelCardContent(
             .background(Color(0xFF1E1C1A))
     ) {
         // Media Preview
-        val hasPreview = remember(item.thumbnailPath, item.sourceFile, item.uri) {
-            !item.thumbnailPath.isNullOrBlank() || item.sourceFile.isNotBlank() || (!item.uri.startsWith("http") && item.uri.isNotBlank())
+        val hasPreview = remember(item.sourceFile, item.uri) {
+            item.sourceFile.isNotBlank() || (!item.uri.startsWith("http") && item.uri.isNotBlank())
         }
         if (hasPreview) {
             val model = when {
-                !item.thumbnailPath.isNullOrBlank() -> item.thumbnailPath
                 item.sourceFile.isNotBlank() -> item.sourceFile
                 else -> item.uri
             }
@@ -190,7 +188,7 @@ private fun ReelCardContent(
             }
         }
 
-        // Chrome at top (Favorite overlay + dot chrome overlay)
+        // Chrome at top (dot chrome overlay)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -222,14 +220,6 @@ private fun ReelCardContent(
                 }
             }
 
-            if (item.isFavorite) {
-                Icon(
-                    imageVector = Icons.Default.Favorite,
-                    contentDescription = null,
-                    tint = ReelColor,
-                    modifier = Modifier.size(12.dp)
-                )
-            }
         }
 
         // Caption and Metadata overlaid on a solid dark strip at the base of the media
@@ -269,7 +259,7 @@ private fun ReelCardContent(
 // ── 2. YOUTUBE CARD CONTENT (16:9, duration badge sits in thumbnail) ──────
 @Composable
 private fun YouTubeCardContent(
-    item: StashItemWithVaultItem,
+    item: VaultItem,
     species: ContentSpecies,
     primaryText: Color,
     secondaryText: Color
@@ -384,7 +374,7 @@ private fun YouTubeCardContent(
 // ── 3. AUDIO CARD CONTENT (Square art, horizontal layout, waveform, play) ─
 @Composable
 private fun AudioCardContent(
-    item: StashItemWithVaultItem,
+    item: VaultItem,
     species: ContentSpecies,
     primaryText: Color,
     secondaryText: Color,
@@ -406,12 +396,11 @@ private fun AudioCardContent(
                 .background(Color(0xFF282828)),
             contentAlignment = Alignment.Center
         ) {
-            val hasArt = remember(item.thumbnailPath, item.sourceFile, item.uri) {
-                !item.thumbnailPath.isNullOrBlank() || item.sourceFile.isNotBlank() || (!item.uri.startsWith("http") && item.uri.isNotBlank())
+            val hasArt = remember(item.sourceFile, item.uri) {
+                item.sourceFile.isNotBlank() || (!item.uri.startsWith("http") && item.uri.isNotBlank())
             }
             if (hasArt) {
                 val model = when {
-                    !item.thumbnailPath.isNullOrBlank() -> item.thumbnailPath
                     item.sourceFile.isNotBlank() -> item.sourceFile
                     else -> item.uri
                 }
@@ -497,7 +486,7 @@ private fun AudioCardContent(
 // ── 4. PRODUCT CARD CONTENT (1:1 shelf tone, price ribbon tag) ─────────────
 @Composable
 private fun ProductCardContent(
-    item: StashItemWithVaultItem,
+    item: VaultItem,
     species: ContentSpecies,
     primaryText: Color,
     secondaryText: Color
@@ -514,12 +503,11 @@ private fun ProductCardContent(
                 .background(Color(0xFFFAF6F0)) // shelf-tone light background
                 .padding(8.dp)
         ) {
-            val hasPreview = remember(item.thumbnailPath, item.sourceFile, item.uri) {
-                !item.thumbnailPath.isNullOrBlank() || item.sourceFile.isNotBlank() || (!item.uri.startsWith("http") && item.uri.isNotBlank())
+            val hasPreview = remember(item.sourceFile, item.uri) {
+                item.sourceFile.isNotBlank() || (!item.uri.startsWith("http") && item.uri.isNotBlank())
             }
             if (hasPreview) {
                 val model = when {
-                    !item.thumbnailPath.isNullOrBlank() -> item.thumbnailPath
                     item.sourceFile.isNotBlank() -> item.sourceFile
                     else -> item.uri
                 }
@@ -597,7 +585,7 @@ private fun ProductCardContent(
 // ── 5. SCREENSHOT CARD CONTENT (Native aspect ratio, auto category) ────────
 @Composable
 private fun ScreenshotCardContent(
-    item: StashItemWithVaultItem,
+    item: VaultItem,
     species: ContentSpecies,
     primaryText: Color,
     secondaryText: Color
@@ -620,9 +608,8 @@ private fun ScreenshotCardContent(
                 .background(Color(0xFFEDE6DC))
         ) {
             // Render at full scale up to native limit without cropping frame
-            val model = remember(item.thumbnailPath, item.uri, item.sourceFile) {
+            val model = remember(item.uri, item.sourceFile) {
                 when {
-                    !item.thumbnailPath.isNullOrBlank() -> item.thumbnailPath
                     item.uri.startsWith("http") || item.uri.isBlank() -> item.sourceFile
                     else -> item.uri
                 }
@@ -667,7 +654,7 @@ private fun ScreenshotCardContent(
 // ── 6. PDF CARD CONTENT (Stacked paper shape, page count, file size) ────────
 @Composable
 private fun PdfCardContent(
-    item: StashItemWithVaultItem,
+    item: VaultItem,
     species: ContentSpecies,
     primaryText: Color,
     secondaryText: Color,
@@ -755,7 +742,7 @@ private fun PdfCardContent(
 // ── 7. APP / PLAY STORE LISTING (Icon forward Apple Wallet-style) ───────────
 @Composable
 private fun AppListingCardContent(
-    item: StashItemWithVaultItem,
+    item: VaultItem,
     species: ContentSpecies,
     primaryText: Color,
     secondaryText: Color,
@@ -832,7 +819,7 @@ private fun AppListingCardContent(
 // ── 8. LOCATION CARD CONTENT (Map tinted tone, abstract centered pin) ──────
 @Composable
 private fun LocationCardContent(
-    item: StashItemWithVaultItem,
+    item: VaultItem,
     species: ContentSpecies,
     primaryText: Color,
     secondaryText: Color,
@@ -874,7 +861,7 @@ private fun LocationCardContent(
                 .padding(12.dp)
         ) {
             Text(
-                text = item.title ?: "Saved Location",
+                text = item.title ?: "Location",
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 color = primaryText,
@@ -898,7 +885,7 @@ private fun LocationCardContent(
 // ── 9. WEBSITE CARD CONTENT (Fallback web URLs) ─────────────────────────────
 @Composable
 private fun WebsiteCardContent(
-    item: StashItemWithVaultItem,
+    item: VaultItem,
     species: ContentSpecies,
     primaryText: Color,
     secondaryText: Color
@@ -918,12 +905,11 @@ private fun WebsiteCardContent(
                 .background(Color(0xFFEDE6DC)),
             contentAlignment = Alignment.Center
         ) {
-            val hasPreview = remember(item.thumbnailPath, item.sourceFile, item.uri) {
-                !item.thumbnailPath.isNullOrBlank() || item.sourceFile.isNotBlank() || (!item.uri.startsWith("http") && item.uri.isNotBlank())
+            val hasPreview = remember(item.sourceFile, item.uri) {
+                item.sourceFile.isNotBlank() || (!item.uri.startsWith("http") && item.uri.isNotBlank())
             }
             if (hasPreview) {
                 val model = when {
-                    !item.thumbnailPath.isNullOrBlank() -> item.thumbnailPath
                     item.sourceFile.isNotBlank() -> item.sourceFile
                     else -> item.uri
                 }
@@ -995,7 +981,7 @@ private fun WebsiteCardContent(
 // ── 10. DOCUMENT/NOTE CARD CONTENT (Fallback notes, text summary) ────────────
 @Composable
 private fun GenericDocumentCardContent(
-    item: StashItemWithVaultItem,
+    item: VaultItem,
     species: ContentSpecies,
     primaryText: Color,
     secondaryText: Color
@@ -1112,7 +1098,7 @@ private fun cleanDisplayTitle(title: String?, uri: String?, sourceName: String):
             "Spotify" -> "Spotify Track"
             "Amazon", "Flipkart" -> "Amazon Product"
             "Play Store" -> "Play Store App"
-            else -> "Saved Item"
+            else -> "Item"
         }
     }
     return t

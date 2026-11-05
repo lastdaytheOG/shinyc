@@ -25,6 +25,22 @@ class IndexingPipeline private constructor(private val context: Context) {
                     .also { INSTANCE = it }
             }
         }
+
+        /**
+         * [VaultItem.lang] of a picture that was read and has no text on it ("no linguistic
+         * content", as "und" is "undetermined": a picture not read yet). It is what tells the two
+         * apart: both have no text, and only the second has to be read.
+         */
+        const val LANG_NO_TEXT = "zxx"
+        const val LANG_NOT_READ = "und"
+    }
+
+    /**
+     * The picture stored as [id] has changed since it was read: what was read off it goes, its
+     * date is now, and it is embedded again. It stays one row.
+     */
+    suspend fun indexChanged(bitmap: Bitmap, uri: String, id: String) {
+        beingRead.once(id) { readAndStore(bitmap, uri, id, reread = true, changed = true) }
     }
 
     private val db         = VaultDatabase.get(context)
@@ -34,7 +50,15 @@ class IndexingPipeline private constructor(private val context: Context) {
     private val imageContentExtractor = com.amar.vault.indexing.ImageContentExtractor(context)
     private val pictureLocator = com.amar.vault.indexing.PictureLocator(context)
     private val beingRead = com.amar.vault.indexing.BeingRead()
-    private val duplicateDetector = com.amar.vault.indexing.DuplicateDetector(dao)
+    private val duplicateDetector = com.amar.vault.indexing.DuplicateDetector(dao) { stored ->
+        try {
+            val file = if (stored.startsWith("/")) java.io.File(stored) else null
+            (file?.inputStream() ?: context.contentResolver.openInputStream(android.net.Uri.parse(stored)))
+                ?.use { android.graphics.BitmapFactory.decodeStream(it) }
+        } catch (e: Exception) {
+            null
+        }
+    }
     private val metadataStage = com.amar.vault.indexing.MetadataStage()
     private val chunker: com.amar.vault.indexing.Chunker = com.amar.vault.indexing.WordWindowChunker()
     private val persister = com.amar.vault.indexing.IndexPersister(db)
@@ -78,6 +102,7 @@ class IndexingPipeline private constructor(private val context: Context) {
         uri: String,
         baseId: String?,
         reread: Boolean = false,
+        changed: Boolean = false,
     ): Unit = withContext(Dispatchers.Default) {
 
         val t0 = System.currentTimeMillis()
@@ -93,12 +118,15 @@ class IndexingPipeline private constructor(private val context: Context) {
         // existing decision; it cannot alter dedup, OCR, persistence, or vector behaviour.
         PlannerShadowRegistry.observeImage(uri, itemType.stored, bitmap.width, bitmap.height)
 
-        // Image dedup = perceptual hash; the pHash is also stored on the item below.
-        val (hash, isDuplicate) = duplicateDetector.imageVerdict(bitmap)
+        // Image dedup = perceptual hash, then the pixels; the pHash is also stored on the item below.
+        val hash = duplicateDetector.hashOf(bitmap)
+        val storedCopy = if (duplicateTarget == null && !reread) duplicateDetector.storedCopy(bitmap, hash, uri) else null
+        val isDuplicate = if (duplicateTarget != null) duplicateDetector.hashStored(hash) else storedCopy != null
         // A picture read again is its own duplicate, by design: it is read all the same.
         if (isDuplicate && !reread) {
-            val existingByHash = duplicateTarget ?: dao.findByPHash(hash)
-            if (existingByHash != null && existingByHash.ocrText.isBlank()) {
+            val existingByHash = duplicateTarget ?: storedCopy
+            // A row with no text is only worth reading again when it was never read to the end.
+            if (existingByHash != null && existingByHash.ocrText.isBlank() && existingByHash.lang != LANG_NO_TEXT) {
                 VaultLog.w("IndexingPipeline", "Repairing staged image shell with blank OCR: ${existingByHash.id}")
             } else {
                 IndexMetrics.increment(IndexMetrics.Event.INDEX_SKIPPED_DUP)
@@ -107,22 +135,22 @@ class IndexingPipeline private constructor(private val context: Context) {
         }
         VaultLog.v("IndexTiming", "pHash: ${System.currentTimeMillis() - t0}ms")
 
-        val targetId = duplicateTarget?.id ?: baseId ?: dao.findByPHash(hash)?.takeIf { it.ocrText.isBlank() }?.id ?: UUID.randomUUID().toString()
-        val existing = duplicateTarget ?: dao.getByIds(listOf(targetId)).firstOrNull()
+        val targetId = duplicateTarget?.id ?: baseId ?: storedCopy?.id ?: UUID.randomUUID().toString()
+        val existing = duplicateTarget ?: storedCopy
         val prof = IndexingProfiler.beginOrNull(uri, uri.substringAfterLast('/').ifBlank { uri }, itemType.stored)
 
         val shellItem = existing?.copy(
             pHash = hash,
-            timestamp = if (reread) existing.timestamp else System.currentTimeMillis(),
+            timestamp = if (reread && !changed) existing.timestamp else System.currentTimeMillis(),
         )?.let {
             // Read again: what was read before goes, so a picture that now reads as nothing is
             // stored with nothing on it rather than keeping the old text.
-            if (reread) it.copy(ocrText = "", tags = "", qrPayload = null, lang = "und") else it
+            if (reread) it.copy(ocrText = "", tags = "", qrPayload = null, lang = LANG_NOT_READ) else it
         } ?: VaultItem(
             id = targetId,
             uri = uri,
             ocrText = "",
-            lang = "und",
+            lang = LANG_NOT_READ,
             itemType = itemType,
             sourceFile = uri.substringAfterLast('/'),
             timestamp = System.currentTimeMillis(),
@@ -138,7 +166,7 @@ class IndexingPipeline private constructor(private val context: Context) {
         // decoded picture is at hand; the model runs beside OCR. Without photo search's models
         // there is no input size and nothing is done.
         // Photos only: a screenshot is found by the words on it.
-        if (!reread && itemType == ItemType.PHOTO) photoSearch.inputSize?.let { size ->
+        if ((!reread || changed) && itemType == ItemType.PHOTO) photoSearch.inputSize?.let { size ->
             val pixels = com.amar.vault.photos.PhotoPixels.of(bitmap, size)
             photoModelSlots.acquire()
             stagedDeepScope.launch {
@@ -165,10 +193,18 @@ class IndexingPipeline private constructor(private val context: Context) {
 
         // If both OCR and QR found nothing, keep the shell row visible/openable and stop deep work.
         if (ocrText.isBlank() && qrPayloads.isEmpty()) {
-            // Read again and found nothing: the keyword engine forgets the words it had for it.
-            if (reread) bm25Updater.update(listOf(com.amar.vault.indexing.IndexEntry(
-                id = targetId, text = com.amar.vault.retrieval.KeywordText.of(shellItem),
-            )))
+            // Written down, so that a scan coming back to this picture knows it has been read.
+            prof.timedStage(ProfilerStage.ROOM) {
+                persister.persistImageShell(shellItem.copy(lang = LANG_NO_TEXT))
+            }
+            // Read again and found nothing: the keyword engine forgets the words it had for it, and
+            // what was worked out from those words goes too.
+            if (reread) {
+                bm25Updater.update(listOf(com.amar.vault.indexing.IndexEntry(
+                    id = targetId, text = com.amar.vault.retrieval.KeywordText.of(shellItem),
+                )))
+                persister.persistImageMetadata(targetId, emptyList(), emptyList())
+            }
             IndexMetrics.increment(IndexMetrics.Event.INDEX_SUCCESS)
             val totalMs = System.currentTimeMillis() - t0
             IndexMetrics.recordDuration(IndexMetrics.Timing.INDEX_TOTAL, totalMs)

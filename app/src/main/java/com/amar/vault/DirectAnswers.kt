@@ -202,7 +202,7 @@ object DirectAnswers {
     /** Where the answer was read: the file and, for a PDF, the page. */
     fun sourceOf(page: VaultItem): String {
         val name = page.title ?: page.sourceFile.substringAfterLast('/').ifBlank {
-            if (page.itemType.isImage) "a picture" else "a saved item"
+            if (page.itemType.isImage) "a picture" else "an item in your vault"
         }
         val pageNumber = page.pdfPage
         return if (pageNumber != null) "From $name, page $pageNumber" else "From $name"

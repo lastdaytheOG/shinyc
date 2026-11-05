@@ -75,6 +75,10 @@ interface FormatExtractor {
      * order, after that page's batch (a page without words has no batch, and is still told).
      * What a reading from page N emits is exactly what a reading from page 1 emits from page N
      * on. A format without pages is read whole and tells nothing.
+     *
+     * A format with pages asks [pauseBefore] before each page it has to read off a picture, and on
+     * true stops there: the pages before that one are finished and emitted, in order, and a later
+     * reading from the next page emits the rest as if nothing had happened.
      */
     suspend fun extractStreaming(
         context: Context,
@@ -83,6 +87,7 @@ interface FormatExtractor {
         onPageCount: suspend (Int) -> Unit = {},
         from: ReadFrom = ReadFrom.START,
         onPageDone: suspend (Int) -> Unit = {},
+        pauseBefore: suspend () -> Boolean = { false },
         onBatch: suspend (List<PagedChunk>) -> Unit,
     ) {
         val all = extract(context, uri, chunker, onPageCount)
@@ -197,7 +202,7 @@ class PdfFormatExtractor : FormatExtractor {
         prof?.stageNs(ProfilerStage.PDF_OPEN, openNs)
         stream.use {
             val tLoad = System.nanoTime()
-            val doc = PDDocument.load(stream)
+            val doc = PDDocument.load(stream, kotlin.coroutines.coroutineContext[PdfPassword]?.value.orEmpty())
             val loadNs = System.nanoTime() - tLoad
             IndexMetrics.recordDuration(IndexMetrics.Timing.PDF_LOAD, nsToMs(loadNs))
             prof?.stageNs(ProfilerStage.PDF_LOAD, loadNs)
@@ -452,6 +457,7 @@ class PdfFormatExtractor : FormatExtractor {
         onPageCount: suspend (Int) -> Unit,
         from: ReadFrom,
         onPageDone: suspend (Int) -> Unit,
+        pauseBefore: suspend () -> Boolean,
         onBatch: suspend (List<PagedChunk>) -> Unit,
     ) {
         // Sprint P6.1 — observation-only instrumentation, mirroring [extract]. Before this, the
@@ -479,7 +485,7 @@ class PdfFormatExtractor : FormatExtractor {
         prof?.stageNs(ProfilerStage.PDF_OPEN, openNs)
         stream.use {
             val tLoad = System.nanoTime()
-            val doc = PDDocument.load(stream)
+            val doc = PDDocument.load(stream, kotlin.coroutines.coroutineContext[PdfPassword]?.value.orEmpty())
             val loadNs = System.nanoTime() - tLoad
             IndexMetrics.recordDuration(IndexMetrics.Timing.PDF_LOAD, nsToMs(loadNs))
             prof?.stageNs(ProfilerStage.PDF_LOAD, loadNs)
@@ -617,6 +623,9 @@ class PdfFormatExtractor : FormatExtractor {
                                 pageTexts[page] = stripped
                                 emitReadyPages()
                             } else {
+                                // This page stays unread; what the pool holds is finished and emitted
+                                // when the channel closes below, so the frontier stops just before it.
+                                if (pauseBefore()) break
                                 IndexMetrics.increment(IndexMetrics.Event.PDF_PAGE_OCR_FALLBACK)
                                 try {
                                     val r = renderer ?: PDFRenderer(doc).also { renderer = it }

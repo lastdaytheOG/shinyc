@@ -32,8 +32,7 @@ class SearchFilterTest {
     private val product = item(ItemType.LINK, uri = "https://www.amazon.in/dp/B0")
     private val song = item(ItemType.LINK, uri = "https://open.spotify.com/track/1")
 
-    private fun let(chip: String, item: VaultItem, saved: StashItemWithVaultItem? = null) =
-        SearchFilter.accepts(chip, item, saved)
+    private fun let(chip: String, item: VaultItem) = SearchFilter.accepts(chip, item)
 
     @Test
     fun allLetsEverythingThrough() {
@@ -80,24 +79,9 @@ class SearchFilterTest {
     }
 
     @Test
-    fun favouritesAndFoldersAreAboutTheStashEntry() {
-        fun saved(favourite: Boolean, folder: String) = StashItemWithVaultItem(
-            stashId = "s", sessionId = null, vaultItemId = "doc", vaultType = "SAVED", category = folder, savedAt = 0L,
-            sourceApp = "", isFavorite = favourite, createdAt = 0L, userNote = null, thumbnailPath = null, uri = "",
-            ocrText = "", itemType = ItemType.PDF, sourceFile = "", timestamp = 0L, title = null, mimeType = null,
-        )
-        assertFalse("never saved", let(SearchFilter.FAVORITES, pdfPage))
-        assertFalse("never saved", let(SearchFilter.FOLDERS, pdfPage))
-        assertTrue(let(SearchFilter.FAVORITES, pdfPage, saved(favourite = true, folder = "")))
-        assertFalse(let(SearchFilter.FAVORITES, pdfPage, saved(favourite = false, folder = "Bills")))
-        assertTrue(let(SearchFilter.FOLDERS, pdfPage, saved(favourite = false, folder = "Bills")))
-        assertFalse("saved, but not put in a folder", let(SearchFilter.FOLDERS, pdfPage, saved(favourite = true, folder = "")))
-    }
-
-    @Test
     fun theChipsOnScreenAreTheOnesHandled() {
         assertEquals(
-            listOf("All", "Images", "Videos", "Articles", "Products", "Music", "Documents", "Favorites", "Folders"),
+            listOf("All", "Images", "Videos", "Articles", "Products", "Music", "Documents"),
             SearchFilter.CHIPS,
         )
     }

@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.Flow
  * could not be read still says why the next time the app is opened.
  *
  * [id] is the id the document is stored under ([com.amar.vault.VaultDocument.id]); for a file
- * that was shared in it is the saved item's id.
+ * that was shared in it is the id of the file's own row.
  */
 @Entity(tableName = "document_imports", indices = [Index("state")])
 data class DocumentImport(
@@ -50,12 +50,30 @@ data class DocumentImport(
     val pagesSkipped: Int = 0,
     /** Why it ended without its text, when [state] is [ImportState.FAILED]. */
     val failure: ImportFailure? = null,
-    /** What the words about [failure] need to be exact: the file's extension, the error's own text. */
+    /**
+     * What the words about [failure] need to be exact: the file's extension, the error's own text.
+     * On a row that is waiting, why it waits ([WAITS_FOR_CHARGER], [READ_REST_NOW]). That is kept here
+     * and not in a column of its own so that the database stays at its version and an older build
+     * can still open the vault: to it these are plain waiting rows, which it reads on from their page.
+     */
     val failureDetail: String? = null,
     val addedAt: Long,
     val updatedAt: Long = addedAt,
 ) {
     val isFinished: Boolean get() = state == ImportState.DONE || state == ImportState.FAILED || state == ImportState.ALREADY_THERE
+
+    /** Part of it is read and can be searched; the rest is read while the phone charges. */
+    val waitsForCharger: Boolean get() = state == ImportState.WAITING && failureDetail == WAITS_FOR_CHARGER
+
+    /** The user asked for the rest now: this reading does not stop at its time on battery. */
+    val readsRestNow: Boolean get() = state == ImportState.WAITING && failureDetail == READ_REST_NOW
+
+    companion object {
+        const val WAITS_FOR_CHARGER = "waits-for-charger"
+        const val READ_REST_NOW = "read-rest-now"
+        /** On a [ImportFailure.LOCKED] row: the password typed for it did not open it. */
+        const val WRONG_PASSWORD = "wrong-password"
+    }
 }
 
 enum class ImportState {
@@ -135,6 +153,31 @@ interface DocumentImportDao {
         WHERE id = :id
     """)
     suspend fun finish(id: String, state: ImportState, pieces: Int, failure: ImportFailure?, detail: String?, now: Long)
+
+    /**
+     * Stops a reading for now with [why] written down (a [DocumentImport] constant). What it has done
+     * stays, and so that it is not counted against the page it stopped at, the count of starts is cleared.
+     */
+    @Query("""
+        UPDATE document_imports SET state = 'WAITING', failure = NULL, failureDetail = :why,
+            attempts = 0, updatedAt = :now
+        WHERE id = :id
+    """)
+    suspend fun markWaiting(id: String, why: String, now: Long)
+
+    /** The files that wait for a password. */
+    @Query("SELECT * FROM document_imports WHERE state = 'FAILED' AND failure = 'LOCKED' ORDER BY addedAt")
+    suspend fun locked(): List<DocumentImport>
+
+    @Query("SELECT COUNT(*) FROM document_imports WHERE state = 'WAITING' AND failureDetail = 'waits-for-charger'")
+    suspend fun countWaitingForCharger(): Int
+
+    /** The rest of one that waits for the charger is to be read now. */
+    @Query("""
+        UPDATE document_imports SET failureDetail = 'read-rest-now', updatedAt = :now
+        WHERE id = :id AND state = 'WAITING' AND failureDetail = 'waits-for-charger'
+    """)
+    suspend fun readRestNow(id: String, now: Long): Int
 
     /** Puts one that failed back in line; what was read of it is kept and carried on from. */
     @Query("""

@@ -75,16 +75,15 @@ fun SearchOverlayScreen(
     val activeFilter by viewModel.activeFilter.collectAsState()
     val quickFilters = viewModel.quickFilters
     val recentSearches by viewModel.recentSearches.collectAsState()
-    val searchSuggestions by viewModel.searchSuggestions.collectAsState()
     val similarSpellingsOnly by viewModel.similarSpellingsOnly.collectAsState()
     val understood by viewModel.understood.collectAsState()
     val readingNote by viewModel.readingNote.collectAsState()
     val photoMatches by viewModel.photoMatches.collectAsState()
 
     // Detailed overlay for search results spatial continuity
-    var activeDetailItem by remember { mutableStateOf<StashItemWithVaultItem?>(null) }
+    var activeDetailItem by remember { mutableStateOf<VaultItem?>(null) }
     // The result the user has asked to take out of the vault, until they confirm or cancel.
-    var toRemove by remember { mutableStateOf<StashItemWithVaultItem?>(null) }
+    var toRemove by remember { mutableStateOf<VaultItem?>(null) }
     
     // Each result is the card to show plus, for a document, the page and words that matched.
     val mappedResults = resultsList
@@ -122,7 +121,7 @@ fun SearchOverlayScreen(
                 query = queryText,
                 onClick = {
                     viewModel.recordSearch(queryText)
-                    AmarImageViewerActivity.open(context, item.toVaultItem())
+                    AmarImageViewerActivity.open(context, item)
                 },
                 onLongClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -131,8 +130,8 @@ fun SearchOverlayScreen(
                 modifier = cardModifier
             )
         } else if (isDocument) {
-            // A document shows the words that matched and opens on their page. What the card
-            // used to open — folder, note, delete — is a long press away.
+            // A document shows the words that matched and opens on their page. Its details are
+            // a long press away.
             com.amar.vault.ui.components.search.DocumentHitCard(
                 hit = hit,
                 query = queryText,
@@ -317,11 +316,6 @@ fun SearchOverlayScreen(
                     filter = activeFilter,
                     onSearchEverything = { viewModel.updateFilter(SearchFilter.ALL) }
                 )
-            } else if (mappedResults.isEmpty() && photoMatches.isEmpty() && searchSuggestions.isNotEmpty()) {
-                com.amar.vault.ui.components.search.SearchSuggestionsView(
-                    suggestions = searchSuggestions,
-                    onSuggestionSelected = { viewModel.updateQuery(it) }
-                )
             } else if (mappedResults.isEmpty() && photoMatches.isEmpty()) {
                 com.amar.vault.ui.components.search.EmptyStateView(query = queryText)
             } else {
@@ -360,12 +354,12 @@ fun SearchOverlayScreen(
                                 shownAtFirst = if (direct.isEmpty()) 12 else 6,
                                 onOpen = { photo ->
                                     viewModel.recordSearch(queryText)
-                                    AmarImageViewerActivity.open(context, photo.toVaultItem())
+                                    AmarImageViewerActivity.open(context, photo)
                                 },
                             )
                         }
                     }
-                    items(direct, key = { it.row.stashId }) { hit ->
+                    items(direct, key = { it.row.id }) { hit ->
                         resultCard(hit, Modifier.animateItemPlacement())
                     }
                     // What was found only inside longer words, or only by the query's small words,
@@ -392,7 +386,7 @@ fun SearchOverlayScreen(
                                 )
                             }
                         }
-                        items(partial, key = { "partial-" + it.row.stashId }) { hit ->
+                        items(partial, key = { "partial-" + it.row.id }) { hit ->
                             resultCard(hit, Modifier.animateItemPlacement())
                         }
                     }
@@ -402,39 +396,26 @@ fun SearchOverlayScreen(
 
         // Expanded detail view overlay for spatial continuity inside search
         activeDetailItem?.let { originalItem ->
-            // A result that was never saved to a folder: a page of a document, a picture.
-            val isSaved = !originalItem.stashId.startsWith("search_")
             CollectibleDetailView(
                 item = originalItem,
-                isSaved = isSaved,
                 onBack = { activeDetailItem = null },
-                onDelete = {
-                    if (isSaved) {
-                        viewModel.deleteSavedItem(originalItem.stashId)
-                        activeDetailItem = null
-                    } else {
-                        toRemove = originalItem
-                    }
-                },
-                onFavoriteToggle = {
-                    viewModel.toggleSavedFavorite(originalItem.stashId, !originalItem.isFavorite)
-                },
-                onNoteChange = { note ->
-                    viewModel.updateNote(originalItem.stashId, note)
-                },
+                onDelete = { toRemove = originalItem },
                 modifier = Modifier
                     .fillMaxSize()
             )
         }
 
         toRemove?.let { item ->
-            val isDocument = item.parentDocumentId != null
-            val name = item.title ?: item.sourceFile.substringAfterLast('/').ifBlank { if (isDocument) "this document" else "this picture" }
+            val isDocument = item.parentDocumentId != null || SearchFilter.isDocument(item)
+            val isPicture = item.itemType.isImage
+            val name = item.title ?: item.sourceFile.substringAfterLast('/').ifBlank {
+                if (isDocument) "this document" else if (isPicture) "this picture" else "this item"
+            }
             AlertDialog(
                 onDismissRequest = { toRemove = null },
                 containerColor = CreamLight,
                 title = { Text(com.amar.vault.indexing.RemovalWords.question(name, isDocument), color = CharcoalSoft, fontSize = 18.sp, fontWeight = FontWeight.Bold) },
-                text = { Text(com.amar.vault.indexing.RemovalWords.whatHappens(isDocument), color = WarmBrownDark, fontSize = 14.sp, lineHeight = 20.sp) },
+                text = { Text(com.amar.vault.indexing.RemovalWords.whatHappens(isDocument, isPicture), color = WarmBrownDark, fontSize = 14.sp, lineHeight = 20.sp) },
                 confirmButton = {
                     TextButton(onClick = {
                         toRemove = null

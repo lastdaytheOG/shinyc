@@ -104,7 +104,7 @@ class Migration14To15Test {
     fun everythingStoredIsStillThereAndTheNewListIsEmpty() = runBlocking {
         aVaultWithThingsInIt()
 
-        val db = open(VaultDatabase.MIGRATION_14_15, VaultDatabase.MIGRATION_15_16)
+        val db = open(VaultDatabase.MIGRATION_14_15, VaultDatabase.MIGRATION_15_16, VaultDatabase.MIGRATION_16_17)
 
         val items = db.vaultDao().getAll().associateBy { it.id }
         assertEquals(setOf("act_chunk0", "act_chunk1", "shot"), items.keys)
@@ -116,16 +116,13 @@ class Migration14To15Test {
             VaultDocument("act", "content://docs/act", "Act.pdf", ItemType.PDF, "h-act", pageCount = 121, chunkCount = 2, addedAt = 100L),
             db.vaultDocumentDao().getById("act"),
         )
-        val saved = db.stashItemDao().getStashItemsByType("SAVED").first().single()
-        assertEquals(listOf("shot", "Bills", "keep"), listOf(saved.vaultItemId, saved.category, saved.userNote))
-
         assertEquals(emptyList<DocumentImport>(), db.documentImportDao().getAll())
     }
 
     @Test
     fun theFullTextIndexStillFindsWhatWasStored() = runBlocking {
         aVaultWithThingsInIt()
-        val db = open(VaultDatabase.MIGRATION_14_15, VaultDatabase.MIGRATION_15_16)
+        val db = open(VaultDatabase.MIGRATION_14_15, VaultDatabase.MIGRATION_15_16, VaultDatabase.MIGRATION_16_17)
 
         assertEquals(listOf("act_chunk1"), db.vaultDao().searchFts("income").first().map { it.id })
     }
@@ -133,7 +130,7 @@ class Migration14To15Test {
     @Test
     fun theNewListCanBeWrittenAndRead() = runBlocking {
         aVaultWithThingsInIt()
-        val db = open(VaultDatabase.MIGRATION_14_15, VaultDatabase.MIGRATION_15_16)
+        val db = open(VaultDatabase.MIGRATION_14_15, VaultDatabase.MIGRATION_15_16, VaultDatabase.MIGRATION_16_17)
 
         val row = DocumentImport(
             id = "scan", uri = "content://docs/scan", name = "Scan.pdf", mimeType = "application/pdf",
@@ -165,6 +162,6 @@ class Migration14To15Test {
         val db = open(*VaultDatabase.migrations())
         assertEquals(emptyList<DocumentImport>(), db.documentImportDao().getAll())
         // Every step there is, so it ends at the newest version, not at 15.
-        assertEquals(16, db.openHelper.readableDatabase.version)
+        assertEquals(17, db.openHelper.readableDatabase.version)
     }
 }

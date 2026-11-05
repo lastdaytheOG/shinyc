@@ -205,6 +205,77 @@ class DocumentImportDeviceTest {
         assertEquals("everything read in the first stretch was thrown away", 0, storedWhenItBegan)
     }
 
+    private val readAtOnceAndStop = DocumentImportReader(db, read = { import, log ->
+        indexer.indexDocument(Uri.parse(import.uri), import.mimeType, baseId = import.id, displayName = import.name, log = log)
+    }, readAtOnceMs = 0)
+
+    /** A PDF of [pages] pages of real text, the kind that is read in milliseconds. */
+    private fun textPdf(name: String, pages: Int): File {
+        val file = File(folder, name)
+        val document = PdfDocument()
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 11f }
+        for (number in 1..pages) {
+            val page = document.startPage(PdfDocument.PageInfo.Builder(595, 842, number).create())
+            repeat(6) { round -> linesOf(number).forEachIndexed { i, line -> page.canvas.drawText(line, 40f, 60f + (round * 5 + i) * 16f, paint) } }
+            document.finishPage(page)
+        }
+        file.outputStream().use(document::writeTo)
+        document.close()
+        madeHere += file
+        return file
+    }
+
+    @Test
+    fun aScanPausedAndFinishedOnTheChargerEndsAsIfReadInOneGo() = runBlocking {
+        val file = scannedPdf("ledger-paused.pdf", pages = 8)
+        val import = add(file).also { added += it.id }
+
+        // Time runs out at once, so it stops as soon as a page is finished.
+        val ended = readAtOnceAndStop.readAll()
+        val paused = row(import.id)
+        Log.i(TAG, "paused at page ${paused.pagesDone} of ${paused.pageCount}, ${paused.pieces} pieces")
+        assertEquals(listOf(import.id), ended.map { it.id })
+        assertTrue("waits for the charger", paused.waitsForCharger)
+        assertEquals(8, paused.pageCount)
+        assertTrue("stopped part-way: page ${paused.pagesDone}", paused.pagesDone in 1..7)
+        val keptPages = pieces(import.id).filter { it.page <= paused.pagesDone }
+        assertTrue("what was read is stored", keptPages.isNotEmpty())
+        assertTrue("…and can be searched already", bm25.search("marigold", 50).any { it.startsWith(import.id) })
+        assertTrue("no page past where it stopped is stored", pieces(import.id).all { it.page <= paused.pagesDone })
+
+        // It is not taken up again at once: that would be stopping and starting for ever.
+        assertTrue(reader.readAll().isEmpty())
+        assertTrue(row(import.id).waitsForCharger)
+
+        // On the charger: the rest, from the page it reached.
+        reader.readAll(lane = com.amar.vault.indexing.ImportLane.ON_CHARGE)
+        val done = row(import.id)
+        assertEquals(ImportState.DONE, done.state)
+        assertEquals(8, done.pagesDone)
+        val finished = pieces(import.id)
+        assertEquals("the pages read first were not read again", keptPages, finished.filter { it.page <= paused.pagesDone })
+        assertEquals("every page is there", (1..8).toList(), finished.map { it.page }.distinct())
+
+        // The same file read in one go, to compare with.
+        forget(import.id)
+        val again = add(file).also { added += it.id }
+        reader.readAll()
+        assertEquals("page for page and piece for piece the same", finished, pieces(again.id))
+    }
+
+    @Test
+    fun aTextPdfIsNeverStoppedHoweverLittleTimeItIsGiven() = runBlocking {
+        val file = textPdf("ledger-text.pdf", pages = 40)
+        val import = add(file).also { added += it.id }
+
+        readAtOnceAndStop.readAll()
+
+        val row = row(import.id)
+        assertEquals(ImportState.DONE, row.state)
+        assertEquals(40, row.pagesDone)
+        assertEquals("every page is there", (1..40).toList(), pieces(import.id).map { it.page }.distinct())
+    }
+
     @Test
     fun aFileThatIsNotAPdfSaysSoInWords() = runBlocking {
         val file = File(folder, "broken.pdf").apply { writeText("%PDF-1.4\nthis is where the file was cut off") }

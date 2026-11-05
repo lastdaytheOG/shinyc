@@ -53,7 +53,7 @@ object SourceResolver {
                     app.replaceFirstChar { it.uppercase() }
                 }
             }
-            else -> "Saved"
+            else -> "Vault"
         }
     }
 }
