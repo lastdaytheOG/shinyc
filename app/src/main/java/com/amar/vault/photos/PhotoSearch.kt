@@ -309,6 +309,16 @@ class PhotoModelFiles internal constructor(
             }
             if (!partial.renameTo(target)) { partial.delete(); return false }
         }
+        commitManifest(manifestText)
+    }
+
+    fun commitManifest(manifestText: String): Boolean = synchronized(this) {
+        val m = try {
+            parse(manifestText)
+        } catch (e: Exception) {
+            VaultLog.w("PhotoSearch", "no readable manifest: ${e.message}")
+            return false
+        }
         val replaced = manifest()
         val partial = File(dir, "$MANIFEST.part")
         try {

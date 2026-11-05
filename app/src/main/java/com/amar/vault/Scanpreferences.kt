@@ -28,6 +28,10 @@ object ScanPreferences {
     private val KEY_CUSTOM_FOLDERS = stringSetPreferencesKey("custom_folders")
     private val KEY_INITIAL_SCAN_DONE = booleanPreferencesKey("initial_scan_done")
     private val KEY_DEVELOPER_MODE = booleanPreferencesKey("developer_mode")
+    private val KEY_APP_LOCK_ENABLED = booleanPreferencesKey("app_lock_enabled")
+    private val KEY_LARGER_TEXT = booleanPreferencesKey("larger_text")
+    private val KEY_LANGUAGE = androidx.datastore.preferences.core.stringPreferencesKey("app_language")
+    private val KEY_PHOTO_SEARCH_ENABLED = booleanPreferencesKey("photo_search_enabled")
 
     data class Prefs(
         val onboardingDone: Boolean = false,
@@ -39,9 +43,11 @@ object ScanPreferences {
         val scanDocuments: Boolean = true,
         val customFolders: Set<String> = emptySet(),
         val initialScanDone: Boolean = false,
-        /** Opt-in Developer Mode. Only unlocks the internal Developer Tools suite; never
-         *  changes production indexing/retrieval/AI behaviour. See [com.amar.vault.dev.DeveloperMode]. */
         val developerMode: Boolean = false,
+        val appLockEnabled: Boolean = false,
+        val largerText: Boolean = false,
+        val language: String = "system",
+        val photoSearchEnabled: Boolean = false,
     ) {
         /** Returns MediaStore-compatible relative paths to scan. */
         fun foldersToScan(): List<String> {
@@ -72,6 +78,10 @@ object ScanPreferences {
                 customFolders = p[KEY_CUSTOM_FOLDERS] ?: emptySet(),
                 initialScanDone = p[KEY_INITIAL_SCAN_DONE] ?: false,
                 developerMode = p[KEY_DEVELOPER_MODE] ?: false,
+                appLockEnabled = p[KEY_APP_LOCK_ENABLED] ?: false,
+                largerText = p[KEY_LARGER_TEXT] ?: false,
+                language = p[KEY_LANGUAGE] ?: "system",
+                photoSearchEnabled = p[KEY_PHOTO_SEARCH_ENABLED] ?: false,
             )
         }
 
@@ -87,6 +97,10 @@ object ScanPreferences {
             p[KEY_CUSTOM_FOLDERS] = prefs.customFolders
             p[KEY_INITIAL_SCAN_DONE] = prefs.initialScanDone
             p[KEY_DEVELOPER_MODE] = prefs.developerMode
+            p[KEY_APP_LOCK_ENABLED] = prefs.appLockEnabled
+            p[KEY_LARGER_TEXT] = prefs.largerText
+            p[KEY_LANGUAGE] = prefs.language
+            p[KEY_PHOTO_SEARCH_ENABLED] = prefs.photoSearchEnabled
         }
     }
 
@@ -100,5 +114,21 @@ object ScanPreferences {
 
     suspend fun markInitialScanDone(context: Context) {
         context.scanPrefsStore.edit { it[KEY_INITIAL_SCAN_DONE] = true }
+    }
+
+    suspend fun setAppLock(context: Context, enabled: Boolean) {
+        context.scanPrefsStore.edit { it[KEY_APP_LOCK_ENABLED] = enabled }
+    }
+
+    suspend fun setLargerText(context: Context, enabled: Boolean) {
+        context.scanPrefsStore.edit { it[KEY_LARGER_TEXT] = enabled }
+    }
+
+    suspend fun setLanguage(context: Context, lang: String) {
+        context.scanPrefsStore.edit { it[KEY_LANGUAGE] = lang }
+    }
+
+    suspend fun setPhotoSearchEnabled(context: Context, enabled: Boolean) {
+        context.scanPrefsStore.edit { it[KEY_PHOTO_SEARCH_ENABLED] = enabled }
     }
 }

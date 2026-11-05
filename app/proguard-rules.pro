@@ -44,4 +44,6 @@
 -keep class com.googlecode.leptonica.** { *; }
 # Gson reads fields by name.
 -keep class com.google.gson.** { *; }
+# ONNX Runtime for photo search models (downloaded dynamically).
+-keep class ai.onnxruntime.** { *; }
 -dontwarn **

@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">अमर वॉल्ट</string>
+    <string name="nav_search">खोजें</string>
+    <string name="nav_documents">दस्तावेज़</string>
+    <string name="nav_ask">पूछें</string>
+    <string name="nav_settings">सेटिंग्स</string>
+    <string name="action_add_documents">दस्तावेज़ जोड़ें</string>
+    <string name="app_lock_prompt">अमर वॉल्ट अनलॉक करें</string>
+    <string name="app_lock_description">बायोमेट्रिक या डिवाइस पिन का उपयोग करें</string>
+</resources>
