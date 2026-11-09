@@ -26,13 +26,13 @@ import java.util.Locale
 /**
  * Self-contained navigation host for the (minimal) Developer Tools.
  *
- * Four utilities exist by design — Index Files, AI Models, Benchmarks (Sprint 3C), and Golden
- * Queries (the in-app way to write retrieval test cases) — to support the adb-push →
+ * The utilities — Index Files, Benchmarks (Sprint 3C), Golden Queries (the in-app way to
+ * write retrieval test cases) and Photo search — exist to support the adb-push →
  * select-in-app testing workflow. Kept isolated in [com.amar.vault.dev] so the production
  * [com.amar.vault.Screen] graph has exactly ONE entry (DEV_TOOLS). Reachable only when
  * [DeveloperMode.isEnabled].
  */
-enum class DevRoute { HUB, INDEX_FILES, AI_MODELS, BENCHMARKS, GOLDEN_QUERIES, PHOTO_SEARCH }
+enum class DevRoute { HUB, INDEX_FILES, BENCHMARKS, GOLDEN_QUERIES, PHOTO_SEARCH }
 
 @Composable
 fun DevToolsRoot(onExit: () -> Unit) {
@@ -42,7 +42,6 @@ fun DevToolsRoot(onExit: () -> Unit) {
     when (route) {
         DevRoute.HUB -> DevToolsHub(onExit = onExit, onNavigate = { route = it })
         DevRoute.INDEX_FILES -> ManualIndexingScreen(onBack = back)
-        DevRoute.AI_MODELS -> ModelDataManagerScreen(onBack = back)
         DevRoute.BENCHMARKS -> BenchmarkDashboardScreen(onBack = back)
         DevRoute.GOLDEN_QUERIES -> GoldenCaptureScreen(onBack = back)
         DevRoute.PHOTO_SEARCH -> PhotoSearchScreen(onBack = back)
@@ -53,11 +52,10 @@ fun DevToolsRoot(onExit: () -> Unit) {
 private fun DevToolsHub(onExit: () -> Unit, onNavigate: (DevRoute) -> Unit) {
     DevScaffold(
         title = "Developer Tools",
-        subtitle = "Index content · test local AI",
+        subtitle = "Index content · benchmarks · photo search",
         onBack = onExit
     ) {
         DevNavCard("Index Files", "Pick files/folders or quick-scan, with pause/resume", "🗂️") { onNavigate(DevRoute.INDEX_FILES) }
-        DevNavCard("AI Models", "Scan/import GGUF · load · test Summary/Chat/RAG", "🧠") { onNavigate(DevRoute.AI_MODELS) }
         DevNavCard("Benchmarks", "Run evaluation suites · regression vs baseline · reports", "📊") { onNavigate(DevRoute.BENCHMARKS) }
         DevNavCard("Golden Queries", "Type a real query · mark the right answers · scored by Benchmarks", "🎯") { onNavigate(DevRoute.GOLDEN_QUERIES) }
         DevNavCard("Photo search", "Models · pictures embedded · timing on this phone", "🖼️") { onNavigate(DevRoute.PHOTO_SEARCH) }

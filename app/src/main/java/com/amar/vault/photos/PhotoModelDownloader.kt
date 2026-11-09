@@ -257,6 +257,6 @@ class PhotoModelDownloader(private val context: Context) {
 
     companion object {
         private const val TAG = "PhotoModelDownloader"
-        const val DEFAULT_BASE_URL = "https://github.com/lastdaytheOG/shinyc/releases/download/v1.0-photo-models/"
+        const val DEFAULT_BASE_URL = "https://huggingface.co/lastabhi/amar-photo-search/resolve/main/siglip2-b16-v2cw1-w4a8/"
     }
 }

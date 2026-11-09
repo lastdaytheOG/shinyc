@@ -21,7 +21,6 @@ import com.amar.vault.ui.theme.AmarTheme
 enum class MainTab {
     SEARCH,
     DOCUMENTS,
-    ASK,
     SETTINGS
 }
 
@@ -102,12 +101,7 @@ private fun ShellContent(prefs: ScanPreferences.Prefs) {
         ShellScreen.DOCUMENT_VIEWER -> {
             DocumentViewerScreen(
                 itemId = selectedDocumentId,
-                onBack = { currentScreen = ShellScreen.MAIN_TABS },
-                summarize = { item -> searchViewModel.summarizeDocument(item) },
-                onChatClick = {
-                    currentScreen = ShellScreen.MAIN_TABS
-                    currentTab = MainTab.ASK
-                }
+                onBack = { currentScreen = ShellScreen.MAIN_TABS }
             )
         }
 
@@ -141,13 +135,6 @@ private fun ShellContent(prefs: ScanPreferences.Prefs) {
                         )
 
                         NavigationTabItem(
-                            icon = AskNavIcon,
-                            label = VaultStrings.askNav(lang),
-                            selected = currentTab == MainTab.ASK,
-                            onClick = { currentTab = MainTab.ASK }
-                        )
-
-                        NavigationTabItem(
                             icon = Icons.Default.Settings,
                             label = VaultStrings.settingsNav(lang),
                             selected = currentTab == MainTab.SETTINGS,
@@ -176,16 +163,6 @@ private fun ShellContent(prefs: ScanPreferences.Prefs) {
                         MainTab.DOCUMENTS -> {
                             DocumentsScreen(
                                 onOpenDocument = { id ->
-                                    selectedDocumentId = id
-                                    currentScreen = ShellScreen.DOCUMENT_VIEWER
-                                }
-                            )
-                        }
-
-                        MainTab.ASK -> {
-                            AskVaultScreen(
-                                viewModel = searchViewModel,
-                                onOpenItem = { id ->
                                     selectedDocumentId = id
                                     currentScreen = ShellScreen.DOCUMENT_VIEWER
                                 }

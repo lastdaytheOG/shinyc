@@ -18,7 +18,7 @@ import kotlinx.coroutines.launch
  * Sources (all real platform counters, sampled — nothing modeled):
  *  - Java heap: [Runtime] used/max;
  *  - native heap: [Debug.getNativeHeapAllocatedSize]/[Debug.getNativeHeapSize]
- *    (this is where hnswlib, BM25 and llama.cpp allocations live — reported as the
+ *    (this is where hnswlib and BM25 allocations live — reported as the
  *    JNI/native figure; per-library attribution is not available from the platform);
  *  - process PSS: [ActivityManager.getProcessMemoryInfo] (total / dalvik / native);
  *  - GC: `art.gc.gc-count` / `art.gc.gc-time` runtime stats (cumulative for process);
@@ -93,7 +93,7 @@ class MemoryBenchmark(private val context: Context) {
                 MetricValue("javaHeap.used", javaUsed.toDouble(), "bytes", false),
                 MetricValue("javaHeap.max", rt.maxMemory().toDouble(), "bytes", false, "heap ceiling (largeHeap manifest flag applies)"),
                 MetricValue("nativeHeap.allocated", nativeUsed.toDouble(), "bytes", false,
-                    "includes hnswlib + BM25 + llama.cpp + ONNX allocations (JNI/native memory)"),
+                    "includes hnswlib + BM25 + ONNX allocations (JNI/native memory)"),
                 MetricValue("nativeHeap.size", nativeTotal.toDouble(), "bytes", false),
                 MetricValue("pss.total", pss?.totalPss?.let { it * 1024.0 }, "bytes", false,
                     if (pss == null) "ActivityManager unavailable" else ""),

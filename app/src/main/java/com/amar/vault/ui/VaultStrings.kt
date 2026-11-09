@@ -28,11 +28,6 @@ object VaultStrings {
         else -> "Documents"
     }
 
-    fun askNav(lang: AppLanguage) = when (lang) {
-        AppLanguage.HINDI -> "पूछें"
-        else -> "Ask"
-    }
-
     fun settingsNav(lang: AppLanguage) = when (lang) {
         AppLanguage.HINDI -> "सेटिंग्स"
         else -> "Settings"
@@ -153,16 +148,6 @@ object VaultStrings {
         else -> "Ready in vault ($count)"
     }
 
-    fun askTitle(lang: AppLanguage) = when (lang) {
-        AppLanguage.HINDI -> "वॉल्ट से पूछें"
-        else -> "Ask Vault"
-    }
-
-    fun askPlaceholder(lang: AppLanguage) = when (lang) {
-        AppLanguage.HINDI -> "अपनी फ़ाइलों से कोई प्रश्न पूछें..."
-        else -> "Ask anything in your files..."
-    }
-
     fun directFact(lang: AppLanguage) = when (lang) {
         AppLanguage.HINDI -> "⚡ सीधा तथ्य"
         else -> "⚡ Fact"
@@ -178,25 +163,6 @@ object VaultStrings {
         else -> "View source page →"
     }
 
-    fun tryAsking(lang: AppLanguage) = when (lang) {
-        AppLanguage.HINDI -> "पूछ कर देखें"
-        else -> "Try asking"
-    }
-
-    fun suggestionInsurance(lang: AppLanguage) = when (lang) {
-        AppLanguage.HINDI -> "मेरी कार का बीमा कब समाप्त होगा?"
-        else -> "When does my car insurance expire?"
-    }
-
-    fun suggestionBill(lang: AppLanguage) = when (lang) {
-        AppLanguage.HINDI -> "पिछले महीने का बिजली बिल कितना था?"
-        else -> "What was my last electric bill?"
-    }
-
-    fun suggestionAadhaar(lang: AppLanguage) = when (lang) {
-        AppLanguage.HINDI -> "पिताजी का आधार नंबर क्या है?"
-        else -> "Father's Aadhaar number?"
-    }
 
     fun appLockTitle(lang: AppLanguage) = when (lang) {
         AppLanguage.HINDI -> "ऐप लॉक"
