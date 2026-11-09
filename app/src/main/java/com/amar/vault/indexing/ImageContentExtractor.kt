@@ -43,6 +43,14 @@ class ImageContentExtractor(private val context: Context) {
         // correctness over speed.
         private const val PDF_TIER1_MIN_WORDS = 20
 
+        private const val IMAGE_TIER1_MIN_WORDS = 8
+
+        private const val UNSURE_BELOW = 0.6f
+        private const val UNSURE_MIN_CHARS = 4
+
+        internal fun unsureLine(text: String, confidence: Float): Boolean =
+            confidence < UNSURE_BELOW && text.count { it.isLetterOrDigit() } >= UNSURE_MIN_CHARS
+
         // Sprint P3 — the ColorMatrix math is constant, and ColorMatrixColorFilter is
         // immutable + safe to share across threads/Paints, so both filters are built
         // once instead of per preprocessing call. Matrix values are IDENTICAL to the
@@ -282,7 +290,7 @@ class ImageContentExtractor(private val context: Context) {
      * which is why the threshold is deliberately strict and the ladder is validated
      * against the golden dataset before being trusted.
      */
-    private fun tier1Healthy(text: String): Boolean {
+    private fun tier1Healthy(text: String, minWords: Int = PDF_TIER1_MIN_WORDS): Boolean {
         if (text.isBlank()) return false
         var words = 0
         var inWord = false
@@ -290,7 +298,7 @@ class ImageContentExtractor(private val context: Context) {
             if (ch.isWhitespace()) inWord = false
             else if (!inWord) { words++; inWord = true }
         }
-        if (words < PDF_TIER1_MIN_WORDS) return false
+        if (words < minWords) return false
         return TextTrustScorer.score(text).trusted
     }
 
@@ -314,17 +322,29 @@ class ImageContentExtractor(private val context: Context) {
         metric: String,
         recorder: OcrStrategyRecorder? = null,
         inReadingOrder: Boolean = false,
-    ): String {
+    ): String = textOf(process(client, image, metric, recorder), inReadingOrder)
+
+    private suspend fun process(
+        client: com.google.mlkit.vision.text.TextRecognizer,
+        image: InputImage,
+        metric: String,
+        recorder: OcrStrategyRecorder?,
+    ): com.google.mlkit.vision.text.Text {
         val t0 = System.currentTimeMillis()
         try {
-            val found = client.process(image).await()
-            return LookAlikeDigits.repaired((if (inReadingOrder) readingOrder(found) else found.text).trim())
+            return client.process(image).await()
         } finally {
             val elapsed = System.currentTimeMillis() - t0
             com.amar.vault.IndexMetrics.recordDuration(metric, elapsed)
             recorder?.engine("mlkit", elapsed.toDouble())
         }
     }
+
+    private fun textOf(found: com.google.mlkit.vision.text.Text, inReadingOrder: Boolean): String =
+        LookAlikeDigits.repaired((if (inReadingOrder) readingOrder(found) else found.text).trim())
+
+    private fun hasUnsureLine(found: com.google.mlkit.vision.text.Text): Boolean =
+        found.textBlocks.any { block -> block.lines.any { unsureLine(it.text, it.confidence) } }
 
     /**
      * What was found, top to bottom and left to right ([ReadingOrder]) rather than in the
@@ -373,11 +393,22 @@ class ImageContentExtractor(private val context: Context) {
      */
     private suspend fun readScreen(bitmap: Bitmap, recorder: OcrStrategyRecorder? = null): String {
         var hiAsIs = ""
+        var unsure = false
         val asIs = timedStrategy(recorder, OcrStrategy.RAW) {
             val image = InputImage.fromBitmap(bitmap, 0)
-            val en = recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, true)
-            hiAsIs = recognize(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder, true)
-            mergeTexts(en, hiAsIs)
+            val en = process(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
+            val hi = process(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
+            unsure = hasUnsureLine(en) || hasUnsureLine(hi)
+            hiAsIs = textOf(hi, inReadingOrder = true)
+            mergeTexts(textOf(en, inReadingOrder = true), hiAsIs)
+        }
+        if (AdaptiveImageOcrControl.tier1Enabled) {
+            val tier1Final = normalize(ReadingMerge.text(listOf(asIs)))
+            if (!unsure && tier1Healthy(tier1Final, IMAGE_TIER1_MIN_WORDS)) {
+                IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_TIER1_ACCEPTED)
+                return tier1Final
+            }
+            IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_ESCALATED)
         }
         val gray = timedPre(recorder, "grayscale") { preprocess { toHighContrastGrayscale(bitmap) } }
         try {

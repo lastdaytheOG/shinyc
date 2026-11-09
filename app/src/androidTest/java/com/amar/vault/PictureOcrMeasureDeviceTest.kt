@@ -13,6 +13,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import kotlinx.coroutines.async
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
@@ -193,6 +194,92 @@ class PictureOcrMeasureDeviceTest {
                 out.newLine()
                 out.flush()
                 bitmap.recycle(); gray.recycle(); inverted.recycle(); bigGray.recycle()
+            }
+        }
+    }
+
+    @Test
+    fun ab() = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("run with -e ocr ab", args.getString("ocr") == "ab")
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        val folder = File(app.getExternalFilesDir(null) ?: app.filesDir, "ocr-measure").takeIf { it.isDirectory }
+            ?: File(app.filesDir, "ocr-measure")
+        val pictures = folder.listFiles { f -> f.extension.lowercase() in setOf("jpg", "jpeg", "png", "webp") }
+            ?.sortedBy { it.name }.orEmpty()
+        assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
+        val reader = ImageContentExtractor(app)
+        val before = com.amar.vault.indexing.AdaptiveImageOcrControl.tier1Enabled
+        BitmapFactory.decodeFile(pictures.first().path)?.let { reader.extract(it); it.recycle() }
+        try {
+            File(folder, (args.getString("out") ?: "ab") + ".jsonl").bufferedWriter().use { out ->
+                for ((n, picture) in pictures.withIndex()) {
+                    val bitmap = BitmapFactory.decodeFile(picture.path) ?: continue
+                    val result = JSONObject().put("name", picture.name)
+                    val order = if (n % 2 == 0) listOf(true, false) else listOf(false, true)
+                    for (gate in order) {
+                        com.amar.vault.indexing.AdaptiveImageOcrControl.tier1Enabled = gate
+                        val accepted = com.amar.vault.IndexMetrics.snapshot()[com.amar.vault.IndexMetrics.Event.IMAGE_OCR_TIER1_ACCEPTED] ?: 0L
+                        val started = System.nanoTime()
+                        val text = reader.extract(bitmap).ocrText
+                        val ms = (System.nanoTime() - started) / 1e6
+                        val key = if (gate) "gate" else "full"
+                        result.put("${key}Text", text).put("${key}Ms", ms)
+                        if (gate) result.put("accepted", (com.amar.vault.IndexMetrics.snapshot()[com.amar.vault.IndexMetrics.Event.IMAGE_OCR_TIER1_ACCEPTED] ?: 0L) > accepted)
+                    }
+                    out.write(result.toString())
+                    out.newLine()
+                    out.flush()
+                    bitmap.recycle()
+                }
+            }
+        } finally {
+            com.amar.vault.indexing.AdaptiveImageOcrControl.tier1Enabled = before
+        }
+    }
+
+    @Test
+    fun overlap() = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("run with -e ocr overlap", args.getString("ocr") == "overlap")
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        val folder = File(app.getExternalFilesDir(null) ?: app.filesDir, "ocr-measure").takeIf { it.isDirectory }
+            ?: File(app.filesDir, "ocr-measure")
+        val pictures = folder.listFiles { f -> f.extension.lowercase() in setOf("jpg", "jpeg", "png", "webp") }
+            ?.sortedBy { it.name }.orEmpty().take(args.getString("count")?.toInt() ?: 60)
+        assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
+        val en = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        val hi = TextRecognition.getClient(DevanagariTextRecognizerOptions.Builder().build())
+        BitmapFactory.decodeFile(pictures.first().path)?.let {
+            val image = InputImage.fromBitmap(it, 0)
+            en.process(image).await(); hi.process(image).await(); it.recycle()
+        }
+        File(folder, "overlap.jsonl").bufferedWriter().use { out ->
+            for ((n, picture) in pictures.withIndex()) {
+                val bitmap = BitmapFactory.decodeFile(picture.path) ?: continue
+                val image = InputImage.fromBitmap(bitmap, 0)
+                suspend fun oneThenOther(): Double {
+                    val t0 = System.nanoTime()
+                    en.process(image).await()
+                    hi.process(image).await()
+                    return (System.nanoTime() - t0) / 1e6
+                }
+                suspend fun both(): Double = kotlinx.coroutines.coroutineScope {
+                    val t0 = System.nanoTime()
+                    val a = async { en.process(image).await() }
+                    val b = async { hi.process(image).await() }
+                    a.await(); b.await()
+                    (System.nanoTime() - t0) / 1e6
+                }
+                val (apart, together) = if (n % 2 == 0) {
+                    val a = oneThenOther(); a to both()
+                } else {
+                    val t = both(); oneThenOther() to t
+                }
+                out.write(JSONObject().put("name", picture.name).put("apartMs", apart).put("togetherMs", together).toString())
+                out.newLine()
+                out.flush()
+                bitmap.recycle()
             }
         }
     }
