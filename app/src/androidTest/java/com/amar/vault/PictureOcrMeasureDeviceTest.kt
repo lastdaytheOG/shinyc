@@ -199,6 +199,31 @@ class PictureOcrMeasureDeviceTest {
     }
 
     @Test
+    fun extractPdfs() = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("run with -e ocr extractpdfs", args.getString("ocr") == "extractpdfs")
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(app)
+        val folder = outputFolder(app)
+        val counters = listOf(
+            com.amar.vault.IndexMetrics.Event.PDF_PAGE_RENDER_UNREADABLE, com.amar.vault.IndexMetrics.Event.PDF_PAGE_OCR_FALLBACK,
+            com.amar.vault.IndexMetrics.Event.PDF_PAGE_TRUSTED,
+        )
+        File(folder, "extract.jsonl").bufferedWriter().use { out ->
+            for (pdf in folder.listFiles { f -> f.extension.lowercase() == "pdf" }.orEmpty().sortedBy { it.name }) {
+                val before = com.amar.vault.IndexMetrics.snapshot()
+                val chunks = com.amar.vault.indexing.PdfFormatExtractor()
+                    .extract(app, android.net.Uri.fromFile(pdf), com.amar.vault.indexing.WordWindowChunker())
+                val after = com.amar.vault.IndexMetrics.snapshot()
+                val words = chunks.groupBy { it.pdfPage }.mapValues { (_, c) -> c.sumOf { it.text.split(Regex("\\s+")).count { w -> w.isNotBlank() } } }
+                out.write(JSONObject().put("name", pdf.name).put("wordsByPage", JSONObject(words.mapKeys { it.key.toString() }))
+                    .put("counters", JSONObject(counters.associateWith { (after[it] ?: 0L) - (before[it] ?: 0L) })).toString())
+                out.newLine()
+            }
+        }
+    }
+
+    @Test
     fun renderPdfs() {
         val args = InstrumentationRegistry.getArguments()
         assumeTrue("run with -e ocr renderpdfs", args.getString("ocr") == "renderpdfs")
@@ -247,15 +272,23 @@ class PictureOcrMeasureDeviceTest {
         }
     }
 
+    private fun outputFolder(app: android.content.Context): File =
+        File(app.getExternalFilesDir(null) ?: app.filesDir, "ocr-measure").apply { mkdirs() }
+
+    private fun picturesFor(args: android.os.Bundle, folder: File): List<File> {
+        val source = args.getString("dir")?.let(::File) ?: folder
+        val all = source.listFiles { f -> f.extension.lowercase() in setOf("jpg", "jpeg", "png", "webp") }.orEmpty()
+        val newest = args.getString("newest")?.toInt()
+        return if (newest != null) all.sortedByDescending { it.lastModified() }.take(newest) else all.sortedBy { it.name }
+    }
+
     @Test
     fun ab() = runBlocking {
         val args = InstrumentationRegistry.getArguments()
         assumeTrue("run with -e ocr ab", args.getString("ocr") == "ab")
         val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
-        val folder = File(app.getExternalFilesDir(null) ?: app.filesDir, "ocr-measure").takeIf { it.isDirectory }
-            ?: File(app.filesDir, "ocr-measure")
-        val pictures = folder.listFiles { f -> f.extension.lowercase() in setOf("jpg", "jpeg", "png", "webp") }
-            ?.sortedBy { it.name }.orEmpty()
+        val folder = outputFolder(app)
+        val pictures = picturesFor(args, folder)
         assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
         val reader = ImageContentExtractor(app)
         val before = com.amar.vault.indexing.AdaptiveImageOcrControl.tier1Enabled
@@ -292,10 +325,8 @@ class PictureOcrMeasureDeviceTest {
         val args = InstrumentationRegistry.getArguments()
         assumeTrue("run with -e ocr overlap", args.getString("ocr") == "overlap")
         val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
-        val folder = File(app.getExternalFilesDir(null) ?: app.filesDir, "ocr-measure").takeIf { it.isDirectory }
-            ?: File(app.filesDir, "ocr-measure")
-        val pictures = folder.listFiles { f -> f.extension.lowercase() in setOf("jpg", "jpeg", "png", "webp") }
-            ?.sortedBy { it.name }.orEmpty().take(args.getString("count")?.toInt() ?: 60)
+        val folder = outputFolder(app)
+        val pictures = picturesFor(args, folder).take(args.getString("count")?.toInt() ?: 60)
         assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
         val en = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
         val hi = TextRecognition.getClient(DevanagariTextRecognizerOptions.Builder().build())

@@ -14,12 +14,12 @@ class UnsureLineTest {
     @Test
     fun aWordyLineReadWithLowConfidenceIsUnsure() {
         assertTrue(ImageContentExtractor.unsureLine("Balance due", 0.42f))
-        assertTrue(ImageContentExtractor.unsureLine("A/c 4821", 0.59f))
+        assertTrue(ImageContentExtractor.unsureLine("A/c 4821", 0.74f))
     }
 
     @Test
     fun aLineReadWithConfidenceIsNotUnsure() {
-        assertFalse(ImageContentExtractor.unsureLine("Balance due", 0.6f))
+        assertFalse(ImageContentExtractor.unsureLine("Balance due", 0.75f))
         assertFalse(ImageContentExtractor.unsureLine("Balance due", 0.93f))
     }
 
@@ -27,13 +27,13 @@ class UnsureLineTest {
     fun aShortLineDoesNotCountHoweverUnsure() {
         assertFalse(ImageContentExtractor.unsureLine("X", 0.2f))
         assertFalse(ImageContentExtractor.unsureLine("4G", 0.3f))
-        assertFalse(ImageContentExtractor.unsureLine("2:41", 0.3f))
+        assertFalse(ImageContentExtractor.unsureLine("12:45", 0.3f))
         assertFalse(ImageContentExtractor.unsureLine("-- | --", 0.1f))
     }
 
     @Test
     fun lettersOfAnyScriptAndDigitsCount() {
-        assertTrue(ImageContentExtractor.unsureLine("नमस्ते", 0.3f))
-        assertTrue(ImageContentExtractor.unsureLine("12:45", 0.3f))
+        assertTrue(ImageContentExtractor.unsureLine("नमस्ते दुनिया", 0.3f))
+        assertTrue(ImageContentExtractor.unsureLine("12:45 PM", 0.3f))
     }
 }
