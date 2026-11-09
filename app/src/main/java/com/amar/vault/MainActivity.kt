@@ -85,6 +85,6 @@ class MainActivity : FragmentActivity() {
         screenshotObserver?.unregister()
         folderSyncObserver?.unregister()
 
-        vectorSearchManager.destroy()
+        if (!isChangingConfigurations) vectorSearchManager.destroy()
     }
 }
