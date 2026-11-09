@@ -436,14 +436,12 @@ interface VaultRelationshipDao {
         com.amar.vault.reasoning.storage.ReasoningSnapshot::class,
         com.amar.vault.memory.storage.AgentMemorySnapshot::class,
         com.amar.vault.action.storage.AgentActionSnapshot::class,
-        LocalModel::class,
-        ChatMessageEntity::class,
         IngestionSession::class,
         IngestionAttachment::class,
         com.amar.vault.indexing.DocumentImport::class,
         com.amar.vault.photos.PhotoVector::class,
     ],
-    version = 17,
+    version = 18,
     exportSchema = true
 )
 @TypeConverters(ItemTypeConverter::class)
@@ -461,8 +459,6 @@ abstract class VaultDatabase : RoomDatabase() {
     abstract fun reasoningSnapshotDao(): com.amar.vault.reasoning.storage.ReasoningSnapshotDao
     abstract fun agentMemorySnapshotDao(): com.amar.vault.memory.storage.AgentMemorySnapshotDao
     abstract fun agentActionSnapshotDao(): com.amar.vault.action.storage.AgentActionSnapshotDao
-    abstract fun localModelDao(): LocalModelDao
-    abstract fun chatMessageDao(): ChatMessageDao
     abstract fun ingestionSessionDao(): IngestionSessionDao
     abstract fun ingestionAttachmentDao(): IngestionAttachmentDao
     abstract fun documentImportDao(): com.amar.vault.indexing.DocumentImportDao
@@ -683,6 +679,13 @@ abstract class VaultDatabase : RoomDatabase() {
             }
         }
 
+        internal val MIGRATION_17_18 = object : androidx.room.migration.Migration(17, 18) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS `chat_history`")
+                db.execSQL("DROP TABLE IF EXISTS `local_models`")
+            }
+        }
+
         /**
          * Every step from version 6 to the current one, in order. [context] is where the step to
          * version 14 leaves its account of what it changed ([MigrationReport]); a test that only
@@ -695,6 +698,7 @@ abstract class VaultDatabase : RoomDatabase() {
             MIGRATION_14_15,
             MIGRATION_15_16,
             MIGRATION_16_17,
+            MIGRATION_17_18,
         )
 
         fun get(context: Context): VaultDatabase {
