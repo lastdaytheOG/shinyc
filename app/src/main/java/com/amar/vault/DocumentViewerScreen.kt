@@ -28,28 +28,18 @@ import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
 import com.amar.vault.ui.theme.*
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DocumentViewerScreen(
     itemId: String,
-    onBack: () -> Unit,
-    /** When provided, shows a read-only "Summarize" action powered by the existing local LLM. */
-    summarize: (suspend (VaultItem) -> String)? = null,
-    /** When provided, shows a "Chat with this document" action (grounded single-doc chat). */
-    onChatClick: (() -> Unit)? = null
+    onBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var item by remember { mutableStateOf<VaultItem?>(null) }
     var metadataList by remember { mutableStateOf<List<VaultMetadata>>(emptyList()) }
     var showRawText by remember { mutableStateOf(false) }
-
-    // Document Summary state (per item).
-    var summaryText by remember(itemId) { mutableStateOf<String?>(null) }
-    var summarizing by remember(itemId) { mutableStateOf(false) }
 
     // Load data from DB
     LaunchedEffect(itemId) {
@@ -194,101 +184,6 @@ fun DocumentViewerScreen(
                                 color = CharcoalSoft,
                                 lineHeight = 18.sp
                             )
-                        }
-                    }
-
-                    // ── Chat with this document (grounded single-doc chat) ───────
-                    if (onChatClick != null) {
-                        Spacer(Modifier.height(8.dp))
-                        Button(
-                            onClick = onChatClick,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = WarmBrownDark),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("Chat with this document", color = Color.White, fontWeight = FontWeight.Medium)
-                        }
-                    }
-
-                    // ── Document Summary (read-only, local LLM) ──────────────────
-                    if (summarize != null) {
-                        val cleanText = item!!.ocrText.trim()
-                        val wordCount = cleanText.split(Regex("\\s+")).count { it.isNotBlank() }
-                        val keyTopics = metadataList
-                            .filter { it.type in setOf("DOCUMENT_CLASS", "DOCUMENT_TYPE", "CATEGORY", "ORGANIZATION") }
-                            .map { it.value }
-                            .filter { it.isNotBlank() }
-                            .distinct()
-                            .take(6)
-
-                        Spacer(Modifier.height(12.dp))
-                        Divider(color = CreamDark, thickness = 0.5.dp)
-                        Spacer(Modifier.height(12.dp))
-
-                        Text(
-                            text = "AI SUMMARY",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = WarmBrown,
-                            letterSpacing = 0.5.sp
-                        )
-                        Text(
-                            text = "≈ $wordCount words" +
-                                if (keyTopics.isNotEmpty()) "  ·  ${keyTopics.joinToString(" · ")}" else "",
-                            fontSize = 12.sp,
-                            color = WarmBrownDark,
-                            modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
-                        )
-
-                        Button(
-                            onClick = {
-                                val current = item ?: return@Button
-                                summarizing = true
-                                summaryText = null
-                                scope.launch {
-                                    val result = summarize(current)
-                                    summaryText = result.ifBlank {
-                                        "AI model not available. Enable a local model in AI settings to summarize."
-                                    }
-                                    summarizing = false
-                                }
-                            },
-                            enabled = !summarizing,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = WarmBrown),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text(
-                                text = when {
-                                    summarizing -> "Summarizing…"
-                                    summaryText != null -> "Regenerate Summary"
-                                    else -> "Summarize"
-                                },
-                                color = Color.White,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-
-                        if (summarizing) {
-                            Spacer(Modifier.height(12.dp))
-                            CircularProgressIndicator(color = WarmBrown, modifier = Modifier.size(24.dp))
-                        } else summaryText?.let { summary ->
-                            Spacer(Modifier.height(12.dp))
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(CreamDark.copy(alpha = 0.3f))
-                                    .border(1.dp, CreamDark, RoundedCornerShape(8.dp))
-                                    .padding(12.dp)
-                            ) {
-                                Text(
-                                    text = summary,
-                                    fontSize = 14.sp,
-                                    color = CharcoalSoft,
-                                    lineHeight = 20.sp
-                                )
-                            }
                         }
                     }
                 }
