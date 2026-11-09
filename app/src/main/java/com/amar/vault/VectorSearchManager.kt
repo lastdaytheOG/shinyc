@@ -131,17 +131,23 @@ class VectorSearchManager(private val context: Context) {
         return hits
     }
 
+    private val engineLifecycleLock = Any()
+
     suspend fun saveState() = withContext(Dispatchers.IO) {
-        if (!initialized) return@withContext
-        engine.saveToDisk()
-        persistIdMappings()
-        android.util.Log.d("VectorSearch", "Saved state: ${engine.getCount()} vectors")
+        synchronized(engineLifecycleLock) {
+            if (!initialized) return@withContext
+            engine.saveToDisk()
+            persistIdMappings()
+            android.util.Log.d("VectorSearch", "Saved state: ${engine.getCount()} vectors")
+        }
     }
 
     fun destroy() {
-        if (!initialized) return
-        engine.destroyEngine()
-        initialized = false
+        synchronized(engineLifecycleLock) {
+            if (!initialized) return
+            engine.destroyEngine()
+            initialized = false
+        }
     }
 
     fun getIndexedCount(): Int = if (initialized) engine.getCount() else 0
