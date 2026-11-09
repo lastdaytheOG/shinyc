@@ -155,14 +155,14 @@ object DeveloperIndexController {
         runLoop(uris.size) { i ->
             val uri = uris[i]
             try {
-                app.contentResolver.openInputStream(uri).use { stream ->
-                    val bmp = stream?.let { BitmapFactory.decodeStream(it) }
-                    if (bmp != null) {
-                        pipeline.indexBitmap(bmp, uri.toString())
-                        bmp.recycle()
-                        bump(indexed = 1)
-                    } else bump(skipped = 1)
+                val bmp = com.amar.vault.indexing.BitmapDecoding.decodeStreamBounded {
+                    app.contentResolver.openInputStream(uri)
                 }
+                if (bmp != null) {
+                    pipeline.indexBitmap(bmp, uri.toString())
+                    bmp.recycle()
+                    bump(indexed = 1)
+                } else bump(skipped = 1)
             } catch (e: Exception) {
                 bump(failed = 1)
             }
@@ -178,14 +178,14 @@ object DeveloperIndexController {
             val mime = runCatching { app.contentResolver.getType(uri) }.getOrNull()
             try {
                 if (mime != null && mime.startsWith("image/")) {
-                    app.contentResolver.openInputStream(uri).use { stream ->
-                        val bmp = stream?.let { BitmapFactory.decodeStream(it) }
-                        if (bmp != null) {
-                            pipeline.indexBitmap(bmp, uri.toString())
-                            bmp.recycle()
-                            bump(indexed = 1)
-                        } else bump(skipped = 1)
+                    val bmp = com.amar.vault.indexing.BitmapDecoding.decodeStreamBounded {
+                        app.contentResolver.openInputStream(uri)
                     }
+                    if (bmp != null) {
+                        pipeline.indexBitmap(bmp, uri.toString())
+                        bmp.recycle()
+                        bump(indexed = 1)
+                    } else bump(skipped = 1)
                 } else {
                     // The indexer decides what it can read: a provider that reports a PDF as
                     // "application/octet-stream" (or reports nothing) still gives its name.

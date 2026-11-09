@@ -98,6 +98,39 @@ interface FormatExtractor {
 /** What is thrown for a PDF that opens and has no pages; [ImportFailure] knows it by these words. */
 internal const val NO_PAGES = "the PDF has no pages: it is cut short or damaged"
 
+internal fun repairStripperText(raw: String): String {
+    if (raw.none(::strippedTextNeedsRepair)) return raw
+    val out = StringBuilder(raw.length + 8)
+    var i = 0
+    while (i < raw.length) {
+        when (val ch = raw[i]) {
+            SOFT_HYPHEN -> {
+                var next = i + 1
+                if (next < raw.length && raw[next] == '\r') next++
+                if (next < raw.length && raw[next] == '\n') i = next
+            }
+            ZERO_WIDTH_SPACE -> {}
+            NO_BREAK_SPACE -> out.append(' ')
+            '\uFB00' -> out.append("ff")
+            '\uFB01' -> out.append("fi")
+            '\uFB02' -> out.append("fl")
+            '\uFB03' -> out.append("ffi")
+            '\uFB04' -> out.append("ffl")
+            '\uFB05', '\uFB06' -> out.append("st")
+            else -> out.append(ch)
+        }
+        i++
+    }
+    return out.toString()
+}
+
+private const val SOFT_HYPHEN = '\u00AD'
+private const val ZERO_WIDTH_SPACE = '\u200B'
+private const val NO_BREAK_SPACE = '\u00A0'
+
+private fun strippedTextNeedsRepair(ch: Char): Boolean =
+    ch == SOFT_HYPHEN || ch == ZERO_WIDTH_SPACE || ch == NO_BREAK_SPACE || ch in '\uFB00'..'\uFB06'
+
 internal fun openDocStream(context: Context, uri: Uri): InputStream =
     context.contentResolver.openInputStream(uri) ?: throw IllegalStateException("Cannot open $uri")
 
@@ -300,6 +333,16 @@ class PdfFormatExtractor : FormatExtractor {
                         // therefore a second full document traversal that produces only blanks.
                         // Probe first/middle/last with the same trust gate; any trusted page fails
                         // closed to the legacy full-strip path, preserving mixed/text PDFs.
+                        val visualContentCache = HashMap<Int, Boolean>()
+                        suspend fun pageHasVisualContent(p: Int): Boolean {
+                            visualContentCache[p]?.let { return it }
+                            val detected = docMutex.withLock {
+                                PdfPageImageDetector.hasAnyImageOrVectorOutlines(doc.getPage(p - 1))
+                            }
+                            visualContentCache[p] = detected
+                            return detected
+                        }
+
                         val scanDominant = if (AdaptivePdfOcrControl.mode == AdaptivePdfOcrControl.Mode.SCAN_OPTIMIZED) {
                             val probeStripper = PDFTextStripper()
                             val probeStartedAt = System.nanoTime()
@@ -307,7 +350,11 @@ class PdfFormatExtractor : FormatExtractor {
                                 probeStripper.startPage = probePage
                                 probeStripper.endPage = probePage
                                 val sampled = docMutex.withLock { probeStripper.getText(doc) }
-                                TextTrustScorer.score(UnicodeText.nfc(sampled.trim()))
+                                val result = TextTrustScorer.score(UnicodeText.nfc(repairStripperText(sampled).trim()))
+                                val isSparseNoImages = result.reasons.size == 1 &&
+                                    result.reasons[0] == TextTrustScorer.TrustFailure.TOO_FEW_WORDS &&
+                                    !pageHasVisualContent(probePage)
+                                if (isSparseNoImages) result.copy(trusted = true) else result
                             }
                             stripNs += System.nanoTime() - probeStartedAt
                             PdfExecutionPlanner.useOcrOnly(probes)
@@ -325,7 +372,9 @@ class PdfFormatExtractor : FormatExtractor {
                             // NFC at the ingestion boundary — BEFORE scoring and chunking, so the
                             // gate judges (and Room/BM25 store) canonical bytes.
                             tStage = System.nanoTime()
-                            val stripped = UnicodeText.nfc(raw.trim())
+                            val repaired = repairStripperText(raw)
+                            if (repaired !== raw) IndexMetrics.increment(IndexMetrics.Event.PDF_STRIP_REPAIRED)
+                            val stripped = UnicodeText.nfc(repaired.trim())
                             val pageNfcNs = System.nanoTime() - tStage
                             nfcNs += pageNfcNs
                             tStage = System.nanoTime()
@@ -337,7 +386,11 @@ class PdfFormatExtractor : FormatExtractor {
                             )
                             prof?.pageScored(page, pageNfcNs, pageTrustNs, trust.score.toDouble(), trust.trusted)
 
-                            if (trust.trusted) {
+                            val onlyTooFewWords = trust.reasons.size == 1 &&
+                                trust.reasons[0] == TextTrustScorer.TrustFailure.TOO_FEW_WORDS
+                            val skipOcrSparse = onlyTooFewWords && !pageHasVisualContent(page)
+
+                            if (trust.trusted || skipOcrSparse) {
                                 IndexMetrics.increment(IndexMetrics.Event.PDF_PAGE_TRUSTED)
                                 pageTexts[page] = stripped
                             } else {
@@ -578,6 +631,16 @@ class PdfFormatExtractor : FormatExtractor {
                         // gate; if none is trusted, skip stripping and send every page straight to
                         // render+OCR. Any trusted probe fails closed to normal per-page stripping,
                         // preserving mixed/text PDFs (a faithful port of [extract]'s scan-dominant plan).
+                        val visualContentCache = HashMap<Int, Boolean>()
+                        suspend fun pageHasVisualContent(p: Int): Boolean {
+                            visualContentCache[p]?.let { return it }
+                            val detected = docMutex.withLock {
+                                PdfPageImageDetector.hasAnyImageOrVectorOutlines(doc.getPage(p - 1))
+                            }
+                            visualContentCache[p] = detected
+                            return detected
+                        }
+
                         val scanDominant = if (AdaptivePdfOcrControl.mode == AdaptivePdfOcrControl.Mode.SCAN_OPTIMIZED) {
                             val probeStripper = PDFTextStripper()
                             val probeStartedAt = System.nanoTime()
@@ -585,7 +648,11 @@ class PdfFormatExtractor : FormatExtractor {
                                 probeStripper.startPage = probePage
                                 probeStripper.endPage = probePage
                                 val sampled = docMutex.withLock { probeStripper.getText(doc) }
-                                TextTrustScorer.score(UnicodeText.nfc(sampled.trim()))
+                                val result = TextTrustScorer.score(UnicodeText.nfc(repairStripperText(sampled).trim()))
+                                val isSparseNoImages = result.reasons.size == 1 &&
+                                    result.reasons[0] == TextTrustScorer.TrustFailure.TOO_FEW_WORDS &&
+                                    !pageHasVisualContent(probePage)
+                                if (isSparseNoImages) result.copy(trusted = true) else result
                             }
                             stripNs += System.nanoTime() - probeStartedAt
                             PdfExecutionPlanner.useOcrOnly(probes)
@@ -606,7 +673,9 @@ class PdfFormatExtractor : FormatExtractor {
                                 text
                             }
                             val tNfc = System.nanoTime()
-                            val stripped = UnicodeText.nfc(raw.trim())
+                            val repaired = repairStripperText(raw)
+                            if (repaired !== raw) IndexMetrics.increment(IndexMetrics.Event.PDF_STRIP_REPAIRED)
+                            val stripped = UnicodeText.nfc(repaired.trim())
                             val pageNfcNs = System.nanoTime() - tNfc
                             nfcNs += pageNfcNs
                             val tTrust = System.nanoTime()
@@ -618,7 +687,11 @@ class PdfFormatExtractor : FormatExtractor {
                             )
                             prof?.pageScored(page, pageNfcNs, pageTrustNs, trust.score.toDouble(), trust.trusted)
 
-                            if (trust.trusted) {
+                            val onlyTooFewWords = trust.reasons.size == 1 &&
+                                trust.reasons[0] == TextTrustScorer.TrustFailure.TOO_FEW_WORDS
+                            val skipOcrSparse = onlyTooFewWords && !pageHasVisualContent(page)
+
+                            if (trust.trusted || skipOcrSparse) {
                                 IndexMetrics.increment(IndexMetrics.Event.PDF_PAGE_TRUSTED)
                                 pageTexts[page] = stripped
                                 emitReadyPages()

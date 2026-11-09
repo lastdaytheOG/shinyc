@@ -12,6 +12,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -118,5 +119,54 @@ class PictureScanTest {
         assertFalse(ImageContentExtractor.saysHindi("৪:37 PM"))
         assertFalse(ImageContentExtractor.saysHindi("Display & touch"))
         assertFalse(ImageContentExtractor.saysHindi(""))
+    }
+
+    @Test
+    fun samePhotoFromTwoPathsIsRecognizedAsDuplicateUnderBoundedCap() = runBlocking {
+        // Small image (800x600) with a proportional cap (maxShortSide = 300) to test
+        // bounded duplicate detection across paths without heavy memory allocation.
+        val w = 800
+        val h = 600
+        val original = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+        val bytes = java.io.ByteArrayOutputStream().use { out ->
+            original.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out)
+            out.toByteArray()
+        }
+        original.recycle()
+
+        // Path 1 (e.g. BulkScanWorker with decodeStreamBounded, cap = 300 -> 400x300)
+        val bmpPath1 = BitmapDecoding.decodeStreamBounded(maxShortSide = 300) { java.io.ByteArrayInputStream(bytes) }!!
+        assertEquals(400, bmpPath1.width)
+        assertEquals(300, bmpPath1.height)
+
+        val hash1 = DuplicateDetector(db.vaultDao()).hashOf(bmpPath1)
+        val uriA = "file:///storage/emulated/0/DCIM/photo.jpg"
+        val itemA = VaultItem(
+            id = "item_dup_1",
+            uri = uriA,
+            ocrText = "sample invoice",
+            itemType = ItemType.PHOTO,
+            timestamp = 1000L,
+            pHash = hash1,
+            lang = "en"
+        )
+        db.vaultDao().insert(itemA)
+
+        // Path 2 (e.g. copy arriving at a different URI, also cap = 300 -> 400x300)
+        val bmpPath2 = BitmapDecoding.decodeStreamBounded(maxShortSide = 300) { java.io.ByteArrayInputStream(bytes) }!!
+        val hash2 = DuplicateDetector(db.vaultDao()).hashOf(bmpPath2)
+        assertEquals(hash1, hash2)
+
+        // openStored decodes via decodeStreamBounded (cap = 300 -> 400x300)
+        val detector = DuplicateDetector(db.vaultDao()) {
+            BitmapDecoding.decodeStreamBounded(maxShortSide = 300) { java.io.ByteArrayInputStream(bytes) }
+        }
+
+        val duplicate = detector.storedCopy(bmpPath2, hash2, "file:///storage/emulated/0/Download/photo_copy.jpg")
+        assertNotNull(duplicate)
+        assertEquals("item_dup_1", duplicate!!.id)
+
+        bmpPath1.recycle()
+        bmpPath2.recycle()
     }
 }

@@ -101,10 +101,9 @@ class FolderSyncObserver(
             Log.d("FolderSync", "New photo detected in $path — indexing")
             lastProcessedTime = dateAdded
 
-            val stream = context.contentResolver.openInputStream(uri) ?: return
-            val bitmap = BitmapFactory.decodeStream(stream)
-            stream.close()
-
+            val bitmap = com.amar.vault.indexing.BitmapDecoding.decodeStreamBounded(
+                openStream = { context.contentResolver.openInputStream(uri) }
+            )
             if (bitmap != null) {
                 IndexingPipeline.getInstance(context).indexBitmap(bitmap, uri.toString())
                 bitmap.recycle()
