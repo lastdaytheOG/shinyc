@@ -45,8 +45,8 @@ class ImageContentExtractor(private val context: Context) {
 
         private const val IMAGE_TIER1_MIN_WORDS = 8
 
-        private const val UNSURE_BELOW = 0.6f
-        private const val UNSURE_MIN_CHARS = 4
+        private const val UNSURE_BELOW = 0.75f
+        private const val UNSURE_MIN_CHARS = 5
 
         internal fun unsureLine(text: String, confidence: Float): Boolean =
             confidence < UNSURE_BELOW && text.count { it.isLetterOrDigit() } >= UNSURE_MIN_CHARS
