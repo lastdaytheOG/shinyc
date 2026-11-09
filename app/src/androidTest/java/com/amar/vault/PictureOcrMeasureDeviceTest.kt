@@ -199,6 +199,55 @@ class PictureOcrMeasureDeviceTest {
     }
 
     @Test
+    fun renderPdfs() {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("run with -e ocr renderpdfs", args.getString("ocr") == "renderpdfs")
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(app)
+        val folder = File(app.getExternalFilesDir(null) ?: app.filesDir, "ocr-measure")
+        val pngs = File(folder, "renders").takeIf { args.getString("png") == "1" }?.apply { mkdirs() }
+        val pages = args.getString("pages")?.toInt() ?: Int.MAX_VALUE
+        File(folder, "renders.jsonl").bufferedWriter().use { out ->
+            for (pdf in folder.listFiles { f -> f.extension.lowercase() == "pdf" }.orEmpty().sortedBy { it.name }) {
+                val result = runCatching {
+                    com.tom_roush.pdfbox.pdmodel.PDDocument.load(pdf).use { doc ->
+                        val renderer = com.tom_roush.pdfbox.rendering.PDFRenderer(doc)
+                        val stripper = com.tom_roush.pdfbox.text.PDFTextStripper()
+                        JSONArray().apply {
+                            for (p in 0 until minOf(doc.numberOfPages, pages)) {
+                                stripper.startPage = p + 1
+                                stripper.endPage = p + 1
+                                val chars = stripper.getText(doc).count { !it.isWhitespace() }
+                                val bitmap = renderer.renderImageWithDPI(p, 150f, com.tom_roush.pdfbox.rendering.ImageType.RGB)
+                                val row = IntArray(bitmap.width)
+                                val first = bitmap.getPixel(0, 0)
+                                var uniform = true
+                                var y = 0
+                                while (uniform && y < bitmap.height) {
+                                    bitmap.getPixels(row, 0, bitmap.width, 0, y, bitmap.width, 1)
+                                    if (row.any { it != first }) uniform = false
+                                    y++
+                                }
+                                put(JSONObject().put("page", p + 1).put("textChars", chars).put("uniform", uniform)
+                                    .put("colour", Integer.toHexString(first)))
+                                pngs?.let { dir ->
+                                    File(dir, "${pdf.nameWithoutExtension}_p${p + 1}.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                                }
+                                bitmap.recycle()
+                            }
+                        }
+                    }
+                }
+                out.write(JSONObject().put("name", pdf.name).apply {
+                    result.onSuccess { put("pages", it) }.onFailure { put("error", it.javaClass.simpleName + ": " + it.message) }
+                }.toString())
+                out.newLine()
+                out.flush()
+            }
+        }
+    }
+
+    @Test
     fun ab() = runBlocking {
         val args = InstrumentationRegistry.getArguments()
         assumeTrue("run with -e ocr ab", args.getString("ocr") == "ab")
