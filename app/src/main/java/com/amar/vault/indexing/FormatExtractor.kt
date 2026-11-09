@@ -202,6 +202,12 @@ class PdfFormatExtractor : FormatExtractor {
     @Volatile
     private var ocrEngine: ImageContentExtractor? = null
 
+    private suspend fun ownTextOf(doc: PDDocument, docMutex: Mutex, page: Int): String {
+        val stripper = PDFTextStripper().apply { startPage = page; endPage = page }
+        val raw = docMutex.withLock { stripper.getText(doc) }
+        return UnicodeText.nfc(repairStripperText(raw).trim())
+    }
+
     private fun ocrEngine(context: Context): ImageContentExtractor =
         ocrEngine ?: synchronized(this) {
             ocrEngine ?: ImageContentExtractor(context.applicationContext).also { ocrEngine = it }
@@ -415,6 +421,15 @@ class PdfFormatExtractor : FormatExtractor {
                                         IndexMetrics.increment(IndexMetrics.Event.PDF_PAGE_BLANK_SKIPPED)
                                         bitmap.recycle()
                                         pageTexts[page] = ""
+                                        continue
+                                    }
+                                    val ownText = if (RenderedPdfPageInspector.isOneColour(bitmap)) {
+                                        if (stripped.isNotBlank()) stripped else ownTextOf(doc, docMutex, page)
+                                    } else ""
+                                    if (ownText.isNotBlank()) {
+                                        IndexMetrics.increment(IndexMetrics.Event.PDF_PAGE_RENDER_UNREADABLE)
+                                        bitmap.recycle()
+                                        pageTexts[page] = ownText
                                         continue
                                     }
                                     // Escalation-only 300dpi re-render for ensemble strategy 4
@@ -713,6 +728,14 @@ class PdfFormatExtractor : FormatExtractor {
                                         IndexMetrics.increment(IndexMetrics.Event.PDF_PAGE_BLANK_SKIPPED)
                                         bitmap.recycle()
                                         pageTexts[page] = ""
+                                        emitReadyPages()
+                                    } else if (RenderedPdfPageInspector.isOneColour(bitmap) &&
+                                        (if (stripped.isNotBlank()) stripped else ownTextOf(doc, docMutex, page)).let { own ->
+                                            own.isNotBlank().also { if (it) pageTexts[page] = own }
+                                        }
+                                    ) {
+                                        IndexMetrics.increment(IndexMetrics.Event.PDF_PAGE_RENDER_UNREADABLE)
+                                        bitmap.recycle()
                                         emitReadyPages()
                                     } else {
                                         // Escalation-only 300dpi re-render for ensemble strategy 4;

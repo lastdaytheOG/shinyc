@@ -199,6 +199,31 @@ class PictureOcrMeasureDeviceTest {
     }
 
     @Test
+    fun extractPdfs() = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("run with -e ocr extractpdfs", args.getString("ocr") == "extractpdfs")
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(app)
+        val folder = outputFolder(app)
+        val counters = listOf(
+            com.amar.vault.IndexMetrics.Event.PDF_PAGE_RENDER_UNREADABLE, com.amar.vault.IndexMetrics.Event.PDF_PAGE_OCR_FALLBACK,
+            com.amar.vault.IndexMetrics.Event.PDF_PAGE_TRUSTED,
+        )
+        File(folder, "extract.jsonl").bufferedWriter().use { out ->
+            for (pdf in folder.listFiles { f -> f.extension.lowercase() == "pdf" }.orEmpty().sortedBy { it.name }) {
+                val before = com.amar.vault.IndexMetrics.snapshot()
+                val chunks = com.amar.vault.indexing.PdfFormatExtractor()
+                    .extract(app, android.net.Uri.fromFile(pdf), com.amar.vault.indexing.WordWindowChunker())
+                val after = com.amar.vault.IndexMetrics.snapshot()
+                val words = chunks.groupBy { it.pdfPage }.mapValues { (_, c) -> c.sumOf { it.text.split(Regex("\\s+")).count { w -> w.isNotBlank() } } }
+                out.write(JSONObject().put("name", pdf.name).put("wordsByPage", JSONObject(words.mapKeys { it.key.toString() }))
+                    .put("counters", JSONObject(counters.associateWith { (after[it] ?: 0L) - (before[it] ?: 0L) })).toString())
+                out.newLine()
+            }
+        }
+    }
+
+    @Test
     fun renderPdfs() {
         val args = InstrumentationRegistry.getArguments()
         assumeTrue("run with -e ocr renderpdfs", args.getString("ocr") == "renderpdfs")

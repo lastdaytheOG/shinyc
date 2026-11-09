@@ -8,7 +8,12 @@ import android.graphics.Bitmap
  * to OCR, so a false negative costs time but a false positive cannot lose searchable content.
  */
 internal object RenderedPdfPageInspector {
-    fun isExactlyBlank(bitmap: Bitmap): Boolean {
+    fun isExactlyBlank(bitmap: Bitmap): Boolean = isOneColour(bitmap, -1)
+
+    fun isOneColour(bitmap: Bitmap): Boolean =
+        bitmap.width <= 0 || bitmap.height <= 0 || isOneColour(bitmap, bitmap.getPixel(0, 0))
+
+    private fun isOneColour(bitmap: Bitmap, colour: Int): Boolean {
         if (bitmap.width <= 0 || bitmap.height <= 0) return true
         val rowHeight = minOf(32, bitmap.height)
         val pixels = IntArray(bitmap.width * rowHeight)
@@ -16,7 +21,7 @@ internal object RenderedPdfPageInspector {
         while (y < bitmap.height) {
             val height = minOf(rowHeight, bitmap.height - y)
             bitmap.getPixels(pixels, 0, bitmap.width, 0, y, bitmap.width, height)
-            for (index in 0 until bitmap.width * height) if (pixels[index] != -1) return false
+            for (index in 0 until bitmap.width * height) if (pixels[index] != colour) return false
             y += height
         }
         return true
