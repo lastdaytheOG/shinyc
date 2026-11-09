@@ -43,6 +43,7 @@ object IndexMetrics {
         const val PDF_SOURCE_REUSE_HIT = "pdf.source_reuse_hit"
         /** Three-page scan probe selected OCR-only extraction and skipped full text stripping. */
         const val PDF_SCAN_DOMINANT_PLAN = "pdf.scan_dominant_plan"
+        const val PDF_STRIP_REPAIRED = "pdf.strip_repaired"
         // Sprint P4 — OCR escalation ladder outcomes (per fallback page). The
         // acceptance rate is THE validation signal for the ladder: accepted pages
         // ran 2 inference passes instead of the full ensemble's 7.
