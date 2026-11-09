@@ -4,16 +4,13 @@ import android.content.Context
 import androidx.collection.LruCache
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
-import java.util.UUID
 import javax.inject.Inject
 
 /**
@@ -139,14 +136,9 @@ class SearchViewModel @Inject constructor(
     private val db: VaultDatabase,
     private val vectorSearchManager: VectorSearchManager,
     private val retrievalService: com.amar.vault.retrieval.RetrievalService,
-    private val ragService: RagService,
-    private val languageModel: com.amar.vault.retrieval.LanguageModel,
     private val photoSearch: com.amar.vault.photos.PhotoSearch,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
-
-    /** UI gateway to the single LLM owner — cancels any in-flight generation. */
-    fun cancelGeneration() = languageModel.cancelGeneration()
 
     /**
      * The search screen opened: photo search starts loading its models now (on demand, not at
@@ -166,42 +158,9 @@ class SearchViewModel @Inject constructor(
     /** Groups the topic's existing references into time-clustered events. */
     suspend fun eventsForTopic(name: String): List<EventProjection> = eventAggregator.eventsForTopic(name)
 
-    /** Read-only single-document summary via the existing local RAG/LLM path. */
-    suspend fun summarizeDocument(item: VaultItem): String = ragService.summarizeDocument(item)
-
-    /**
-     * Grounded single-document chat. Reuses [RagService.executeRag] with ONLY [item] as the source
-     * (no cross-document retrieval), threading a short recent-conversation preamble into the query so
-     * follow-ups stay contextual — all through the existing execution/prompt/failure path.
-     */
-    suspend fun chatWithDocument(
-        item: VaultItem,
-        history: List<ChatMessage>,
-        question: String
-    ): String {
-        val recent = history.takeLast(6) // ~3 prior exchanges — keep small models within context
-        val composed = if (recent.isEmpty()) {
-            question
-        } else buildString {
-            append("Conversation so far:\n")
-            recent.forEach { m -> append(if (m.isUser) "User: " else "Assistant: ").append(m.text).append('\n') }
-            append("\nCurrent question: ").append(question)
-        }
-        return ragService.executeRag(composed, listOf(item))
-    }
-
     val query           = MutableStateFlow("")
     val queryPlan       = MutableStateFlow<QueryPlan?>(null)
     val isSearchLoading = MutableStateFlow(false)
-    val showFasterAiBanner = MutableStateFlow(false)
-
-    fun dismissFasterAiBanner() {
-        showFasterAiBanner.value = false
-    }
-
-    private val chatDao = db.chatMessageDao()
-    private val modelDao = db.localModelDao()
-    private val gson = Gson()
 
     // Every write to the table reads all of it again, text and all, so only while a screen is
     // looking: left running, it went on for as long as the app was open once Photos had been seen,
@@ -210,93 +169,10 @@ class SearchViewModel @Inject constructor(
         .getAllItems()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    // Chat history Flow with source restoration
-    val chatMessages: StateFlow<List<ChatMessage>> = chatDao
-        .getMessagesForSession("default_session")
-        .map { entities ->
-            entities.map { entity ->
-                // Decoupled from the VaultItem entity: decodes the versioned envelope and
-                // tolerantly falls back to legacy raw-entity JSON. Never throws.
-                val sources: List<VaultItem> = ChatSourceCodec.decode(entity.sourcesJson)
-                val kCard: KnowledgeCard? = try {
-                    if (!entity.knowledgeCardJson.isNullOrBlank()) {
-                        gson.fromJson(entity.knowledgeCardJson, KnowledgeCard::class.java)
-                    } else null
-                } catch (e: Exception) {
-                    null
-                }
-                val cCard: CollectionCard? = try {
-                    if (!entity.collectionCardJson.isNullOrBlank()) {
-                        gson.fromJson(entity.collectionCardJson, CollectionCard::class.java)
-                    } else null
-                } catch (e: Exception) {
-                    null
-                }
-                ChatMessage(
-                    text = entity.content,
-                    isUser = entity.role == "user",
-                    sources = sources,
-                    knowledgeCard = kCard,
-                    collectionCard = cCard
-                )
-            }
-        }
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-
-    private val _isGenerating = MutableStateFlow(false)
-    val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
-
     init {
         viewModelScope.launch(Dispatchers.IO) {
             if (!vectorSearchManager.initialized) vectorSearchManager.initialize()
             android.util.Log.d("SearchVM", "VectorSearch ready: ${vectorSearchManager.getIndexedCount()} vectors")
-
-            // Initialize models in DB if empty
-            val existing = modelDao.getAllModels()
-            if (existing.isEmpty()) {
-                val destDir = File(context.filesDir, "models")
-                val profile = DeviceCapability.getDeviceProfile(context)
-                val recommendation = ModelRecommendationEngine.recommend(profile)
-                val models = listOf(
-                    LocalModel(
-                        modelId = "qwen-3b",
-                        displayName = "Qwen 2.5 3B Instruct (INT4)",
-                        fileName = "qwen2.5-3b-instruct-q4_k_m.gguf",
-                        downloadUrl = "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
-                        sha256 = "cde75b28de5678ab12eef458a2309cf8b12f458e0a3cd84d9fde1f909fa00cde",
-                        sizeBytes = 2200000000L,
-                        requiredRamGb = 8.0f,
-                        status = if (File(destDir, "qwen2.5-3b-instruct-q4_k_m.gguf").exists()) "READY" else "PENDING",
-                        downloadProgress = 0,
-                        isEnabled = (recommendation.modelId == "qwen-3b")
-                    ),
-                    LocalModel(
-                        modelId = "qwen-1.5b",
-                        displayName = "Qwen 2.5 1.5B Instruct (INT3)",
-                        fileName = "Qwen2.5-1.5B-Instruct.IQ3_XXS.gguf",
-                        downloadUrl = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-IQ3_XXS.gguf",
-                        sha256 = "faee12e8b2308faee230dfaef12a456ef128a30cf12ea45ef20aefdf1209ffde",
-                        sizeBytes = 850000000L,
-                        requiredRamGb = 4.0f,
-                        status = if (File(destDir, "Qwen2.5-1.5B-Instruct.IQ3_XXS.gguf").exists()) "READY" else "PENDING",
-                        downloadProgress = 0,
-                        isEnabled = (recommendation.modelId == "qwen-1.5b")
-                    ),
-                    LocalModel(
-                        modelId = "gemma-2b",
-                        displayName = "Gemma 2 2B Instruct (INT4)",
-                        fileName = "gemma-2-2b-it-q4_k_m.gguf",
-                        downloadUrl = "https://huggingface.co/google/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-q4_k_m.gguf",
-                        sha256 = "beef230f890daeffe890de890dfaef128a90cf12ea89ef90aefdf1209ffdebcad",
-                        sizeBytes = 1600000000L,
-                        requiredRamGb = 4.0f,
-                        status = if (File(destDir, "gemma-2-2b-it-q4_k_m.gguf").exists()) "READY" else "PENDING",
-                        downloadProgress = 0,
-                        isEnabled = (recommendation.modelId == "gemma-2b")
-                    )
-                )
-                modelDao.insertAll(models)
-            }
         }
     }
 
@@ -536,12 +412,6 @@ class SearchViewModel @Inject constructor(
         }
     }
 
-    fun clearChatHistory() {
-        viewModelScope.launch(Dispatchers.IO) {
-            chatDao.clearHistory()
-        }
-    }
-
     /**
      * Takes [row] out of the vault — the whole document when it is a page of one — and runs
      * the search again. [onDone] is told what went.
@@ -571,150 +441,81 @@ class SearchViewModel @Inject constructor(
         }
     }
 
-    fun sendAgenticQuery(queryText: String) {
-        if (queryText.isBlank()) return
+    suspend fun answerQuestion(queryText: String): VaultAnswer? = withContext(Dispatchers.IO) {
         val q = queryText.trim()
+        if (q.isEmpty()) return@withContext null
 
-        viewModelScope.launch(Dispatchers.IO) {
-            val sessionId = "default_session"
-
-            // 1. Save User Message
-            val userMsgId = UUID.randomUUID().toString()
-            chatDao.insert(
-                ChatMessageEntity(
-                    messageId = userMsgId,
-                    sessionId = sessionId,
-                    role = "user",
-                    content = q,
-                    timestamp = System.currentTimeMillis()
-                )
-            )
-
-            _isGenerating.value = true
-
-            try {
-                // 2. Classify and route query, then retrieve context
-                val routed = QueryRouter.route(q)
-                // The question is read once, here, and the reading is kept. It used to be read
-                // by the router, which took the date and order words out, and then again from
-                // what was left — where there was no date or order to find. "Bills from last
-                // month" was answered from a search for "bills from", over every month.
-                //
-                // An order word the vault says as part of a phrase ("last working day") is
-                // one of the words asked about, not an order.
-                val asWords = OrderWordsInPhrases.asWords(q) { phrase ->
-                    runCatching { db.vaultDao().anyTextMatches("\"$phrase*\"") }.getOrDefault(false)
-                }
-                val plan = QueryPlanner.parse(q, asWords = asWords)
-                // Page-level hits: the answer's source passages are the best pages, which may
-                // well be several pages of one document.
-                // The pages are looked for by what the question is about. Looked for by every
-                // word of it, the pages that say "is" and "the" most often came first.
-                val about = DirectAnswers.aboutWords(plan.cleanedQuery).joinToString(" ").ifBlank { plan.cleanedQuery }
-                val searchResults = retrievalService.retrieve(
-                    com.amar.vault.retrieval.RetrievalRequest(
-                        about, plan,
-                        tuning = com.amar.vault.retrieval.RetrievalTuning(onePerDocument = false),
-                    )
-                ).items
-                // The answer read straight off those pages, when the question asks for
-                // something written down: no model, and nothing to download.
-                val direct = DirectAnswers.answer(plan.cleanedQuery, searchResults)
-                // Nothing in the period asked about: say that, and what was read as the period.
-                // An answer is not made up from other months, nor by the model from nothing.
-                val nothingInPeriod = if (searchResults.isEmpty()) ReadingWords.nothingInPeriod(plan.understood) else null
-                // The page the answer was read from is the first source.
-                val sources = (listOfNotNull(searchResults.firstOrNull { it.id == direct?.sourceId }) + searchResults)
-                    .distinctBy { it.id }.take(3)
-
-                // 3. Resolve cards if applicable
-                val aggregator = KnowledgeAggregator(context)
-                var kCard: KnowledgeCard? = null
-                var cCard: CollectionCard? = null
-                
-                val resolution = CanonicalEntityRegistry.resolve(q)
-                if (resolution.decision == CanonicalizationDecision.RESOLVED) {
-                    kCard = aggregator.buildCard(resolution.canonicalId!!)
-                }
-
-                val classConstraint = plan.preferred.find { it.type == "DOCUMENT_CLASS" }
-                if (classConstraint != null) {
-                    try {
-                        val docClass = DocumentClass.valueOf(classConstraint.value)
-                        cCard = CollectionAggregator(context).buildCard(docClass)
-                    } catch (_: Exception) {}
-                }
-
-                // 4. Invoke appropriate engine based on QueryRouter classification tier
-                // A question that asks for a sum over many items ("how much did I spend") is
-                // not answered by one fact off one page.
-                val overMany = Regex("(?i)\\b(total|spent|spend|expenses?|kharch|kharcha|sum)\\b").containsMatchIn(q)
-                val answered = if (nothingInPeriod != null) nothingInPeriod
-                else if (direct?.fact != null && !overMany) "⚡ ${direct.text}"
-                else when (routed.tier) {
-                    QueryRouter.QueryTier.TIER0_REGEX -> {
-                        val answer = buildFallbackAnswer(q, searchResults, direct)
-                        "⚡ $answer"
-                    }
-                    QueryRouter.QueryTier.TIER1_SEARCH -> {
-                        val answer = buildFallbackAnswer(q, searchResults, direct)
-                        if (searchResults.isEmpty()) {
-                            // No search results — let LLM handle it directly as direct chat fallback
-                            val chatAnswer = ragService.executeRag(q, emptyList())
-                            if (chatAnswer.isNotBlank()) "🧠 $chatAnswer" else "🔍 $answer"
-                        } else {
-                            "🔍 $answer"
-                        }
-                    }
-                    QueryRouter.QueryTier.TIER2_LLM -> {
-                        val ragAnswer = ragService.executeRag(q, sources)
-                        if (ragAnswer.isNotBlank()) {
-                            "🧠 $ragAnswer"
-                        } else {
-                            buildFallbackAnswer(q, searchResults, direct)
-                        }
-                    }
-                }
-
-                // What was read into the question is said with the answer, with the way to
-                // have the words taken as words instead.
-                val finalAnswer = if (nothingInPeriod != null) answered
-                else listOfNotNull(answered, ReadingWords.forAnAnswer(plan.understood)).joinToString("\n\n")
-
-                // Check degradation after potential generation
-                val activeModel = modelDao.getEnabledModel()
-                if (activeModel != null) {
-                    val stats = RuntimeStatsManager(context)
-                    if (stats.detectDegradation(activeModel.modelId)) {
-                        showFasterAiBanner.value = true
-                    }
-                }
-
-                // Serialize sources through the versioned DTO codec (schema-evolution safe)
-                val sourcesJson = ChatSourceCodec.encode(sources)
-                val kCardJson = kCard?.let { gson.toJson(it) }
-                val cCardJson = cCard?.let { gson.toJson(it) }
-
-                // 5. Save Assistant Message
-                val assistantMsgId = UUID.randomUUID().toString()
-                chatDao.insert(
-                    ChatMessageEntity(
-                        messageId = assistantMsgId,
-                        sessionId = sessionId,
-                        role = "assistant",
-                        content = finalAnswer,
-                        timestamp = System.currentTimeMillis(),
-                        sourcesJson = sourcesJson,
-                        knowledgeCardJson = kCardJson,
-                        collectionCardJson = cCardJson
-                    )
-                )
-
-            } catch (e: Exception) {
-                android.util.Log.e("SearchVM", "RAG query error: ${e.message}")
-            } finally {
-                _isGenerating.value = false
+        try {
+            val routed = QueryRouter.route(q)
+            // The question is read once, here, and the reading is kept. It used to be read
+            // by the router, which took the date and order words out, and then again from
+            // what was left — where there was no date or order to find. "Bills from last
+            // month" was answered from a search for "bills from", over every month.
+            //
+            // An order word the vault says as part of a phrase ("last working day") is
+            // one of the words asked about, not an order.
+            val asWords = OrderWordsInPhrases.asWords(q) { phrase ->
+                runCatching { db.vaultDao().anyTextMatches("\"$phrase*\"") }.getOrDefault(false)
             }
+            val plan = QueryPlanner.parse(q, asWords = asWords)
+            // Page-level hits: the answer's source passages are the best pages, which may
+            // well be several pages of one document.
+            // The pages are looked for by what the question is about. Looked for by every
+            // word of it, the pages that say "is" and "the" most often came first.
+            val about = DirectAnswers.aboutWords(plan.cleanedQuery).joinToString(" ").ifBlank { plan.cleanedQuery }
+            val searchResults = retrievalService.retrieve(
+                com.amar.vault.retrieval.RetrievalRequest(
+                    about, plan,
+                    tuning = com.amar.vault.retrieval.RetrievalTuning(onePerDocument = false),
+                )
+            ).items
+            val direct = DirectAnswers.answer(plan.cleanedQuery, searchResults)
+            // Nothing in the period asked about: say that, and what was read as the period.
+            // An answer is not made up from other months.
+            val nothingInPeriod = if (searchResults.isEmpty()) ReadingWords.nothingInPeriod(plan.understood) else null
+            // The page the answer was read from is the first source.
+            val sources = (listOfNotNull(searchResults.firstOrNull { it.id == direct?.sourceId }) + searchResults)
+                .distinctBy { it.id }.take(3)
+
+            val aggregator = KnowledgeAggregator(context)
+            var kCard: KnowledgeCard? = null
+            var cCard: CollectionCard? = null
+
+            val resolution = CanonicalEntityRegistry.resolve(q)
+            if (resolution.decision == CanonicalizationDecision.RESOLVED) {
+                kCard = aggregator.buildCard(resolution.canonicalId!!)
+            }
+
+            val classConstraint = plan.preferred.find { it.type == "DOCUMENT_CLASS" }
+            if (classConstraint != null) {
+                try {
+                    val docClass = DocumentClass.valueOf(classConstraint.value)
+                    cCard = CollectionAggregator(context).buildCard(docClass)
+                } catch (_: Exception) {}
+            }
+
+            // A question that asks for a sum over many items ("how much did I spend") is
+            // not answered by one fact off one page.
+            val overMany = Regex("(?i)\\b(total|spent|spend|expenses?|kharch|kharcha|sum)\\b").containsMatchIn(q)
+            val answered = if (nothingInPeriod != null) nothingInPeriod
+            else if (direct?.fact != null && !overMany) "⚡ ${direct.text}"
+            else when (routed.tier) {
+                QueryRouter.QueryTier.TIER0_REGEX -> "⚡ ${AnswerBuilders.fallback(q, searchResults, direct)}"
+                QueryRouter.QueryTier.TIER1_SEARCH -> "🔍 ${AnswerBuilders.fallback(q, searchResults, direct)}"
+                QueryRouter.QueryTier.TIER2_LLM -> AnswerBuilders.fallback(q, searchResults, direct)
+            }
+
+            // What was read into the question is said with the answer, with the way to
+            // have the words taken as words instead.
+            val finalAnswer = if (nothingInPeriod != null) answered
+            else listOfNotNull(answered, ReadingWords.forAnAnswer(plan.understood)).joinToString("\n\n")
+
+            VaultAnswer(finalAnswer, sources, kCard, cCard)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            android.util.Log.e("SearchVM", "Answer error: ${e.message}")
+            null
         }
     }
 
@@ -724,173 +525,5 @@ class SearchViewModel @Inject constructor(
         val lowered = newQuery.lowercase()
         readAsWords.update { keys -> keys.filterTo(HashSet()) { lowered.contains(it.substringAfter(':')) } }
         query.value = newQuery 
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
-    // Smart Fallback Smart Answer Builder (formerly in AgenticScreen)
-    // ════════════════════════════════════════════════════════════════════════
-
-    private fun buildFallbackAnswer(queryText: String, results: List<VaultItem>, direct: DirectAnswer? = null): String {
-        if (results.isEmpty()) {
-            return "I couldn't find anything matching \"$queryText\" in your vault."
-        }
-
-        val qLower = queryText.lowercase()
-        val allText = results.map { it.ocrText.trim() }
-
-        val isMoneyQuery = listOf("expense", "spend", "payment", "upi", "paid", "amount",
-            "total", "calculate", "money", "transaction", "rupee", "cost", "bill",
-            "recharge", "credited", "debited", "received", "transfer").any { qLower.contains(it) }
-
-        if (isMoneyQuery) return buildPaymentAnswer(allText, results)
-
-        if (qLower.contains("otp") || qLower.contains("code") || qLower.contains("verification")) {
-            return buildOtpAnswer(allText)
-        }
-
-        val isContactQuery = listOf("contact", "number", "call", "missed", "dial", "phone")
-            .any { qLower.contains(it) }
-        if (isContactQuery) return buildContactAnswer(allText, results)
-
-        // What the best page says about it, in its own words, with where it is — in place of
-        // "Found 3 results" and a line from each.
-        return direct?.text ?: buildGenericAnswer(qLower, allText, results)
-    }
-
-    private fun buildPaymentAnswer(texts: List<String>, results: List<VaultItem>): String {
-        data class Transaction(val amount: Int, val name: String, val date: String, val type: String)
-
-        val transactions = mutableListOf<Transaction>()
-
-        texts.forEach { text ->
-            Regex("₹\\s?([\\d,]+)").findAll(text).forEach { match ->
-                val amount = match.groupValues[1].replace(",", "").toIntOrNull() ?: return@forEach
-                val pos = match.range.first
-                val contextStart = (pos - 200).coerceAtLeast(0)
-                val context = text.substring(contextStart, (pos + 50).coerceAtMost(text.length))
-                val contextLower = context.lowercase()
-
-                val type = when {
-                    contextLower.contains("received") || contextLower.contains("credited") -> "received"
-                    contextLower.contains("paid") || contextLower.contains("debited") ||
-                            contextLower.contains("payment") -> "paid"
-                    contextLower.contains("recharge") -> "recharge"
-                    else -> "transaction"
-                }
-
-                val name = Regex("(?:from|to)\\s+([A-Z][A-Za-z ]{2,20})").find(context)
-                    ?.groupValues?.getOrNull(1)?.trim() ?: ""
-
-                val date = Regex("\\d{1,2}\\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)(?:\\s+\\d{4})?")
-                    .find(context)?.value ?: ""
-
-                transactions.add(Transaction(amount, name, date, type))
-            }
-        }
-
-        if (transactions.isEmpty()) {
-            return "Found ${results.size} results but couldn't extract amounts."
-        }
-
-        val sb = StringBuilder()
-        val totalSpent = transactions.filter { it.type != "received" }.sumOf { it.amount }
-        val totalReceived = transactions.filter { it.type == "received" }.sumOf { it.amount }
-
-        sb.append("💰 Found ${transactions.size} transaction${if (transactions.size > 1) "s" else ""}:\n\n")
-
-        transactions.distinctBy { "${it.amount}_${it.name}" }.take(6).forEach { t ->
-            val icon = when (t.type) {
-                "received" -> "⬇️"; "paid" -> "⬆️"
-                "recharge" -> "📱"; else -> "💳"
-            }
-            val nameStr = if (t.name.isNotBlank()) " — ${t.name}" else ""
-            val dateStr = if (t.date.isNotBlank()) " (${t.date})" else ""
-            sb.append("$icon ₹${t.amount}$nameStr$dateStr\n")
-        }
-
-        if (totalSpent > 0 || totalReceived > 0) {
-            sb.append("\n")
-            if (totalSpent > 0) sb.append("Spent: ₹$totalSpent\n")
-            if (totalReceived > 0) sb.append("Received: ₹$totalReceived\n")
-            if (totalSpent > 0 && totalReceived > 0) {
-                val net = totalReceived - totalSpent
-                sb.append("Net: ${if (net >= 0) "+" else ""}₹$net")
-            }
-        }
-
-        return sb.toString().trim()
-    }
-
-    private fun buildOtpAnswer(texts: List<String>): String {
-        texts.forEach { text ->
-            val tLower = text.lowercase()
-            if (tLower.contains("otp") || tLower.contains("code") || tLower.contains("verif")) {
-                val candidates = Regex("\\b(\\d{4,8})\\b").findAll(text)
-                    .map { it.groupValues[1] }
-                    .filter { it.length in 4..8 && !it.startsWith("20") && !it.startsWith("19") }
-                    .toList()
-
-                if (candidates.isNotEmpty()) {
-                    return "🔑 OTP: ${candidates.last()}\n\nFrom: ${text.take(80)}…"
-                }
-            }
-        }
-        return "Couldn't extract a specific OTP."
-    }
-
-    private fun buildContactAnswer(texts: List<String>, results: List<VaultItem>): String {
-        val phones = mutableSetOf<String>()
-        val contactInfo = mutableListOf<String>()
-
-        texts.forEach { text ->
-            Regex("(?:\\+91[\\s-]?)?[6-9][\\d\\s-]{8,12}").findAll(text).forEach { m ->
-                val digits = m.value.replace(Regex("[^0-9]"), "")
-                when {
-                    digits.length == 10 -> phones.add("+91 ${digits.take(5)} ${digits.drop(5)}")
-                    digits.length == 12 && digits.startsWith("91") ->
-                        phones.add("+${digits.take(2)} ${digits.substring(2, 7)} ${digits.drop(7)}")
-                }
-            }
-
-            Regex("([A-Z][a-z]{2,15}(?:\\s[A-Z][a-z]{2,15})?)\\s*(?:Mobile|Call|Phone|\\+91|[6-9]\\d{4})")
-                .findAll(text).forEach {
-                    contactInfo.add(it.groupValues[1])
-                }
-
-            Regex("(Missed call|Outgoing call|Incoming call|Video call)[^\\d]*(\\d{1,2}:\\d{2}\\s*(?:am|pm)?)",
-                RegexOption.IGNORE_CASE).findAll(text).forEach {
-                contactInfo.add("${it.groupValues[1]} — ${it.groupValues[2]}")
-            }
-        }
-
-        if (phones.isEmpty() && contactInfo.isEmpty()) {
-            return buildGenericAnswer("contact", texts, results)
-        }
-
-        val sb = StringBuilder("Found ${results.size} result${if (results.size > 1) "s" else ""}:\n\n")
-        contactInfo.distinct().take(3).forEach { sb.append("👤 $it\n") }
-        phones.distinct().take(5).forEach { sb.append("📱 $it\n") }
-
-        return sb.toString().trim()
-    }
-
-    private fun buildGenericAnswer(queryText: String, texts: List<String>, results: List<VaultItem>): String {
-        val sb = StringBuilder("Found ${results.size} result${if (results.size > 1) "s" else ""}:\n\n")
-
-        val queryWords = queryText.split(Regex("\\s+")).filter { it.length >= 2 }
-
-        results.take(3).forEach { item ->
-            val text = item.ocrText.trim()
-            val typeIcon = item.itemType.rowIcon
-
-            val bestLine = text.lines()
-                .filter { it.isNotBlank() && it.length > 3 }
-                .maxByOrNull { line -> queryWords.count { line.lowercase().contains(it) } }
-                ?: text.lines().firstOrNull { it.isNotBlank() }
-
-            sb.append("$typeIcon ${bestLine?.trim()?.take(80) ?: text.take(80)}\n")
-        }
-
-        return sb.toString().trim()
     }
 }
