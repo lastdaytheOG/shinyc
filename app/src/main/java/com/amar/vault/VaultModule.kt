@@ -7,10 +7,8 @@ import com.amar.vault.retrieval.DefaultLexicalRetriever
 import com.amar.vault.retrieval.DefaultSemanticRetriever
 import com.amar.vault.retrieval.HybridSearchService
 import com.amar.vault.retrieval.KeywordIndexFill
-import com.amar.vault.retrieval.LanguageModel
 import com.amar.vault.retrieval.LexicalRetriever
 import com.amar.vault.retrieval.NativeBm25Index
-import com.amar.vault.retrieval.NativeLanguageModel
 import com.amar.vault.retrieval.RetrievalService
 import com.amar.vault.retrieval.SearchRepository
 import com.amar.vault.retrieval.SemanticRetriever
@@ -43,10 +41,6 @@ object VaultModule {
     @Provides
     @Singleton
     fun provideBm25Index(): Bm25Index = NativeBm25Index()
-
-    @Provides
-    @Singleton
-    fun provideLanguageModel(): LanguageModel = NativeLanguageModel()
 
     @Provides
     @Singleton

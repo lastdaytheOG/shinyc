@@ -22,8 +22,8 @@ plugins {
 //   -PbenchApp          install beside the real app, as com.amar.vault.bench, with its own data:
 //                       IndexingEngineBenchDeviceTest can then run on a phone without touching its vault.
 //   -PtestPhoneBuild    instrumented tests run against the `phone` build instead of `debug`.
-//   -PslimApk           -PphoneApk with nothing the documents need left out: no photo search engine
-//                       or chat engine, code shrunk (R8), native libraries compressed. Every reader
+//   -PslimApk           -PphoneApk with nothing the documents need left out: no photo search engine,
+//                       code shrunk (R8), native libraries compressed. Every reader
 //                       stays (ML Kit English and Hindi, Tesseract for scanned pages, QR), so
 //                       reading is the same; photo search says it is not in this build.
 val slimApk: Boolean = providers.gradleProperty("slimApk").isPresent
@@ -112,7 +112,7 @@ android {
     }
 
     androidResources {
-        noCompress += listOf("onnx", "tflite", "bin", "litertlm", "task", "gguf")
+        noCompress += listOf("onnx", "tflite", "bin", "litertlm", "task")
         if (noEmbeddingModel) {
             // AAPT's default ignore list plus the embedding model, its tokenizer (only the model
             // reads it) and a SentencePiece file nothing reads: 7.1 MB of the APK.
@@ -156,9 +156,6 @@ android {
             jniLibs {
                 // Stored compressed; Android unpacks them once at install.
                 useLegacyPackaging = true
-                excludes += listOf(
-                    "**/libamar_llama_engine.so", "**/libllama.so", "**/libggml*.so",
-                )
             }
         }
         resources {
