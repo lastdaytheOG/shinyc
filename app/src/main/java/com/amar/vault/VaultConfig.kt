@@ -1,27 +1,6 @@
 package com.amar.vault
 
 object VaultConfig {
-    object Embedding {
-        const val DIM = 1024
-        const val MAX_SEQ_LEN = 128
-
-        const val QUERY_TRUE_LENGTH = true
-
-        const val MODEL_ID = "bge-m3-ocr-int4"
-
-        const val MODEL_VERSION = "1"
-
-        const val SCHEMA_VERSION = 1
-    }
-
-    object Vector {
-        const val MAX_ELEMENTS = 100_000
-        const val DEFAULT_K = 20
-        const val MAPPINGS_FILENAME = "vector_mappings.json"
-
-        const val EMBEDDING_MANIFEST_FILENAME = "embedding_manifest.json"
-    }
-
     object Chunking {
         const val CHUNK_SIZE = 200
         const val CHUNK_OVERLAP = 30
@@ -41,32 +20,70 @@ object VaultConfig {
 
     object Retrieval {
         const val BM25_BUDGET = 50
-        const val VECTOR_BUDGET = 50
+        const val MEANING_BUDGET = 60
         const val SUBSTRING_BUDGET = 50
         const val FUZZY_BUDGET = 30
         const val FTS_BUDGET = 50
 
         const val RRF_K = 60.0
         const val WEIGHT_BM25 = 1.2
-        const val WEIGHT_VECTOR = 1.0
         const val WEIGHT_SUBSTRING = 1.1
         const val WEIGHT_FUZZY = 0.6
 
-        const val LATE_SEMANTIC_WEIGHT = 0.5
-        const val LATE_EMBED_SIM_THRESHOLD = 0.3
-        const val LATE_EMBED_DOC_LIMIT = 10
         const val EXACT_PHRASE_BONUS = 0.10
         const val WORD_RATIO_BONUS = 0.06
         const val FUSION_TOPN = 50
         const val RERANK_TOPN = 100
 
-        const val CANDIDATE_BOUNDED = false
+        const val CANDIDATE_BOUNDED = true
 
         const val RANK_ORDER_HYDRATION = true
 
-        const val SEMANTIC_PARENT_HITS = false
+        const val MEANING_LANE = true
 
-        const val SEMANTIC_MIN_SIMILARITY = 0.55f
+        const val HINGLISH_BRIDGE = true
+
+        const val FACTS_LANE = true
+
+        const val OPENED_BONUS = 0.03
+
+        const val FACT_ID_CHANCE = 0.97
+
+        const val FACT_AMOUNT_CHANCE = 0.6
+
+        const val FACT_SURE_AT = 0.95
+
+        const val MEANING_DEADLINE_MS = 2500L
+
+        const val MEANING_KEEP_STANDING = 4.0f
+
+        const val MEANING_KEEP_MARGIN = 0.06f
+
+        const val MEANING_GAP = 0.04f
+
+        const val MEANING_SURE_STANDING = 6.0f
+
+        const val MEANING_SURE_LEAD = 0.0f
+
+        const val MEANING_SHOWN = 10
+
+        const val MEANING_SPREAD_MIN_ROWS = 200
+
+        const val MEANING_SMALL_VAULT_LEAD = 0.05f
+
+        const val MEANING_SMALL_VAULT_MARGIN = -0.03f
+
+        const val SAYS_BIAS = -3.5844
+        const val SAYS_COVERAGE = 5.2243
+        const val SAYS_SURE_AT = 1.01
+        const val LOOKS_BIAS = -7.6766
+        const val LOOKS_MARGIN = 7.2518
+        const val LOOKS_SCORE = 12.7806
+        const val LOOKS_SURE_AT = 1.01
+        const val MEANING_BIAS = -2.4747
+        const val MEANING_STANDING = 0.6861
+        const val MEANING_MARGIN = 1.7126
+        const val MEANING_SURE_AT = 1.01
 
         const val ONE_PER_DOCUMENT = true
 
