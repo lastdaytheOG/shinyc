@@ -1,7 +1,7 @@
 package com.amar.vault.benchmark
 
 import com.amar.vault.retrieval.RetrievalTuning
-import com.amar.vault.retrieval.SemanticRetriever
+import com.amar.vault.retrieval.MeaningRetriever
 
 /**
  * Retrieval ablation — the same golden queries, scored through the REAL retrieval pipeline
@@ -20,7 +20,7 @@ import com.amar.vault.retrieval.SemanticRetriever
  */
 class RetrievalAblationBenchmark(
     private val evaluator: RetrievalEvaluator,
-    private val semantic: SemanticRetriever,
+    private val meaning: MeaningRetriever,
 ) {
 
     data class Variant(val name: String, val tuning: RetrievalTuning, val what: String)
@@ -42,15 +42,11 @@ class RetrievalAblationBenchmark(
             Variant(BASELINE, RetrievalTuning(), "current defaults"),
             Variant(
                 "keywordOnly", RetrievalTuning(semanticEnabled = false),
-                "no embedding model at all — what a -PphoneApk build does",
+                "no meaning lane: keywords, facts and photos only",
             ),
             Variant(
                 "legacyOrder", RetrievalTuning(rankOrderHydration = false),
                 "BM25/vector candidates in SQLite id order (behaviour before the rank-order fix)",
-            ),
-            Variant(
-                "paddedQuery", RetrievalTuning(queryTrueLength = false),
-                "query embedded padded to 128 tokens (behaviour before true-length embedding)",
             ),
             Variant(
                 "bounded", RetrievalTuning(candidateBounded = true),
@@ -80,18 +76,6 @@ class RetrievalAblationBenchmark(
                 "noNameBonus", RetrievalTuning(nameBonus = false),
                 "a word in what the file is called scores like a word on any page (behaviour before 2026-10-08)",
             ),
-            Variant(
-                "semanticHits@0.50", RetrievalTuning(semanticParentHits = true, semanticMinSimilarity = 0.50f),
-                "vector hits count on their own at cosine ≥ 0.50",
-            ),
-            Variant(
-                "semanticHits@0.55", RetrievalTuning(semanticParentHits = true, semanticMinSimilarity = 0.55f),
-                "vector hits count on their own at cosine ≥ 0.55",
-            ),
-            Variant(
-                "semanticHits@0.60", RetrievalTuning(semanticParentHits = true, semanticMinSimilarity = 0.60f),
-                "vector hits count on their own at cosine ≥ 0.60",
-            ),
         )
 
         fun summarize(scores: List<RetrievalEvaluator.QueryScore>, latenciesMs: List<Long>): Summary =
@@ -110,19 +94,19 @@ class RetrievalAblationBenchmark(
         // Untimed pass so storage, JIT and the native engines are equally warm for every variant.
         evaluator.scoreAll(cases)
 
-        val semanticUsable = semantic.isReady
+        val semanticUsable = meaning.isReady
         val metrics = mutableListOf(
             MetricValue(
                 "semantic.available", if (semanticUsable) 1.0 else 0.0, "bool", true,
                 if (semanticUsable) "" else
-                    "no usable embedding model on this install — every variant runs keyword-only, so the semantic variants equal keywordOnly by construction",
+                    "the model pack is not on this install — every variant runs without the meaning lane",
             )
         )
         val rows = mutableListOf<Map<String, String>>()
         var baseline: Summary? = null
 
         for (variant in VARIANTS) {
-            semantic.clearCaches() // each variant pays its own embedding cost
+            meaning.clearCaches()
             val scored = evaluator.scoreAll(cases, variant.tuning)
             val summary = summarize(scored.scores, scored.latenciesMs)
             if (variant.name == BASELINE) baseline = summary

@@ -7,7 +7,8 @@ import com.amar.vault.retrieval.RetrievalResult
 import com.amar.vault.retrieval.RetrievalService
 import com.amar.vault.retrieval.RetrievalTuning
 import com.amar.vault.retrieval.SearchRepository
-import com.amar.vault.retrieval.SemanticRetriever
+import com.amar.vault.retrieval.MeaningRetriever
+import com.amar.vault.retrieval.MeaningScan
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -38,14 +39,6 @@ class RetrievalAblationBenchmarkTest {
         }
     }
 
-    private class Semantic(override val isReady: Boolean) : SemanticRetriever {
-        var cacheClears = 0
-        override suspend fun embedQuery(query: String, trueLength: Boolean) = FloatArray(0)
-        override suspend fun embedText(text: String) = FloatArray(0)
-        override fun searchVectors(vector: FloatArray, k: Int) = emptyList<String>()
-        override fun clearCaches() { cacheClears++ }
-    }
-
     private val right = item("right")
     private val wrong = item("wrong")
     private val case = BenchmarkCase(
@@ -54,6 +47,12 @@ class RetrievalAblationBenchmarkTest {
     )
 
     private fun BenchmarkSection.value(name: String) = metrics.single { it.name == name }.value
+
+    private class Semantic(override val isReady: Boolean) : MeaningRetriever {
+        var cacheClears = 0
+        override suspend fun scan(query: String, k: Int, only: ((String) -> Boolean)?): MeaningScan? = null
+        override fun clearCaches() { cacheClears++ }
+    }
 
     @Test
     fun everyVariantIsScoredOnTheSameQueriesWithItsOwnTuning() = runBlocking {
