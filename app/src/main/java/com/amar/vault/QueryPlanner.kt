@@ -9,7 +9,8 @@ data class MetadataConstraint(
     val timestampValue: LongArray? = null,
     val operator: ConstraintOperator = ConstraintOperator.EQUALS,
     /** DATE only: the year and month words the range was read from ("2024", "march"). */
-    val typedTerms: List<String> = emptyList()
+    val typedTerms: List<String> = emptyList(),
+    val amountRange: Pair<Double, Double>? = null,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -26,6 +27,7 @@ data class MetadataConstraint(
         } else if (other.timestampValue != null) return false
         if (operator != other.operator) return false
         if (typedTerms != other.typedTerms) return false
+        if (amountRange != other.amountRange) return false
 
         return true
     }
@@ -37,6 +39,7 @@ data class MetadataConstraint(
         result = 31 * result + (timestampValue?.contentHashCode() ?: 0)
         result = 31 * result + operator.hashCode()
         result = 31 * result + typedTerms.hashCode()
+        result = 31 * result + (amountRange?.hashCode() ?: 0)
         return result
     }
 }
@@ -94,23 +97,18 @@ object QueryPlanner {
         }
 
         // 2. Amount Parsing (STRICT)
-        val amountRegex = Regex("(above|greater than|>)\\s*(?:₹|rs\\.?|inr)?\\s*([\\d,]+(?:\\.\\d{2})?)", RegexOption.IGNORE_CASE)
-        val amountMatch = amountRegex.find(q)
-            ?.takeIf { Understood.key(Understood.Kind.AMOUNT, it.value) !in asWords }
-        if (amountMatch != null) {
-            val amountStr = amountMatch.groupValues[2].replace(",", "")
-            val amount = amountStr.toDoubleOrNull()
-            if (amount != null) {
-                strict.add(
-                    MetadataConstraint(
-                        type = "AMOUNT",
-                        numericValue = amount,
-                        operator = ConstraintOperator.GREATER_THAN
-                    )
+        AmountReading.read(q)?.takeIf { Understood.key(Understood.Kind.AMOUNT, it.typed) !in asWords }?.let { r ->
+            strict.add(
+                MetadataConstraint(
+                    type = "AMOUNT",
+                    numericValue = r.low,
+                    timestampValue = null,
+                    operator = r.operator,
+                    amountRange = r.low to r.high,
                 )
-                understood += Understood(Understood.Kind.AMOUNT, amountMatch.value.trim(), "Over ₹$amountStr")
-                q = q.replace(amountMatch.value, "").trim()
-            }
+            )
+            understood += Understood(Understood.Kind.AMOUNT, r.typed, r.label)
+            q = q.replace(r.typed, " ").replace(Regex("\\s+"), " ").trim()
         }
 
         // 3. Organization / Payment App Parsing (PREFERRED)
