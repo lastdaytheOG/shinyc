@@ -58,6 +58,8 @@ data class RetrievalTuning(
     /** See [VaultConfig.Retrieval.PHOTO_LANE]; false leaves [RetrievalResult.photos] empty. */
     val photoLane: Boolean = VaultConfig.Retrieval.PHOTO_LANE,
     val hinglishBridge: Boolean = VaultConfig.Retrieval.HINGLISH_BRIDGE,
+    val hinglishSaid: Boolean = VaultConfig.Retrieval.HINGLISH_SAID,
+    val hinglishModel: Boolean = VaultConfig.Retrieval.HINGLISH_MODEL,
     val factsLane: Boolean = VaultConfig.Retrieval.FACTS_LANE,
     val learning: Boolean = true,
 )
@@ -171,6 +173,7 @@ data class RetrievalResult(
     val verdict: Verdict = Verdict.NOTHING,
     val keywordWordsSaid: Int = 0,
     val keywordWords: Int = 0,
+    val hindiSpellings: List<String> = emptyList(),
 )
 
 enum class EvidenceKind { SAYS, NAME, TAG, NEAR_SPELLING, FACT, MEANING, LOOKS }

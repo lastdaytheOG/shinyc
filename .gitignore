@@ -11,6 +11,7 @@
 # ==============================
 app/src/main/assets/
 app/src/main/ml/
+!app/src/main/hinglish-assets/hinglish/translit.bin
 # Photo search's full tokenizer table, built by tools/visual-search/build_tokenizer.py for the tests.
 app/src/test/resources/photos/gemma_bpe.bin
 

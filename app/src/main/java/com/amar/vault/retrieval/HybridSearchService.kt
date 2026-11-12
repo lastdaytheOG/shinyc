@@ -40,6 +40,7 @@ class HybridSearchService(
     private val photos: PhotoRetriever = PhotoRetriever.NONE,
     private val meaning: MeaningRetriever = MeaningRetriever.NONE,
     private val learned: com.amar.vault.vectors.AliasMemory? = null,
+    private val spellings: SpellingGuesser? = null,
 ) : RetrievalService {
 
     private companion object {
@@ -65,10 +66,10 @@ class HybridSearchService(
         val start = System.nanoTime()
         fun elapsedMs() = (System.nanoTime() - start) / 1_000_000
         val timings = StringBuilder()
-        val result = executeRelaxing(request) { stage, items ->
+        val result = executeRelaxing(request) { stage, items, spellings ->
             val ms = elapsedMs()
             timings.append(stage.name.lowercase()).append('=').append(ms).append("ms ")
-            emit(RetrievalUpdate(stage, RetrievalResult(items), ms))
+            emit(RetrievalUpdate(stage, RetrievalResult(items, hindiSpellings = spellings), ms))
         }
         val total = elapsedMs()
         VaultLog.d("HybridSearch", "progressive ${timings}final=${total}ms")
@@ -81,7 +82,7 @@ class HybridSearchService(
      */
     private suspend fun executeRelaxing(
         request: RetrievalRequest,
-        onStage: (suspend (RetrievalStage, List<VaultItem>) -> Unit)?,
+        onStage: (suspend (RetrievalStage, List<VaultItem>, List<String>) -> Unit)?,
     ): RetrievalResult {
         val result = execute(request, onStage)
         val plan = request.plan
@@ -104,7 +105,7 @@ class HybridSearchService(
      */
     private suspend fun execute(
         request: RetrievalRequest,
-        onStage: (suspend (RetrievalStage, List<VaultItem>) -> Unit)?,
+        onStage: (suspend (RetrievalStage, List<VaultItem>, List<String>) -> Unit)?,
     ): RetrievalResult = coroutineScope {
         // Sprint 4A: NFC at the single query-side boundary, matching the NFC applied at
         // both ingestion boundaries — typed queries compare canonically against stored text.
@@ -144,6 +145,10 @@ class HybridSearchService(
         val bareWords = typedWords.flatMap { it.typed.split(NOT_A_WORD) }.filter { it.length >= 2 }.toSet()
         val wordOrder = typedWords.flatMap { it.typed.split(NOT_A_WORD) }.filter { it.isNotEmpty() }
             .takeIf { tuning.wordOrderBonus && it.size >= 2 }?.let(::WordsInOrder)
+
+        val hinglishTyped = typedWords.distinctBy { it.typed }.map { it.bare }
+        val hinglish = if (tuning.hinglishBridge && tuning.hinglishSaid) Hinglish.Query.of(hinglishTyped, null) else null
+        val guesser = spellings.takeIf { tuning.hinglishModel && hinglish != null && !hinglish.isEmpty }
 
         val aliasTerms: List<String> = if (tuning.learning && learned != null) {
             runCatching { learned.expand(qLower) }.getOrDefault(emptyList()).flatMap { it.split(' ') }.distinct()
@@ -231,7 +236,11 @@ class HybridSearchService(
                 // Just after the app is opened the engine is still being filled; the list
                 // must not depend on how soon the query was typed.
                 lexical.awaitReady()
-                val folded = if (tuning.hinglishBridge) Hinglish.foldedQueryWords(qLower).filter { it !in qLower.split(WHITESPACE) } else emptyList()
+                val folded = when {
+                    hinglish != null -> hinglish.allKeys.filter { it !in qLower.split(WHITESPACE) }
+                    tuning.hinglishBridge -> Hinglish.foldedQueryWords(qLower).filter { it !in qLower.split(WHITESPACE) }
+                    else -> emptyList()
+                }
                 val extra = folded + aliasTerms
                 val engineQuery = if (extra.isEmpty()) expandedQuery else expandedQuery + " " + extra.joinToString(" ")
                 hydrateRanked(lexical.bm25(engineQuery, fetch), tuning).applyStrictFilter()
@@ -272,10 +281,43 @@ class HybridSearchService(
         // other words ("cloud" for "claude"), not misspellings of it. Null = the previous
         // behaviour, typo help for every word of the expanded query.
         val legacyTypoHelp = !tuning.typoHelpOnlyForMissingWords
+        val readingDeferred = async(Dispatchers.Default) {
+            if (guesser == null) return@async hinglish
+            val found = substringDeferred.await().wordsFound
+            val readsAsHinglish = typedWords.any { it.bare.length >= 3 && !Hinglish.isLittle(it.bare) && it.typed !in found }
+            if (!readsAsHinglish) return@async hinglish
+            try {
+                Hinglish.Query(hinglishTyped, hinglishTyped.map { w -> ensureActive(); Hinglish.keysFor(w, guesser) })
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                VaultLog.e("HybridSearch", "Hinglish guesses error: ${e.message}"); hinglish
+            }
+        }
+        val guessedLaneDeferred = async(Dispatchers.IO) {
+            val reading = readingDeferred.await()
+            if (reading == null || reading === hinglish) return@async null
+            try {
+                val known = hinglish?.allKeys.orEmpty().toSet()
+                if (reading.allKeys.all { it in known }) return@async null
+                val typed = qLower.split(WHITESPACE)
+                val extra = reading.allKeys.filter { it !in typed } + aliasTerms
+                val fetch = if (tuning.onePerDocument || only != null)
+                    budget.bm25 * VaultConfig.Retrieval.BM25_DOC_OVERFETCH else budget.bm25
+                lexical.awaitReady()
+                hydrateRanked(lexical.bm25(expandedQuery + " " + extra.joinToString(" "), fetch), tuning).applyStrictFilter()
+                    .let { if (tuning.onePerDocument) it.firstPerDocument(budget.bm25) else it }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                VaultLog.e("HybridSearch", "Hinglish lane error: ${e.message}"); null
+            }
+        }
         val missingWordsDeferred = async(Dispatchers.IO) {
             if (legacyTypoHelp) null
             else substringDeferred.await().wordsFound.let { found ->
-                typedWords.filter { it.typed !in found }.map { it.bare }.distinct()
+                val inHindi = hinglishFound(readingDeferred.await(), guessedLaneDeferred.await() ?: bm25Deferred.await())
+                typedWords.filter { it.typed !in found && it.bare !in inHindi }.map { it.bare }.distinct()
             }
         }
         val fuzzyDeferred = async(Dispatchers.IO) {
@@ -291,19 +333,24 @@ class HybridSearchService(
             val ids = fusion.items.map { it.id }
             if (ids.isEmpty() || ids == shownIds) return
             shownIds = ids
-            onStage?.invoke(stage, fusion.items)
+            onStage?.invoke(stage, fusion.items, fusion.spellings)
         }
 
         // What a row with none of the query's words in it may stay for (see [Gate]). The scan
         // decides which typed words are missing from the vault; until it has, the keyword
         // stage shows only rows that do have a query word, rather than flash look-alikes.
         val gateWords = typedWords.distinctBy { it.typed } + meanings
-        val foldedTyped = if (tuning.hinglishBridge) Hinglish.foldedQueryWords(qLower).toSet() else emptySet()
-        fun gate(missingWords: List<String>) = Gate(
+        fun gate(missingWords: List<String>, hindi: Hinglish.Query? = hinglish) = Gate(
             gateWords, barePhrase, bareWords, wordOrder, legacyTypoHelp, tuning.pageWordsBeforeTags,
             nameBonus = tuning.nameBonus,
-            shadowWords = foldedTyped + aliasTerms.map { Hinglish.fold(it) },
+            shadowWords = when {
+                hindi != null -> hindi.allKeys.toSet()
+                tuning.hinglishBridge -> Hinglish.foldedQueryWords(qLower).toSet()
+                else -> emptySet()
+            } + aliasTerms.map { Hinglish.fold(it) },
             aliasWords = aliasTerms.toSet(),
+            hinglish = hindi,
+            typedCount = gateWords.size - meanings.size,
             nearMissing = missingWords.filter { it.length >= 3 }.takeIf { it.isNotEmpty() }
                 ?.let { FuzzyMatcher(it, roots = true) },
         )
@@ -329,7 +376,7 @@ class HybridSearchService(
         fun claimDocuments(lane: List<VaultItem>, judge: Gate?) {
             if (!tuning.onePerDocument) return
             fun standing(row: VaultItem) =
-                standings.getOrPut(row.id) { judge!!.standing(RowText.of(row), loweredName(row)) }
+                standings.getOrPut(row.id) { judge!!.standing(RowText.of(row), loweredName(row), judge.hindiOf(row)) }
             for (row in lane) {
                 val document = documentKey(row)
                 val kept = documentRow[document]
@@ -350,13 +397,15 @@ class HybridSearchService(
 
         val substringLane = substringDeferred.await().hits
         val fuzzyLane = fuzzyDeferred.await()
-        val lexicalGate = gate(missingWordsDeferred.await().orEmpty())
+        val lexicalGate = gate(missingWordsDeferred.await().orEmpty(), readingDeferred.await())
         // With typo help for every word and tags read as text, a document keeps the first page
         // named, as before.
         val judge = lexicalGate.takeUnless { legacyTypoHelp && !tuning.pageWordsBeforeTags }
+        val guessedLane = guessedLaneDeferred.await()
+        guessedLane?.let { claimDocuments(it, judge) }
         claimDocuments(substringLane, judge)
         claimDocuments(fuzzyLane, judge)
-        val bm25Results = bm25Lane.asDocumentRows()
+        val bm25Results = (guessedLane ?: bm25Lane).asDocumentRows()
         val substringResults = substringLane.asDocumentRows()
         val fuzzyResults = fuzzyLane.asDocumentRows()
 
@@ -405,14 +454,19 @@ class HybridSearchService(
             val row = RowText.of(top)
             val name = loweredName(top)
             val pageEnd = lexicalGate.pageEnd(row)
-            distinctTyped.count { it.isIn(name) || it.isIn(row.all, pageEnd) }
+            val hindi = lexicalGate.hindiOf(top)
+            val typedIndex = typedWords.distinctBy { it.typed }.map { it.typed }
+            distinctTyped.count { w ->
+                w.isIn(name) || w.isIn(row.all, pageEnd) ||
+                    (hindi != null && !Hinglish.isLittle(w.bare) && typedIndex.indexOf(w.typed).let { it >= 0 && hindi.said[it] })
+            }
         } ?: 0
         val keywordVerdict = Groups.keywordVerdict(fusion.items, said, distinctTyped.size, fusion.similarSpellingsOnly)
         val factsFound = factsDeferred.await()
         val (groups, verdict) = Groups.of(fusion.items, said, distinctTyped.size, fusion.similarSpellingsOnly, meaningFound, photosFound, factsFound)
         RetrievalResult(fusion.items, trace, similarSpellingsOnly = fusion.similarSpellingsOnly,
             photos = photosFound, meaning = meaningFound, facts = factsFound, groups = groups, verdict = verdict,
-            keywordWordsSaid = said, keywordWords = distinctTyped.size)
+            keywordWordsSaid = said, keywordWords = distinctTyped.size, hindiSpellings = fusion.spellings)
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -525,6 +579,16 @@ class HybridSearchService(
     }
 
     private fun loweredName(item: VaultItem): String = SearchableName.of(item).lowercase()
+
+    private fun hinglishFound(hinglish: Hinglish.Query?, rows: List<VaultItem>): Set<String> {
+        if (hinglish == null || hinglish.isEmpty) return emptySet()
+        val found = HashSet<String>()
+        for (row in rows) {
+            val m = hinglish.matchRow(row.id, row.ocrText, SearchableName.of(row)) ?: continue
+            for (i in hinglish.typed.indices) if (m.said[i]) found += hinglish.typed[i]
+        }
+        return found
+    }
 
     /** [term] standing as a word of its own: no letter, combining mark or digit on either side. */
     private fun wholeWord(term: String) = Regex(
@@ -684,6 +748,7 @@ class HybridSearchService(
         val items: List<VaultItem>, val scores: Map<String, Double>,
         /** True when every row is there for a near spelling, none for a word of the query. */
         val similarSpellingsOnly: Boolean,
+        val spellings: List<String> = emptyList(),
     )
 
     /**
@@ -716,7 +781,18 @@ class HybridSearchService(
         val nameBonus: Boolean = true,
         val shadowWords: Set<String> = emptySet(),
         val aliasWords: Set<String> = emptySet(),
+        val hinglish: Hinglish.Query? = null,
+        val typedCount: Int = words.size,
     ) {
+        fun hindiOf(item: VaultItem): Hinglish.Match? {
+            val q = hinglish ?: return null
+            if (q.isEmpty) return null
+            return q.matchRow(item.id, item.ocrText, SearchableName.of(item))
+        }
+
+        private fun saidInHindi(hindi: Hinglish.Match?, i: Int): Boolean =
+            hindi != null && i < typedCount && i < hindi.said.size && hindi.said[i]
+
         fun saysAnAlias(text: String, name: String): Boolean =
             aliasWords.any { w -> QueryWord.of(w).firstOrNull()?.let { it.isIn(text) || it.isIn(name) } == true }
 
@@ -730,11 +806,12 @@ class HybridSearchService(
         fun pageEnd(row: RowText): Int = if (pageFirst) row.pageEnd else row.all.length
 
         /** How many of the query's words are in a row with this text and name, tags included. */
-        fun wordsIn(text: String, name: String): Int = words.count { it.isIn(text) || it.isIn(name) }
+        fun wordsIn(text: String, name: String, hindi: Hinglish.Match? = null): Int =
+            words.indices.count { i -> words[i].isIn(text) || words[i].isIn(name) || saidInHindi(hindi, i) }
 
         /** How many of them the row says: on its page (which ends at [pageEnd]) or in its name. */
-        fun wordsSaid(text: String, pageEnd: Int, name: String): Int =
-            words.count { it.isIn(name) || it.isIn(text, pageEnd) }
+        fun wordsSaid(text: String, pageEnd: Int, name: String, hindi: Hinglish.Match? = null): Int =
+            words.indices.count { i -> words[i].isIn(name) || words[i].isIn(text, pageEnd) || saidInHindi(hindi, i) }
 
         /** Whether the page itself says one of them, whatever the row is called. */
         fun pageSaysAWord(text: String, pageEnd: Int): Boolean = words.any { it.isIn(text, pageEnd) }
@@ -755,12 +832,12 @@ class HybridSearchService(
          * (3); it says a near spelling of a word the vault does not have (2); it is tagged
          * with one (1); none of these (0).
          */
-        fun standing(row: RowText, name: String): Int {
+        fun standing(row: RowText, name: String, hindi: Hinglish.Match? = null): Int {
             val text = row.all
             val pageEnd = pageEnd(row)
             return when {
-                pageFirst && pageSaysAWord(text, pageEnd) -> 5
-                wordsSaid(text, pageEnd, name) > 0 -> 4
+                pageFirst && (pageSaysAWord(text, pageEnd) || hindi?.onPage == true) -> 5
+                wordsSaid(text, pageEnd, name, hindi) > 0 -> 4
                 wordsIn(text, name) > 0 || hasAPartOfAWord(text, name) -> 3
                 saysANearSpelling(text, pageEnd, name) -> 2
                 hasANearSpelling(text, name) -> 1
@@ -823,27 +900,31 @@ class HybridSearchService(
             val row = RowText.of(item)
             val text = row.all
             val name = loweredName(item)
-            val matched = gate.wordsIn(text, name)
+            val hindi = gate.hindiOf(item)
+            val matched = gate.wordsIn(text, name, hindi)
             if (matched > 0) {
                 anyHasAQueryWord = true
                 // The bonuses are for the words the row says. One it is only tagged with keeps
                 // it in the list, below the rows that say it.
                 val pageEnd = gate.pageEnd(row)
                 val page = if (pageEnd == text.length) text else text.substring(0, pageEnd)
-                val said = if (pageEnd == text.length) matched else gate.wordsSaid(text, pageEnd, name)
+                val said = if (pageEnd == text.length) matched else gate.wordsSaid(text, pageEnd, name, hindi)
                 if (page.contains(qLower) || name.contains(qLower) ||
-                    (barePhrase != null && (page.contains(barePhrase) || name.contains(barePhrase)))) {
+                    (barePhrase != null && (page.contains(barePhrase) || name.contains(barePhrase))) ||
+                    (hindi != null && hindi.run >= gate.typedCount)) {
                     rrfScores[id] = (rrfScores[id] ?: 0.0) + cfg.EXACT_PHRASE_BONUS
                 }
                 val ratio = said.toDouble() / queryWords.size
                 rrfScores[id] = (rrfScores[id] ?: 0.0) + cfg.WORD_RATIO_BONUS * ratio
                 // A word in what the item is called is worth more than one somewhere on a page.
                 if (gate.nameBonus && name.isNotEmpty()) {
-                    val inName = queryWords.count { it.isIn(name) }
+                    val inName = queryWords.indices.count { i ->
+                        queryWords[i].isIn(name) || (hindi != null && i < gate.typedCount && hindi.inName[i])
+                    }
                     rrfScores[id] = (rrfScores[id] ?: 0.0) + cfg.NAME_BONUS * inName / queryWords.size
                 }
                 gate.wordOrder?.let { order ->
-                    val run = maxOf(order.longestRun(page), order.longestRun(name))
+                    val run = maxOf(order.longestRun(page), order.longestRun(name), minOf(hindi?.run ?: 0, order.size))
                     if (run >= 2) {
                         rrfScores[id] = (rrfScores[id] ?: 0.0) + cfg.WORDS_IN_ORDER_BONUS * (run - 1) / (order.size - 1)
                     }
@@ -883,6 +964,7 @@ class HybridSearchService(
         return Fusion(
             finalResults, rrfScores,
             similarSpellingsOnly = finalResults.isNotEmpty() && !anyHasAQueryWord,
+            spellings = finalResults.flatMap { gate.hindiOf(it)?.spellings.orEmpty() }.distinct(),
         )
     }
 

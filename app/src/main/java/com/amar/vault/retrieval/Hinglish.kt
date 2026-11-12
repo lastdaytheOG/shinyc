@@ -2,6 +2,10 @@ package com.amar.vault.retrieval
 
 import java.util.Locale
 
+fun interface SpellingGuesser {
+    fun keys(word: String): List<String>
+}
+
 object Hinglish {
 
     private val CONSONANTS = mapOf(
@@ -90,4 +94,90 @@ object Hinglish {
 
     fun foldedQueryWords(query: String): List<String> =
         LATIN_WORD.findAll(query.lowercase(Locale.ROOT)).map { fold(it.value) }.filter { it.length >= 2 }.distinct().toList()
+
+    private val keys = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private const val KEYS_KEPT = 30_000
+
+    fun key(devanagari: String): String {
+        keys[devanagari]?.let { return it }
+        val k = fold(romanise(devanagari))
+        if (keys.size < KEYS_KEPT) keys[devanagari] = k
+        return k
+    }
+
+    private val LITTLE = setOf(
+        "ka", "ki", "ke", "ko", "me", "mein", "main", "se", "par", "pe", "hai", "hain", "ho", "tha", "the", "thi",
+        "aur", "ya", "to", "bhi", "hi", "ne", "ek", "is", "us", "ye", "yeh", "vo", "woh", "wo", "jo", "kya", "na",
+        "nahi", "koi", "kuch", "liye", "wala", "wali", "wale", "tak", "ab", "jab", "sab", "ji",
+        "le", "lo", "liya", "kar", "karo", "karke", "kiya", "kiye", "de", "do", "diya", "dena", "raha", "rahi", "rahe",
+        "gaya", "gayi", "gaye", "hua", "hui", "hue", "mera", "meri", "mere", "apna", "apni", "apne", "uska", "uski",
+        "unka", "unki", "aap", "hum", "tum", "yahan", "wahan", "kab", "kaise", "kyun", "abhi", "phir", "bahut",
+    )
+
+    fun isLittle(word: String): Boolean = word in LITTLE
+
+    private val ALL_LATIN = Regex("[a-z]+")
+
+    fun keysFor(word: String, guesser: SpellingGuesser?): Set<String> {
+        if (!ALL_LATIN.matches(word)) return emptySet()
+        val keys = LinkedHashSet<String>()
+        fold(word).takeIf { it.length >= 2 }?.let(keys::add)
+        if (word.length >= 3 && !isLittle(word)) guesser?.keys(word)?.filter { it.length >= 2 }?.let(keys::addAll)
+        return keys
+    }
+
+    private val SPELLED = Regex("[\\u0900-\\u0963\\u0971-\\u097F]+")
+
+    class Match(val said: BooleanArray, val inName: BooleanArray, val onPage: Boolean, val run: Int, val spellings: List<String>)
+
+    class Query(val typed: List<String>, private val keys: List<Set<String>>) {
+        private val little = BooleanArray(typed.size) { isLittle(typed[it]) }
+        val isEmpty = keys.all { it.isEmpty() }
+        val allKeys: List<String> = keys.flatten().distinct()
+        private val rows = java.util.concurrent.ConcurrentHashMap<String, Any>()
+
+        fun matchRow(id: String, page: String, name: String): Match? {
+            rows[id]?.let { return it as? Match }
+            val m = match(page, name)
+            rows[id] = m ?: NoMatch
+            return m
+        }
+
+        private object NoMatch
+
+        fun match(page: String, name: String): Match? {
+            if (isEmpty || (!isDevanagari(page) && !isDevanagari(name))) return null
+            val said = BooleanArray(typed.size)
+            val inName = BooleanArray(typed.size)
+            val spellings = LinkedHashSet<String>()
+            var content = false
+            var onPage = false
+            var run = 0
+            for ((source, isPage) in listOf(page to true, name to false)) {
+                var previous = IntArray(typed.size)
+                for (m in SPELLED.findAll(source)) {
+                    val k = key(m.value)
+                    val current = IntArray(typed.size)
+                    for (i in typed.indices) {
+                        if (k !in keys[i]) continue
+                        said[i] = true
+                        if (isPage) onPage = true else inName[i] = true
+                        if (!little[i]) {
+                            content = true
+                            spellings += m.value
+                        }
+                        current[i] = if (i > 0) previous[i - 1] + 1 else 1
+                        if (current[i] > run) run = current[i]
+                    }
+                    previous = current
+                }
+            }
+            return if (content) Match(said, inName, onPage, run, spellings.toList()) else null
+        }
+
+        companion object {
+            fun of(typed: List<String>, guesser: SpellingGuesser?): Query =
+                Query(typed, typed.map { keysFor(it, guesser) })
+        }
+    }
 }

@@ -405,6 +405,57 @@
 {"id": "hinglish-032", "slice": "hinglish", "query": "bharat ka samvidhan", "lang": "hi-latn", "relevant": {"w-en-025": 2, "w-hi-097": 2}, "none": false}
 {"id": "hinglish-033", "slice": "hinglish", "query": "prakash sanshleshan", "lang": "hi-latn", "relevant": {"w-en-003": 2, "w-hi-096": 2}, "none": false}
 {"id": "hinglish-034", "slice": "hinglish", "query": "bharatiya rizarv bank", "lang": "hi-latn", "relevant": {"w-en-009": 2, "w-hi-106": 2}, "none": false}
+{"id": "hinglish_heldout-001", "slice": "hinglish_heldout", "query": "bijlee bil ki antim tithi", "lang": "hi-latn", "relevant": {"p-electricity_bill-01": 2, "p-electricity_bill-02": 2, "p-electricity_bill-03": 2, "p-electricity_bill-04": 2, "p-electricity_bill-05": 2, "p-electricity_bill-06": 2, "p-electricity_bill-07": 2, "p-electricity_bill-08": 2, "p-electricity_bill-09": 2, "p-electricity_bill-10": 2, "p-electricity_bill-11": 2, "p-electricity_bill-12": 2, "p-electricity_bill-13": 2, "p-electricity_bill-14": 2, "p-electricity_bill-15": 2, "p-electricity_bill-16": 2}, "none": false}
+{"id": "hinglish_heldout-002", "slice": "hinglish_heldout", "query": "upbhokta kramank", "lang": "hi-latn", "relevant": {"p-electricity_bill-10": 2, "p-electricity_bill-12": 2, "p-electricity_bill-14": 2, "p-electricity_bill-16": 2}, "none": false}
+{"id": "hinglish_heldout-003", "slice": "hinglish_heldout", "query": "vilamb shulk", "lang": "hi-latn", "relevant": {"p-electricity_bill-10": 2, "p-electricity_bill-12": 2, "p-electricity_bill-14": 2, "p-electricity_bill-16": 2}, "none": false}
+{"id": "hinglish_heldout-004", "slice": "hinglish_heldout", "query": "khapat unit", "lang": "hi-latn", "relevant": {"p-electricity_bill-10": 2, "p-electricity_bill-12": 2, "p-electricity_bill-14": 2, "p-electricity_bill-16": 2}, "none": false}
+{"id": "hinglish_heldout-005", "slice": "hinglish_heldout", "query": "jal karya vibhag", "lang": "hi-latn", "relevant": {"p-water_bill-01": 2, "p-water_bill-02": 2}, "none": false}
+{"id": "hinglish_heldout-006", "slice": "hinglish_heldout", "query": "pani ki barbadi", "lang": "hi-latn", "relevant": {"p-water_bill-01": 2, "p-water_bill-02": 2}, "none": false}
+{"id": "hinglish_heldout-007", "slice": "hinglish_heldout", "query": "connection sankhya", "lang": "hi-latn", "relevant": {"p-water_bill-01": 2, "p-water_bill-02": 2}, "none": false}
+{"id": "hinglish_heldout-008", "slice": "hinglish_heldout", "query": "kiraye ki tareekh", "lang": "hi-latn", "relevant": {"p-chat_rent-01": 2, "p-chat_rent-02": 2}, "none": false}
+{"id": "hinglish_heldout-009", "slice": "hinglish_heldout", "query": "plumber kal aayega", "lang": "hi-latn", "relevant": {"p-chat_rent-01": 2, "p-chat_rent-02": 2}, "none": false}
+{"id": "hinglish_heldout-010", "slice": "hinglish_heldout", "query": "motor theek karwa do", "lang": "hi-latn", "relevant": {"p-chat_rent-01": 2, "p-chat_rent-02": 2}, "none": false}
+{"id": "hinglish_heldout-011", "slice": "hinglish_heldout", "query": "guard ko de dena", "lang": "hi-latn", "relevant": {"p-chat_parcel-01": 2, "p-chat_parcel-02": 2}, "none": false}
+{"id": "hinglish_heldout-012", "slice": "hinglish_heldout", "query": "ghar par koi nahi", "lang": "hi-latn", "relevant": {"p-chat_parcel-01": 2, "p-chat_parcel-02": 2}, "none": false}
+{"id": "hinglish_heldout-013", "slice": "hinglish_heldout", "query": "halwai ko menu", "lang": "hi-latn", "relevant": {"p-chat_wedding-01": 2, "p-chat_wedding-02": 2}, "none": false}
+{"id": "hinglish_heldout-014", "slice": "hinglish_heldout", "query": "card chhap gaye", "lang": "hi-latn", "relevant": {"p-chat_wedding-01": 2, "p-chat_wedding-02": 2}, "none": false}
+{"id": "hinglish_heldout-015", "slice": "hinglish_heldout", "query": "madhyamik shiksha mandal", "lang": "hi-latn", "relevant": {"p-marksheet-02": 2}, "none": false}
+{"id": "hinglish_heldout-016", "slice": "hinglish_heldout", "query": "pratham shreni uttirn", "lang": "hi-latn", "relevant": {"p-marksheet-02": 2}, "none": false}
+{"id": "hinglish_heldout-017", "slice": "hinglish_heldout", "query": "bharat nirvachan aayog", "lang": "hi-latn", "relevant": {"p-voter_id-01": 2}, "none": false}
+{"id": "hinglish_heldout-018", "slice": "hinglish_heldout", "query": "pradhanacharya ko avkash", "lang": "hi-latn", "relevant": {"p-leave_application-01": 2}, "none": false}
+{"id": "hinglish_heldout-019", "slice": "hinglish_heldout", "query": "tez bukhar chhutti", "lang": "hi-latn", "relevant": {"p-leave_application-01": 2}, "none": false}
+{"id": "hinglish_heldout-020", "slice": "hinglish_heldout", "query": "suchna ka adhikar", "lang": "hi-latn", "relevant": {"p-rti_application-01": 2}, "none": false}
+{"id": "hinglish_heldout-021", "slice": "hinglish_heldout", "query": "aavedan shulk das rupaye", "lang": "hi-latn", "relevant": {"p-rti_application-01": 2}, "none": false}
+{"id": "hinglish_heldout-022", "slice": "hinglish_heldout", "query": "shubh vivah nimantran", "lang": "hi-latn", "relevant": {"p-wedding_invitation-01": 2}, "none": false}
+{"id": "hinglish_heldout-023", "slice": "hinglish_heldout", "query": "pritibhoj ke baad vidai", "lang": "hi-latn", "relevant": {"p-wedding_invitation-01": 2}, "none": false}
+{"id": "hinglish_heldout-024", "slice": "hinglish_heldout", "query": "lenden id", "lang": "hi-latn", "relevant": {"p-upi_payment-05": 2, "p-upi_payment-10": 2, "p-upi_payment-15": 2, "p-upi_payment-20": 2, "p-upi_payment-25": 2, "p-upi_payment-30": 2, "p-upi_payment-35": 2, "p-upi_payment-40": 2, "p-upi_payment-45": 2, "p-upi_payment-50": 2, "p-upi_payment-55": 2, "p-upi_payment-60": 2, "p-upi_payment-65": 2, "p-upi_payment-70": 2, "p-upi_payment-75": 2, "p-upi_payment-80": 2, "p-upi_payment-85": 2, "p-upi_payment-90": 2}, "none": false}
+{"id": "hinglish_heldout-025", "slice": "hinglish_heldout", "query": "tiffin service ko bheja", "lang": "hi-latn", "relevant": {"p-upi_payment-05": 2, "p-upi_payment-15": 2, "p-upi_payment-25": 2, "p-upi_payment-35": 2, "p-upi_payment-45": 2, "p-upi_payment-55": 2, "p-upi_payment-65": 2, "p-upi_payment-75": 2, "p-upi_payment-85": 2}, "none": false}
+{"id": "hinglish_heldout-026", "slice": "hinglish_heldout", "query": "mansoon ki barish", "lang": "hi-latn", "relevant": {"w-en-005": 2, "w-hi-095": 2}, "none": false}
+{"id": "hinglish_heldout-027", "slice": "hinglish_heldout", "query": "cricket ka khel", "lang": "hi-latn", "relevant": {"w-en-053": 2, "w-hi-102": 2}, "none": false}
+{"id": "hinglish_heldout-028", "slice": "hinglish_heldout", "query": "yog aasan", "lang": "hi-latn", "relevant": {"w-en-024": 2, "w-hi-103": 2}, "none": false}
+{"id": "hinglish_heldout-029", "slice": "hinglish_heldout", "query": "vastu evam seva kar", "lang": "hi-latn", "relevant": {"w-en-006": 2, "w-hi-107": 2}, "none": false}
+{"id": "hinglish_heldout-030", "slice": "hinglish_heldout", "query": "antriksh anusandhan sangathan", "lang": "hi-latn", "relevant": {"w-en-034": 2, "w-hi-108": 2}, "none": false}
+{"id": "hinglish_heldout-031", "slice": "hinglish_heldout", "query": "sanganak yantra", "lang": "hi-latn", "relevant": {"w-hi-118": 2}, "none": false}
+{"id": "hinglish_heldout-032", "slice": "hinglish_heldout", "query": "antarjaal", "lang": "hi-latn", "relevant": {"w-hi-119": 2}, "none": false}
+{"id": "hinglish_heldout-033", "slice": "hinglish_heldout", "query": "computer virus kya hai", "lang": "hi-latn", "relevant": {"w-en-137": 2, "w-hi-221": 2}, "none": false}
+{"id": "hinglish_heldout-034", "slice": "hinglish_heldout", "query": "aam phalon ka raja", "lang": "hi-latn", "relevant": {"w-en-194": 2, "w-hi-223": 2}, "none": false}
+{"id": "hinglish_heldout-035", "slice": "hinglish_heldout", "query": "ganna nakdi fasal", "lang": "hi-latn", "relevant": {"w-en-192": 2, "w-hi-224": 2}, "none": false}
+{"id": "hinglish_heldout-036", "slice": "hinglish_heldout", "query": "kapas ki kheti", "lang": "hi-latn", "relevant": {"w-en-193": 2, "w-hi-225": 2}, "none": false}
+{"id": "hinglish_heldout-037", "slice": "hinglish_heldout", "query": "masale", "lang": "hi-latn", "relevant": {"w-en-196": 2, "w-hi-226": 2}, "none": false}
+{"id": "hinglish_heldout-038", "slice": "hinglish_heldout", "query": "jawaharlal nehru pratham pradhanmantri", "lang": "hi-latn", "relevant": {"w-en-204": 2, "w-hi-228": 2}, "none": false}
+{"id": "hinglish_heldout-039", "slice": "hinglish_heldout", "query": "bhimrao ambedkar", "lang": "hi-latn", "relevant": {"w-en-205": 2, "w-hi-229": 2}, "none": false}
+{"id": "hinglish_heldout-040", "slice": "hinglish_heldout", "query": "rajasthan rajya", "lang": "hi-latn", "relevant": {"w-en-213": 2, "w-hi-233": 2}, "none": false}
+{"id": "hinglish_heldout-041", "slice": "hinglish_heldout", "query": "bharatiya rail", "lang": "hi-latn", "relevant": {"w-en-206": 2, "w-hi-236": 2}, "none": false}
+{"id": "hinglish_heldout-042", "slice": "hinglish_heldout", "query": "rakt ki koshikayen", "lang": "hi-latn", "relevant": {"w-en-182": 2, "w-hi-238": 2}, "none": false}
+{"id": "hinglish_heldout-043", "slice": "hinglish_heldout", "query": "hriday ki dhadkan", "lang": "hi-latn", "relevant": {"w-en-179": 2, "w-hi-239": 2}, "none": false}
+{"id": "hinglish_heldout-044", "slice": "hinglish_heldout", "query": "malaria machhar", "lang": "hi-latn", "relevant": {"w-en-021": 2, "w-hi-240": 2}, "none": false}
+{"id": "hinglish_heldout-045", "slice": "hinglish_heldout", "query": "tapedik rog", "lang": "hi-latn", "relevant": {"w-en-022": 2, "w-hi-241": 2}, "none": false}
+{"id": "hinglish_heldout-046", "slice": "hinglish_heldout", "query": "poshan aahar", "lang": "hi-latn", "relevant": {"w-en-187": 2, "w-hi-242": 2}, "none": false}
+{"id": "hinglish_heldout-047", "slice": "hinglish_heldout", "query": "vyayam ke fayde", "lang": "hi-latn", "relevant": {"w-en-189": 2, "w-hi-244": 2}, "none": false}
+{"id": "hinglish_heldout-048", "slice": "hinglish_heldout", "query": "chumbakatva", "lang": "hi-latn", "relevant": {"w-en-169": 2, "w-hi-246": 2}, "none": false}
+{"id": "hinglish_heldout-049", "slice": "hinglish_heldout", "query": "dhwani ki tarang", "lang": "hi-latn", "relevant": {"w-en-171": 2, "w-hi-247": 2}, "none": false}
+{"id": "hinglish_heldout-050", "slice": "hinglish_heldout", "query": "parmanu", "lang": "hi-latn", "relevant": {"w-en-173": 2, "w-hi-248": 2}, "none": false}
+{"id": "hinglish_heldout-051", "slice": "hinglish_heldout", "query": "vidyut aavesh", "lang": "hi-latn", "relevant": {"w-en-168": 2, "w-hi-245": 2}, "none": false}
 {"id": "exact-001", "slice": "exact", "query": "फागु पूर्णिमा", "lang": "hi", "relevant": {"w-en-202": 2}, "none": false}
 {"id": "exact-002", "slice": "exact", "query": "mount everest", "lang": "en", "relevant": {"w-en-058": 2}, "none": false}
 {"id": "exact-003", "slice": "exact", "query": "precipitation caused", "lang": "en", "relevant": {"w-en-005": 2}, "none": false}

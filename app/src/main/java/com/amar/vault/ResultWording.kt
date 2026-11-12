@@ -28,7 +28,7 @@ internal object ResultWording {
 
     /** True when [hit] says one of [words] as a word of its own. */
     fun saysAWord(hit: SearchHit, words: List<String>): Boolean {
-        if (words.isEmpty()) return true
+        if (words.isEmpty() || hit.saidInHindi != null) return true
         val row = hit.row
         return listOfNotNull(hit.excerpt, row.ocrText, row.title, row.sourceFile, row.tags)
             .any { text -> UnicodeText.nfc(text).lowercase().let { lower -> words.any { containsAsWord(lower, it) } } }

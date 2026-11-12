@@ -42,6 +42,8 @@ object VaultConfig {
         const val MEANING_LANE = true
 
         const val HINGLISH_BRIDGE = true
+        const val HINGLISH_SAID = true
+        const val HINGLISH_MODEL = true
 
         const val FACTS_LANE = true
 

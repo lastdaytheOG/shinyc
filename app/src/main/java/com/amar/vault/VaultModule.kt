@@ -104,7 +104,15 @@ object VaultModule {
         photos: com.amar.vault.retrieval.PhotoRetriever,
         meaning: com.amar.vault.retrieval.MeaningRetriever,
         learned: com.amar.vault.vectors.AliasMemory,
-    ): RetrievalService = HybridSearchService(repository, lexical, boostConfig, photos, meaning, learned)
+        spellings: com.amar.vault.retrieval.SpellingGuesser,
+    ): RetrievalService = HybridSearchService(repository, lexical, boostConfig, photos, meaning, learned, spellings)
+
+    @Provides
+    @Singleton
+    fun provideSpellingGuesser(@ApplicationContext context: Context): com.amar.vault.retrieval.SpellingGuesser =
+        com.amar.vault.retrieval.ModelSpellings({
+            context.assets.open("hinglish/translit.bin").use { com.amar.vault.retrieval.HinglishModel.read(it) }
+        })
 
     @Provides
     @Singleton
