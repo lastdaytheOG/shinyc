@@ -49,10 +49,12 @@ object TemporalParser {
 
     /** In the order they are looked for; where two are in one query the later one is the period. */
     private val PERIODS = listOf(
-        Period(listOf("last month", "पिछले महीने", "pichle mahine", "last mahina"), { monthOf(it, -1) }, ::monthLabel),
-        Period(listOf("this month", "इस महीने", "is mahine"), { monthOf(it, 0) }, ::monthLabel),
-        Period(listOf("last week", "पिछले सप्ताह", "पिछले हफ्ते", "pichle hafte"), { weekOf(it, -1) }, { "Last week (${spanLabel(it)})" }),
-        Period(listOf("this week", "इस सप्ताह", "इस हफ्ते", "is hafte"), { weekOf(it, 0) }, { "This week (${spanLabel(it)})" }),
+        Period(listOf("last month", "पिछले महीने", "पिछले महीने का", "pichle mahine", "pichhle mahine", "pichle mahina", "pichhle mahina", "last mahina", "previous month"), { monthOf(it, -1) }, ::monthLabel),
+        Period(listOf("this month", "इस महीने", "is mahine", "iss mahine", "is mahina"), { monthOf(it, 0) }, ::monthLabel),
+        Period(listOf("last week", "पिछले सप्ताह", "पिछले हफ्ते", "pichle hafte", "pichhle hafte", "pichle hafta", "pichhle hafta"), { weekOf(it, -1) }, { "Last week (${spanLabel(it)})" }),
+        Period(listOf("this week", "इस सप्ताह", "इस हफ्ते", "is hafte", "iss hafte"), { weekOf(it, 0) }, { "This week (${spanLabel(it)})" }),
+        Period(listOf("last year", "पिछले साल", "पिछले वर्ष", "pichle saal", "pichhle saal", "pichle sal", "pichhle sal"), { yearOf(it, -1) }, ::yearLabel),
+        Period(listOf("this year", "इस साल", "इस वर्ष", "is saal", "iss saal", "is sal"), { yearOf(it, 0) }, ::yearLabel),
         Period(listOf("yesterday", "कल", "yesterday's", "kal"), { dayOf(it, -1) }, { "Yesterday (${dayLabel(it.startTimeMs)})" }),
         Period(listOf("today", "आज", "today's", "aaj"), { dayOf(it, 0) }, { "Today (${dayLabel(it.startTimeMs)})" }),
         Period(listOf("parso", "परसों"), { dayOf(it, -2) }, { "Two days ago (${dayLabel(it.startTimeMs)})" }),
@@ -124,6 +126,25 @@ object TemporalParser {
                 readings += Understood(Understood.Kind.PERIOD, phrase, period.label(range))
                 cleanedQuery = cleanedQuery.replace(regex, "").trim()
                 confidence = maxOf(confidence, 1.0f)
+            }
+        }
+
+        if (timeRange == null) {
+            AGO.find(cleanedQuery)?.let { m ->
+                val n = NUMBER_WORDS[m.groupValues[1]] ?: m.groupValues[1].toIntOrNull()
+                val unit = m.groupValues[2]
+                if (n != null && n in 1..60 && m.value !in periodWordsOff) {
+                    val range = when {
+                        unit in DAY_UNITS -> dayOf(now, -n)
+                        unit in WEEK_UNITS -> weekOf(now, -n)
+                        unit in MONTH_UNITS -> monthOf(now, -n)
+                        else -> yearOf(now, -n)
+                    }
+                    timeRange = range
+                    readings += Understood(Understood.Kind.PERIOD, m.value, agoLabel(range, unit, n))
+                    cleanedQuery = cleanedQuery.replace(m.value, " ").trim()
+                    confidence = maxOf(confidence, 1.0f)
+                }
             }
         }
 
@@ -259,6 +280,38 @@ object TemporalParser {
 
     private fun monthOf(now: Calendar, monthsFromThis: Int): TimeRange =
         monthBounds((now.clone() as Calendar).apply { add(Calendar.MONTH, monthsFromThis) })
+
+    private fun yearOf(now: Calendar, yearsFromThis: Int): TimeRange {
+        val start = (now.clone() as Calendar).apply { add(Calendar.YEAR, yearsFromThis); set(Calendar.MONTH, Calendar.JANUARY); set(Calendar.DAY_OF_MONTH, 1) }
+        val end = (start.clone() as Calendar).apply { set(Calendar.MONTH, Calendar.DECEMBER); set(Calendar.DAY_OF_MONTH, 31) }
+        return TimeRange(startOfDay(start), endOfDay(end))
+    }
+
+    private fun yearLabel(range: TimeRange): String = at(range.startTimeMs).get(Calendar.YEAR).toString()
+
+    private fun agoLabel(range: TimeRange, unit: String, n: Int): String = when {
+        unit in DAY_UNITS -> "$n days ago (${dayLabel(range.startTimeMs)})"
+        unit in WEEK_UNITS -> "$n weeks ago (${spanLabel(range)})"
+        unit in MONTH_UNITS -> monthLabel(range)
+        else -> yearLabel(range)
+    }
+
+    private val DAY_UNITS = setOf("day", "days", "din", "दिन")
+    private val WEEK_UNITS = setOf("week", "weeks", "hafte", "hafta", "hafton", "सप्ताह", "हफ्ते", "हफ़्ते")
+    private val MONTH_UNITS = setOf("month", "months", "mahine", "mahina", "mahino", "महीने", "महीना", "माह")
+    private val NUMBER_WORDS = mapOf(
+        "one" to 1, "two" to 2, "three" to 3, "four" to 4, "five" to 5, "six" to 6, "seven" to 7, "eight" to 8,
+        "nine" to 9, "ten" to 10, "eleven" to 11, "twelve" to 12, "a" to 1,
+        "ek" to 1, "do" to 2, "teen" to 3, "tin" to 3, "char" to 4, "chaar" to 4, "panch" to 5, "paanch" to 5, "chhe" to 6,
+        "che" to 6, "chah" to 6, "saat" to 7, "sat" to 7, "aath" to 8, "ath" to 8, "nau" to 9, "das" to 10, "dus" to 10,
+        "एक" to 1, "दो" to 2, "तीन" to 3, "चार" to 4, "पाँच" to 5, "पांच" to 5, "छह" to 6, "छः" to 6, "सात" to 7,
+        "आठ" to 8, "नौ" to 9, "दस" to 10,
+    )
+    private val AGO = Regex(
+        "(?<![\\p{L}\\p{M}\\p{N}_])(\\d{1,2}|" + NUMBER_WORDS.keys.joinToString("|") { Regex.escape(it) } + ")\\s+" +
+            "(days?|din|दिन|weeks?|hafte|hafta|hafton|सप्ताह|हफ्ते|हफ़्ते|months?|mahine|mahina|mahino|महीने|महीना|माह|years?|saal|sal|साल|वर्ष)" +
+            "\\s+(ago|back|pehle|pahle|pehele|पहले)(?![\\p{L}\\p{M}\\p{N}_])"
+    )
 
     private fun weekOf(now: Calendar, weeksFromThis: Int): TimeRange {
         val start = (now.clone() as Calendar).apply {
