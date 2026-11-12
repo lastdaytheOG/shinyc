@@ -104,6 +104,19 @@ class HinglishSearchTest {
     }
 
     @Test
+    fun aQueryOfEnglishWordsIsNotReadWithGuesses() = runBlocking {
+        val code = row("code", "Your verification code is 4821", "en")
+        val hindi = row("chatcode", "कोड बता दीजिए", "hi", "Screenshot_2.png")
+        val guesser = SpellingGuesser { w -> if (w == "code") listOf("kod") else emptyList() }
+        val service = HybridSearchService(Repo(listOf(code, hindi)), Engine(listOf("chatcode", "code")), BoostConfig(), spellings = guesser)
+        val english = service.retrieve(RetrievalRequest("verification code"))
+        assertEquals("code", english.items.first().id)
+        assertTrue(english.hindiSpellings.isEmpty())
+        val mixed = service.retrieve(RetrievalRequest("code batao"))
+        assertEquals(listOf("कोड"), mixed.hindiSpellings)
+    }
+
+    @Test
     fun englishQueriesAreLeftAsTheyWere() {
         val result = search("phone bill")
         assertTrue(result.items.first().id.startsWith("en"))

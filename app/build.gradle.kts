@@ -103,6 +103,7 @@ android {
         buildConfig = true
     }
 
+    sourceSets.getByName("main").assets.srcDir("src/main/hinglish-assets")
     if (photoSearchModels) {
         sourceSets.getByName("main").assets.srcDir("../tools/visual-search/models/apk")
     }

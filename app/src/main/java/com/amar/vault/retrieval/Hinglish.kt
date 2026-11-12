@@ -95,7 +95,15 @@ object Hinglish {
     fun foldedQueryWords(query: String): List<String> =
         LATIN_WORD.findAll(query.lowercase(Locale.ROOT)).map { fold(it.value) }.filter { it.length >= 2 }.distinct().toList()
 
-    fun key(devanagari: String): String = fold(romanise(devanagari))
+    private val keys = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private const val KEYS_KEPT = 30_000
+
+    fun key(devanagari: String): String {
+        keys[devanagari]?.let { return it }
+        val k = fold(romanise(devanagari))
+        if (keys.size < KEYS_KEPT) keys[devanagari] = k
+        return k
+    }
 
     private val LITTLE = setOf(
         "ka", "ki", "ke", "ko", "me", "mein", "main", "se", "par", "pe", "hai", "hain", "ho", "tha", "the", "thi",
@@ -126,6 +134,16 @@ object Hinglish {
         private val little = BooleanArray(typed.size) { isLittle(typed[it]) }
         val isEmpty = keys.all { it.isEmpty() }
         val allKeys: List<String> = keys.flatten().distinct()
+        private val rows = java.util.concurrent.ConcurrentHashMap<String, Any>()
+
+        fun matchRow(id: String, page: String, name: String): Match? {
+            rows[id]?.let { return it as? Match }
+            val m = match(page, name)
+            rows[id] = m ?: NoMatch
+            return m
+        }
+
+        private object NoMatch
 
         fun match(page: String, name: String): Match? {
             if (isEmpty || (!isDevanagari(page) && !isDevanagari(name))) return null

@@ -224,17 +224,6 @@ class HybridSearchService(
             }
         }
 
-        val guessedDeferred = async(Dispatchers.Default) {
-            if (guesser == null) hinglish
-            else try {
-                Hinglish.Query.of(hinglishTyped, guesser)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                VaultLog.e("HybridSearch", "Hinglish guesses error: ${e.message}"); hinglish
-            }
-        }
-
         // ── 1–4. Candidate lanes ──────────────────────────────────────────
         val bm25Deferred = async(Dispatchers.IO) {
             try {
@@ -258,25 +247,6 @@ class HybridSearchService(
                     .let { if (tuning.onePerDocument) it.firstPerDocument(budget.bm25) else it }
             } catch (e: Exception) {
                 VaultLog.e("HybridSearch", "BM25 error: ${e.message}"); emptyList()
-            }
-        }
-
-        val guessedLaneDeferred = async(Dispatchers.IO) {
-            if (guesser == null) return@async emptyList<VaultItem>()
-            try {
-                val guessed = guessedDeferred.await() ?: return@async emptyList<VaultItem>()
-                val known = hinglish?.allKeys.orEmpty().toSet() + qLower.split(WHITESPACE)
-                val extra = guessed.allKeys.filter { it !in known }
-                if (extra.isEmpty()) return@async emptyList<VaultItem>()
-                val fetch = if (tuning.onePerDocument || only != null)
-                    budget.bm25 * VaultConfig.Retrieval.BM25_DOC_OVERFETCH else budget.bm25
-                lexical.awaitReady()
-                hydrateRanked(lexical.bm25(extra.joinToString(" "), fetch), tuning).applyStrictFilter()
-                    .let { if (tuning.onePerDocument) it.firstPerDocument(budget.bm25) else it }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                VaultLog.e("HybridSearch", "Hinglish lane error: ${e.message}"); emptyList()
             }
         }
 
@@ -311,10 +281,42 @@ class HybridSearchService(
         // other words ("cloud" for "claude"), not misspellings of it. Null = the previous
         // behaviour, typo help for every word of the expanded query.
         val legacyTypoHelp = !tuning.typoHelpOnlyForMissingWords
+        val readingDeferred = async(Dispatchers.Default) {
+            if (guesser == null) return@async hinglish
+            val found = substringDeferred.await().wordsFound
+            val readsAsHinglish = typedWords.any { it.bare.length >= 3 && !Hinglish.isLittle(it.bare) && it.typed !in found }
+            if (!readsAsHinglish) return@async hinglish
+            try {
+                Hinglish.Query(hinglishTyped, hinglishTyped.map { w -> ensureActive(); Hinglish.keysFor(w, guesser) })
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                VaultLog.e("HybridSearch", "Hinglish guesses error: ${e.message}"); hinglish
+            }
+        }
+        val guessedLaneDeferred = async(Dispatchers.IO) {
+            val reading = readingDeferred.await()
+            if (reading == null || reading === hinglish) return@async null
+            try {
+                val known = hinglish?.allKeys.orEmpty().toSet()
+                if (reading.allKeys.all { it in known }) return@async null
+                val typed = qLower.split(WHITESPACE)
+                val extra = reading.allKeys.filter { it !in typed } + aliasTerms
+                val fetch = if (tuning.onePerDocument || only != null)
+                    budget.bm25 * VaultConfig.Retrieval.BM25_DOC_OVERFETCH else budget.bm25
+                lexical.awaitReady()
+                hydrateRanked(lexical.bm25(expandedQuery + " " + extra.joinToString(" "), fetch), tuning).applyStrictFilter()
+                    .let { if (tuning.onePerDocument) it.firstPerDocument(budget.bm25) else it }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                VaultLog.e("HybridSearch", "Hinglish lane error: ${e.message}"); null
+            }
+        }
         val missingWordsDeferred = async(Dispatchers.IO) {
             if (legacyTypoHelp) null
             else substringDeferred.await().wordsFound.let { found ->
-                val inHindi = hinglishFound(guessedDeferred.await(), bm25Deferred.await() + guessedLaneDeferred.await())
+                val inHindi = hinglishFound(readingDeferred.await(), guessedLaneDeferred.await() ?: bm25Deferred.await())
                 typedWords.filter { it.typed !in found && it.bare !in inHindi }.map { it.bare }.distinct()
             }
         }
@@ -395,15 +397,15 @@ class HybridSearchService(
 
         val substringLane = substringDeferred.await().hits
         val fuzzyLane = fuzzyDeferred.await()
-        val lexicalGate = gate(missingWordsDeferred.await().orEmpty(), guessedDeferred.await())
+        val lexicalGate = gate(missingWordsDeferred.await().orEmpty(), readingDeferred.await())
         // With typo help for every word and tags read as text, a document keeps the first page
         // named, as before.
         val judge = lexicalGate.takeUnless { legacyTypoHelp && !tuning.pageWordsBeforeTags }
         val guessedLane = guessedLaneDeferred.await()
-        claimDocuments(guessedLane, judge)
+        guessedLane?.let { claimDocuments(it, judge) }
         claimDocuments(substringLane, judge)
         claimDocuments(fuzzyLane, judge)
-        val bm25Results = (bm25Lane + guessedLane).asDocumentRows().distinctBy { it.id }
+        val bm25Results = (guessedLane ?: bm25Lane).asDocumentRows()
         val substringResults = substringLane.asDocumentRows()
         val fuzzyResults = fuzzyLane.asDocumentRows()
 
@@ -582,7 +584,7 @@ class HybridSearchService(
         if (hinglish == null || hinglish.isEmpty) return emptySet()
         val found = HashSet<String>()
         for (row in rows) {
-            val m = hinglish.match(row.ocrText, SearchableName.of(row)) ?: continue
+            val m = hinglish.matchRow(row.id, row.ocrText, SearchableName.of(row)) ?: continue
             for (i in hinglish.typed.indices) if (m.said[i]) found += hinglish.typed[i]
         }
         return found
@@ -782,12 +784,10 @@ class HybridSearchService(
         val hinglish: Hinglish.Query? = null,
         val typedCount: Int = words.size,
     ) {
-        private val hindiSeen = HashMap<String, Hinglish.Match?>()
-
         fun hindiOf(item: VaultItem): Hinglish.Match? {
             val q = hinglish ?: return null
-            if (hindiSeen.containsKey(item.id)) return hindiSeen[item.id]
-            return q.match(item.ocrText, SearchableName.of(item)).also { hindiSeen[item.id] = it }
+            if (q.isEmpty) return null
+            return q.matchRow(item.id, item.ocrText, SearchableName.of(item))
         }
 
         private fun saidInHindi(hindi: Hinglish.Match?, i: Int): Boolean =
