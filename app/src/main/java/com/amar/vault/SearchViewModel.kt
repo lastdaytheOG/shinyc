@@ -38,6 +38,7 @@ data class SearchHit(
      * says so, where the excerpt would have been.
      */
     val filedUnder: String? = null,
+    val saidInHindi: String? = null,
 )
 
 /**
@@ -108,11 +109,14 @@ internal object MatchExcerpt {
 internal fun oneCardPerDocument(
     rows: List<VaultItem>,
     queryWords: List<String> = emptyList(),
+    hindiSpellings: List<String> = emptyList(),
 ): List<SearchHit> {
     val shown = HashSet<String>()
     return rows.mapNotNull { row ->
         if (!shown.add(row.parentDocumentId ?: row.id)) return@mapNotNull null
-        val exact = MatchExcerpt.of(row.ocrText, queryWords)
+        val inHindi = hindiSpellings.firstOrNull { ResultWording.containsAsWord(row.ocrText, it) }
+            ?: hindiSpellings.firstOrNull { ResultWording.containsAsWord(com.amar.vault.retrieval.SearchableName.of(row), it) }
+        val exact = MatchExcerpt.of(row.ocrText, queryWords) ?: inHindi?.let { MatchExcerpt.of(row.ocrText, listOf(it)) }
         // No typed word on the page, and none in the name either: it is here for a word spelt
         // nearly the same, or else for a tag.
         val unexplained = row.takeIf { exact == null }?.takeIf { item ->
@@ -127,6 +131,7 @@ internal fun oneCardPerDocument(
             excerpt = excerpt?.let(com.amar.vault.vectors.Sensitive::mask),
             similarWord = similar,
             filedUnder = unexplained?.takeIf { similar == null }?.let { MatchExcerpt.tag(it.tags, queryWords) },
+            saidInHindi = inHindi,
         )
     }
 }
@@ -311,11 +316,11 @@ class SearchViewModel @Inject constructor(
                 // Operators refine (narrow) the ranked results — never re-rank or bypass.
                 // How many results the filters written into the query hide, when they hide all.
                 var hiddenByFilters = 0
-                suspend fun toRows(items: List<VaultItem>): List<SearchHit> {
+                suspend fun toRows(items: List<VaultItem>, hindi: List<String> = emptyList()): List<SearchHit> {
                     val kept = if (ops.hasAny) applyOperators(items, ops) else items
                     hiddenByFilters = if (kept.isEmpty() && items.isNotEmpty())
-                        oneCardPerDocument(items, queryWords).size else 0
-                    return oneCardPerDocument(kept, queryWords)
+                        oneCardPerDocument(items, queryWords, hindi).size else 0
+                    return oneCardPerDocument(kept, queryWords, hindi)
                 }
                 if (effectiveQuery.isBlank()) {
                     // Operator-only query (e.g. "type:pdf"): no free-text to rank — nothing for the
@@ -331,7 +336,7 @@ class SearchViewModel @Inject constructor(
                     // place. The FINAL stage is the same ranking retrieve() returns.
                     learned.searched(effectiveQuery)
                     retrievalService.retrieveProgressive(request.copy(only = only)).collect { update ->
-                        val rows = toRows(update.result.items)
+                        val rows = toRows(update.result.items, update.result.hindiSpellings)
                         val isFinal = update.stage == com.amar.vault.retrieval.RetrievalStage.FINAL
                         // An early stage that the operators narrow to nothing is not "no results"
                         // yet — keep the skeleton until a later stage or FINAL decides.

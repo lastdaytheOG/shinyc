@@ -185,6 +185,8 @@ class SearchBenchDeviceTest {
         "bounded_nomodel" -> RetrievalTuning(candidateBounded = true, semanticEnabled = false, photoLane = false)
         "nomodel" -> RetrievalTuning(semanticEnabled = false, photoLane = false)
         "nobridge" -> RetrievalTuning(hinglishBridge = false)
+        "hlold" -> RetrievalTuning(hinglishSaid = false)
+        "hlrules" -> RetrievalTuning(hinglishModel = false)
         else -> error("unknown config $config")
     }
 }
