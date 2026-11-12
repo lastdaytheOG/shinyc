@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.flow
  */
 data class CandidateBudget(
     val bm25: Int = VaultConfig.Retrieval.BM25_BUDGET,
-    val vector: Int = VaultConfig.Retrieval.VECTOR_BUDGET,
+    val meaning: Int = VaultConfig.Retrieval.MEANING_BUDGET,
     val substring: Int = VaultConfig.Retrieval.SUBSTRING_BUDGET,
     val fuzzy: Int = VaultConfig.Retrieval.FUZZY_BUDGET,
     val fts: Int = VaultConfig.Retrieval.FTS_BUDGET,
@@ -32,17 +32,7 @@ data class RetrievalTuning(
     val candidateBounded: Boolean = VaultConfig.Retrieval.CANDIDATE_BOUNDED,
     /** Keep BM25/vector candidates in engine rank order after Room hydration. */
     val rankOrderHydration: Boolean = VaultConfig.Retrieval.RANK_ORDER_HYDRATION,
-    /** Embed the query at its true token length instead of padding to MAX_SEQ_LEN. */
-    val queryTrueLength: Boolean = VaultConfig.Embedding.QUERY_TRUE_LENGTH,
-    /** False = keyword-only: no vector lane, no late semantic boosts, no model inference. */
-    val semanticEnabled: Boolean = true,
-    /**
-     * Resolve vector hits to the item that owns them and let hits at or above
-     * [semanticMinSimilarity] through the text-presence gate, so an item can be found by
-     * meaning alone. Off = the legacy vector lane.
-     */
-    val semanticParentHits: Boolean = VaultConfig.Retrieval.SEMANTIC_PARENT_HITS,
-    val semanticMinSimilarity: Float = VaultConfig.Retrieval.SEMANTIC_MIN_SIMILARITY,
+    val semanticEnabled: Boolean = VaultConfig.Retrieval.MEANING_LANE,
     /**
      * One row per document (its best-matching page) instead of one row per page, so a long
      * document cannot fill every result slot. The one switch a production caller does set:
@@ -67,6 +57,9 @@ data class RetrievalTuning(
     val wholeWordsFirst: Boolean = VaultConfig.Retrieval.WHOLE_WORDS_FIRST,
     /** See [VaultConfig.Retrieval.PHOTO_LANE]; false leaves [RetrievalResult.photos] empty. */
     val photoLane: Boolean = VaultConfig.Retrieval.PHOTO_LANE,
+    val hinglishBridge: Boolean = VaultConfig.Retrieval.HINGLISH_BRIDGE,
+    val factsLane: Boolean = VaultConfig.Retrieval.FACTS_LANE,
+    val learning: Boolean = true,
 )
 
 /**
@@ -172,10 +165,60 @@ data class RetrievalResult(
      * "a photo a bit like it is", so these are shown as photos that look like it, labelled so.
      */
     val photos: List<PhotoHit> = emptyList(),
+    val meaning: MeaningResult? = null,
+    val facts: FactResult? = null,
+    val groups: List<ResultGroup> = emptyList(),
+    val verdict: Verdict = Verdict.NOTHING,
+    val keywordWordsSaid: Int = 0,
+    val keywordWords: Int = 0,
 )
 
+enum class EvidenceKind { SAYS, NAME, TAG, NEAR_SPELLING, FACT, MEANING, LOOKS }
+
+enum class Verdict { SURE, POSSIBLE, NOTHING, NOTHING_YET }
+
+data class MeaningMatch(val item: VaultItem, val score: Float, val margin: Float, val standing: Float)
+
+data class MeaningResult(
+    val shown: List<MeaningMatch>,
+    val closest: List<MeaningMatch>,
+    val verdict: Verdict,
+    val coverage: Float,
+    val timedOut: Boolean = false,
+    val mean: Float = 0f,
+    val deviation: Float = 0f,
+)
+
+data class ResultGroup(val kind: EvidenceKind, val verdict: Verdict, val ids: List<String>)
+
 /** A picture found by what is in it, and how close it came (cosine, -1…1). */
-data class PhotoHit(val item: VaultItem, val score: Float)
+data class PhotoHit(val item: VaultItem, val score: Float, val margin: Float = 0f)
+
+data class MeaningHit(val rowId: String, val score: Float, val margin: Float)
+
+class MeaningScan(
+    val hits: List<MeaningHit>,
+    val mean: Float,
+    val deviation: Float,
+    val scanned: Int,
+    val coverage: Float,
+) {
+    fun standing(score: Float): Float = if (deviation > 0f) (score - mean) / deviation else 0f
+}
+
+interface MeaningRetriever {
+    val isReady: Boolean
+    suspend fun scan(query: String, k: Int, only: ((String) -> Boolean)? = null): MeaningScan?
+    fun isCurrent(row: VaultItem): Boolean = true
+    fun clearCaches() {}
+
+    companion object {
+        val NONE: MeaningRetriever = object : MeaningRetriever {
+            override val isReady = false
+            override suspend fun scan(query: String, k: Int, only: ((String) -> Boolean)?): MeaningScan? = null
+        }
+    }
+}
 
 /**
  * Photo search by what is in the pictures ([com.amar.vault.photos.PhotoSearch]). [NONE] finds
