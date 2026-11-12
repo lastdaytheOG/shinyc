@@ -9,12 +9,9 @@ plugins {
     id("com.google.dagger.hilt.android")
 }
 
-// Size switches. The default build is unchanged (both ABIs, embedding model bundled).
-//   -PnoEmbeddingModel  leave the ~570 MB embedding model out of the APK; the app then runs
-//                       keyword-only until a model is installed (AppEmbeddingEngine.isAvailable).
+// Size switches. The default build carries both ABIs.
 //   -PabiOnly=<abi>     package one ABI only: arm64-v8a (phones) or x86_64 (emulator).
-//   -PphoneApk          no model + arm64-v8a only — the APK to hand to someone with a real
-//                       phone. Measured 2026-10-04: 775 MB → 126 MB.
+//   -PphoneApk          arm64-v8a only: the APK to hand to someone with a real phone.
 //   -PphotoSearchModels carry photo search's models (tools/visual-search/models/apk/photo-search)
 //                       in the APK; the app copies them to files/photo-search the first time.
 //                       Without it there is no photo search until the models are put on the
@@ -30,7 +27,6 @@ val slimApk: Boolean = providers.gradleProperty("slimApk").isPresent
 val phoneApk: Boolean = slimApk || providers.gradleProperty("phoneApk").isPresent
 val benchApp: Boolean = providers.gradleProperty("benchApp").isPresent
 val photoSearchModels: Boolean = providers.gradleProperty("photoSearchModels").isPresent
-val noEmbeddingModel: Boolean = phoneApk || providers.gradleProperty("noEmbeddingModel").isPresent
 val abiOnly: String? = providers.gradleProperty("abiOnly").orNull ?: if (phoneApk) "arm64-v8a" else null
 
 android {
@@ -113,15 +109,10 @@ android {
 
     androidResources {
         noCompress += listOf("onnx", "tflite", "bin", "litertlm", "task")
-        if (noEmbeddingModel) {
-            // AAPT's default ignore list plus the embedding model, its tokenizer (only the model
-            // reads it) and a SentencePiece file nothing reads: 7.1 MB of the APK.
-            ignoreAssetsPattern =
-                "!.svn:!.git:!.ds_store:!*.scc:.*:<dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~:!bge-m3-ocr-int4.onnx" +
-                    ":!tokenizer.json:!sentencepiece.bpe.model" +
-                    // Photo search's device-test material stays out of the app: only the models ship.
-                    ":<dir>parity:!photo_refs.tsv:!query_refs.tsv"
-        }
+        ignoreAssetsPattern =
+            "!.svn:!.git:!.ds_store:!*.scc:.*:<dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~:!bge-m3-ocr-int4.onnx" +
+                ":!bge_m3_cached.onnx:!tokenizer.json:!sentencepiece.bpe.model:!embedding_manifest.json" +
+                ":<dir>parity:!photo_refs.tsv:!query_refs.tsv"
     }
 
     lint {
@@ -267,12 +258,6 @@ dependencies {
     // 1.31: photo search's text model needs opset 21 and the newer quantised ops
     // (GatherBlockQuantized, MatMulNBits); the API the embedding engine uses is unchanged.
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.0")
-
-    // =========================================================================
-    // CONNECTIVITY / P2P
-    // =========================================================================
-
-    implementation("com.google.android.gms:play-services-nearby:19.1.0")
 
     // =========================================================================
     // DOCUMENTS

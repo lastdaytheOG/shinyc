@@ -5,7 +5,7 @@ import com.amar.vault.retrieval.LexicalRetriever
 import com.amar.vault.retrieval.RetrievalRequest
 import com.amar.vault.retrieval.RetrievalService
 import com.amar.vault.retrieval.SearchRepository
-import com.amar.vault.retrieval.SemanticRetriever
+import com.amar.vault.retrieval.MeaningRetriever
 
 /**
  * Module 7 — Retrieval performance (latency).
@@ -28,7 +28,7 @@ import com.amar.vault.retrieval.SemanticRetriever
 class PerformanceBenchmark(
     private val retrieval: RetrievalService,
     private val lexical: LexicalRetriever,
-    private val semantic: SemanticRetriever,
+    private val meaning: MeaningRetriever,
     private val repository: SearchRepository,
 ) {
 
@@ -77,16 +77,14 @@ class PerformanceBenchmark(
         // ── Component seams (same public capabilities the service composes) ──
         val parse = timeEach(queries) { QueryPlanner.parse(it) }
         val bm25 = timeEach(queries) { lexical.bm25(it, 50) }
-        val embed = if (semantic.isReady) timeEachSuspend(queries) { semantic.embedQuery(it) } else null
-        val ann = if (semantic.isReady) timeEachSuspend(queries) { q ->
-            semantic.searchVectors(semantic.embedQuery(q), 50) // embedQuery is cached ⇒ times ANN
-        } else null
+        val embed = if (meaning.isReady) timeEachSuspend(queries) { meaning.clearCaches(); meaning.scan(it, 50) } else null
+        val ann = if (meaning.isReady) timeEachSuspend(queries) { q -> meaning.scan(q, 50) } else null
         val hydrate = run {
             val ids = queries.flatMap { runCatching { lexical.bm25(it, 20) }.getOrDefault(emptyList()) }.distinct().take(50)
             if (ids.isEmpty()) null else timeEachSuspend(listOf(ids)) { repository.getByIds(it) }
         }
 
-        val semNote = if (semantic.isReady) "" else "semantic retriever not initialized"
+        val semNote = if (meaning.isReady) "" else "meaning lane not ready (no model pack)"
         return BenchmarkSection(
             id = "retrieval.performance",
             title = "Retrieval latency (end-to-end + public component seams)",

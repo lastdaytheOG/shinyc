@@ -52,13 +52,6 @@ class PhotoLaneTest {
         override suspend fun fts(query: String, limit: Int) = emptyList<String>()
     }
 
-    private object NoSemantic : SemanticRetriever {
-        override val isReady = false
-        override suspend fun embedQuery(query: String, trueLength: Boolean) = floatArrayOf()
-        override suspend fun embedText(text: String) = floatArrayOf()
-        override fun searchVectors(vector: FloatArray, k: Int) = emptyList<String>()
-    }
-
     /** Ranks every picture for any query: beach, old beach, then cat; counts its calls. */
     private class Photos(private val fail: Boolean = false) : PhotoRetriever {
         var calls = 0
@@ -71,7 +64,7 @@ class PhotoLaneTest {
     }
 
     private fun service(photos: PhotoRetriever) =
-        HybridSearchService(Repo(vault), NoKeywordIndex, NoSemantic, BoostConfig(), photos)
+        HybridSearchService(Repo(vault), NoKeywordIndex, BoostConfig(), photos)
 
     private fun search(text: String, photos: PhotoRetriever = Photos(), only: ((VaultItem) -> Boolean)? = null,
                        lane: Boolean = true): RetrievalResult = runBlocking {

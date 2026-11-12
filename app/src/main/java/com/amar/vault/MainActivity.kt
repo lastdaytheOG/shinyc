@@ -18,9 +18,6 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class MainActivity : FragmentActivity() {
 
-    @Inject
-    lateinit var vectorSearchManager: VectorSearchManager
-
     private var screenshotObserver: ScreenshotObserver? = null
     private var folderSyncObserver: FolderSyncObserver? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -63,19 +60,12 @@ class MainActivity : FragmentActivity() {
         folderSyncObserver?.register()
     }
 
-    override fun onStop() {
-        super.onStop()
-        scope.launch {
-            vectorSearchManager.saveState()
-        }
-    }
-
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
 
         if (level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE) {
-            AppEmbeddingEngine.release()
-            android.util.Log.d("MemoryManager", "Released ONNX engine — level $level")
+            com.amar.vault.photos.photoSearchOf(applicationContext).release()
+            android.util.Log.d("MemoryManager", "Released the search models — level $level")
         }
     }
 
@@ -84,7 +74,5 @@ class MainActivity : FragmentActivity() {
 
         screenshotObserver?.unregister()
         folderSyncObserver?.unregister()
-
-        if (!isChangingConfigurations) vectorSearchManager.destroy()
     }
 }

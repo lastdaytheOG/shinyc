@@ -103,9 +103,6 @@ class IndexingForegroundService : Service() {
 
                 if (isRunning) {
                     updateNotification("✓ Successfully indexed $processed photos", total, total)
-                    // Durable checkpoint: persist HNSW graph + id-mappings together.
-                    runCatching { VectorSearchManager.getInstance(applicationContext).saveState() }
-                        .onFailure { VaultLog.w("IndexingService", "Vector saveState failed", it) }
                     health.endIndexingSession()
                     delay(3000)
                 }

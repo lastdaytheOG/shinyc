@@ -40,7 +40,6 @@ class BulkScanWorker @dagger.assisted.AssistedInject constructor(
     private val engine: DiscoveryEngine,
     private val pipeline: IndexingPipeline,
     private val health: IndexHealthState,
-    private val vectorSearchManager: VectorSearchManager,
 ) : CoroutineWorker(context, params) {
 
     companion object {
@@ -160,10 +159,6 @@ class BulkScanWorker @dagger.assisted.AssistedInject constructor(
             if (outcome.cancelled) return@withContext Result.failure()
 
             ScanPreferences.markInitialScanDone(applicationContext)
-            // Durable checkpoint: persist the HNSW graph + id-mappings together so the
-            // vectors indexed this run survive restart, consistent with each other.
-            runCatching { vectorSearchManager.saveState() }
-                .onFailure { VaultLog.w(TAG, "Vector saveState failed", it) }
             health.endIndexingSession()
             Log.d(TAG, "Bulk scan complete: $indexed indexed, $skipped skipped out of ${uris.size}")
 

@@ -52,15 +52,15 @@ class StorageBenchmark(
         }
 
         // ── filesDir classification ───────────────────────────────────────────
-        val mappingsBytes = File(filesDir, VaultConfig.Vector.MAPPINGS_FILENAME).lengthOrZero()
-        val manifestBytes = File(filesDir, VaultConfig.Vector.EMBEDDING_MANIFEST_FILENAME).lengthOrZero()
+        val mappingsBytes = File(filesDir, "vector_mappings.json").lengthOrZero()
+        val manifestBytes = File(filesDir, "embedding_manifest.json").lengthOrZero()
         var modelBytes = 0L
         var otherBinaryBytes = 0L // native HNSW index files land here (name owned by JNI layer)
         filesDir.listFiles()?.forEach { f ->
             if (!f.isFile) return@forEach
             when {
-                f.name == VaultConfig.Vector.MAPPINGS_FILENAME -> {}
-                f.name == VaultConfig.Vector.EMBEDDING_MANIFEST_FILENAME -> {}
+                f.name == "vector_mappings.json" -> {}
+                f.name == "embedding_manifest.json" -> {}
                 f.extension.lowercase() in setOf("onnx", "gguf", "model") || f.name.startsWith("bge_") ->
                     modelBytes += f.length()
                 else -> otherBinaryBytes += f.length()

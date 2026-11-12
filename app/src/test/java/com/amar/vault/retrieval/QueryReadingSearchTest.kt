@@ -58,14 +58,7 @@ class QueryReadingSearchTest {
         override suspend fun fts(query: String, limit: Int) = emptyList<String>()
     }
 
-    private object NoSemantic : SemanticRetriever {
-        override val isReady = false
-        override suspend fun embedQuery(query: String, trueLength: Boolean) = floatArrayOf()
-        override suspend fun embedText(text: String) = floatArrayOf()
-        override fun searchVectors(vector: FloatArray, k: Int) = emptyList<String>()
-    }
-
-    private val service = HybridSearchService(Repo(vault), NoKeywordIndex, NoSemantic, BoostConfig())
+    private val service = HybridSearchService(Repo(vault), NoKeywordIndex, BoostConfig())
 
     private fun search(request: RetrievalRequest) = runBlocking { service.retrieve(request) }
     private fun RetrievalResult.documents() = items.map { it.parentDocumentId ?: it.id }.toSet()
@@ -98,7 +91,7 @@ class QueryReadingSearchTest {
     @Test
     fun aPeriodThatHoldsSomethingIsKeptAndNothingIsSaid() {
         val withToday = listOf(pdf("fresh", "invoice raised this morning", timestamp = now)) + vault
-        val service = HybridSearchService(Repo(withToday), NoKeywordIndex, NoSemantic, BoostConfig())
+        val service = HybridSearchService(Repo(withToday), NoKeywordIndex, BoostConfig())
         val result = runBlocking { service.retrieve(RetrievalRequest.forResultList("invoice today")) }
 
         assertEquals(setOf("fresh"), result.documents())

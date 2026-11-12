@@ -37,8 +37,18 @@ class QueryEncoder(modelPath: String, private val tokenizer: GemmaTokenizer, thr
     val dim: Int = (session.outputInfo.getValue(OUTPUT).info as TensorInfo).shape.last().toInt()
         .takeIf { it > 0 } ?: encode("").size
 
-    fun encode(query: String): FloatArray {
-        val ids = tokenizer.encode(PROMPT + query)
+    fun encode(query: String): FloatArray = encodeIds(tokenizer.encode(PROMPT + query))
+
+    fun passage(title: String?, text: String, maxTokens: Int = PASSAGE_TOKENS): FloatArray =
+        encodeIds(passageIds(title, text, maxTokens))
+
+    fun passageIds(title: String?, text: String, maxTokens: Int = PASSAGE_TOKENS): IntArray {
+        val ids = tokenizer.encode(passageText(title, text.take(maxTokens * CHARS_PER_TOKEN_CAP)))
+        if (ids.size <= maxTokens) return ids
+        return ids.copyOf(maxTokens).also { it[maxTokens - 1] = tokenizer.eos }
+    }
+
+    fun encodeIds(ids: IntArray): FloatArray {
         val shape = longArrayOf(1, ids.size.toLong())
         val tensors = ArrayList<OnnxTensor>()
         try {
@@ -63,7 +73,12 @@ class QueryEncoder(modelPath: String, private val tokenizer: GemmaTokenizer, thr
     companion object {
         /** EmbeddingGemma 2's prompt for a search query; photos are embedded without one. */
         const val PROMPT = "task: search result | query: "
+        const val PASSAGE_TOKENS = 384
+        private const val CHARS_PER_TOKEN_CAP = 8
         private const val OUTPUT = "sentence_embedding"
+
+        fun passageText(title: String?, text: String): String =
+            "title: ${title?.trim()?.takeIf { it.isNotEmpty() } ?: "none"} | text: $text"
     }
 }
 

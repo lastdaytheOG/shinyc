@@ -306,8 +306,17 @@ interface VaultDao {
     @Query("SELECT * FROM vault_items WHERE timestamp > :since ORDER BY timestamp DESC")
     suspend fun getItemsSince(since: Long): List<VaultItem>
 
-    @Query("SELECT * FROM vault_items ORDER BY timestamp DESC")
+    @Query("SELECT * FROM vault_items ORDER BY timestamp DESC, rowid ASC")
     suspend fun getAll(): List<VaultItem>
+
+    @Query("SELECT id FROM vault_items v WHERE v.timestamp BETWEEN :startMs AND :endMs AND NOT EXISTS (SELECT 1 FROM vault_metadata m WHERE m.vaultItemId = v.id AND m.type = 'DATE')")
+    suspend fun undatedIdsInRange(startMs: Long, endMs: Long): List<String>
+
+    @Query("SELECT rowId FROM facts WHERE kind = 'AMOUNT' AND valueNum BETWEEN :low AND :high UNION SELECT vaultItemId FROM vault_metadata WHERE type = 'AMOUNT' AND numericValue BETWEEN :low AND :high")
+    suspend fun amountBetweenIds(low: Double, high: Double): List<String>
+
+    @Query("SELECT * FROM vault_items WHERE id IN (:ids) ORDER BY timestamp DESC, rowid ASC")
+    suspend fun getByIdsInSnapshotOrder(ids: List<String>): List<VaultItem>
 
     @Query("SELECT uri FROM vault_items")
     suspend fun getAllUris(): List<String>
@@ -389,37 +398,6 @@ interface VaultDocumentDao {
     suspend fun countPiecesWithoutDocument(): Int
 }
 
-@Entity(
-    tableName = "vault_relationship",
-    primaryKeys = ["sourceId", "targetId", "relationshipType"],
-    indices = [
-        Index("sourceId", "relationshipType"),
-        Index("targetId", "relationshipType")
-    ]
-)
-data class VaultRelationship(
-    val sourceId: String,
-    val targetId: String,
-    val relationshipType: String,
-    val confidence: Float,
-    val relationshipState: String,
-    val createdByRule: String,
-    val relationshipVersion: String,
-    val relationshipEvidenceJson: String
-)
-
-@Dao
-interface VaultRelationshipDao {
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAll(relationships: List<VaultRelationship>)
-
-    @Query("SELECT * FROM vault_relationship WHERE sourceId = :sourceId OR targetId = :sourceId")
-    suspend fun getRelationshipsForDocument(sourceId: String): List<VaultRelationship>
-    
-    @Query("DELETE FROM vault_relationship WHERE relationshipVersion = :version")
-    suspend fun deleteByVersion(version: String)
-}
-
 @Database(
     entities = [
         VaultItem::class,
@@ -429,19 +407,17 @@ interface VaultRelationshipDao {
         VaultMetadataStats::class,
         CanonicalEntityStats::class,
         CanonicalReviewQueue::class,
-        VaultRelationship::class,
-        com.amar.vault.events.model.EventSnapshot::class,
-        com.amar.vault.timeline.model.TimelineSnapshot::class,
-        com.amar.vault.timeline.model.TimelineEntrySnapshot::class,
-        com.amar.vault.reasoning.storage.ReasoningSnapshot::class,
-        com.amar.vault.memory.storage.AgentMemorySnapshot::class,
-        com.amar.vault.action.storage.AgentActionSnapshot::class,
         IngestionSession::class,
         IngestionAttachment::class,
         com.amar.vault.indexing.DocumentImport::class,
         com.amar.vault.photos.PhotoVector::class,
+        com.amar.vault.vectors.TextVector::class,
+        com.amar.vault.vectors.Coverage::class,
+        com.amar.vault.vectors.Fact::class,
+        com.amar.vault.vectors.Alias::class,
+        com.amar.vault.vectors.Open::class,
     ],
-    version = 18,
+    version = 19,
     exportSchema = true
 )
 @TypeConverters(ItemTypeConverter::class)
@@ -452,17 +428,15 @@ abstract class VaultDatabase : RoomDatabase() {
     abstract fun vaultMetadataStatsDao(): VaultMetadataStatsDao
     abstract fun canonicalEntityStatsDao(): CanonicalEntityStatsDao
     abstract fun canonicalReviewQueueDao(): CanonicalReviewQueueDao
-    abstract fun vaultRelationshipDao(): VaultRelationshipDao
-    abstract fun eventSnapshotDao(): com.amar.vault.events.engine.EventSnapshotDao
-    abstract fun timelineSnapshotDao(): com.amar.vault.timeline.engine.TimelineSnapshotDao
-    abstract fun timelineEntrySnapshotDao(): com.amar.vault.timeline.engine.TimelineEntrySnapshotDao
-    abstract fun reasoningSnapshotDao(): com.amar.vault.reasoning.storage.ReasoningSnapshotDao
-    abstract fun agentMemorySnapshotDao(): com.amar.vault.memory.storage.AgentMemorySnapshotDao
-    abstract fun agentActionSnapshotDao(): com.amar.vault.action.storage.AgentActionSnapshotDao
     abstract fun ingestionSessionDao(): IngestionSessionDao
     abstract fun ingestionAttachmentDao(): IngestionAttachmentDao
     abstract fun documentImportDao(): com.amar.vault.indexing.DocumentImportDao
     abstract fun photoVectorDao(): com.amar.vault.photos.PhotoVectorDao
+    abstract fun textVectorDao(): com.amar.vault.vectors.TextVectorDao
+    abstract fun coverageDao(): com.amar.vault.vectors.CoverageDao
+    abstract fun factDao(): com.amar.vault.vectors.FactDao
+    abstract fun aliasDao(): com.amar.vault.vectors.AliasDao
+    abstract fun openDao(): com.amar.vault.vectors.OpenDao
 
     companion object {
         @Volatile
@@ -686,6 +660,59 @@ abstract class VaultDatabase : RoomDatabase() {
             }
         }
 
+        internal val MIGRATION_18_19 = object : androidx.room.migration.Migration(18, 19) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `text_vectors` (`rowId` TEXT NOT NULL, `model` TEXT NOT NULL, `part` INTEGER NOT NULL, " +
+                        "`textHash` TEXT NOT NULL, `vector` BLOB NOT NULL, `scale` REAL NOT NULL, `madeAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`rowId`, `model`, `part`))"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_text_vectors_model` ON `text_vectors` (`model`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `coverage` (`itemId` TEXT NOT NULL, `tier` INTEGER NOT NULL, `rowsTotal` INTEGER NOT NULL, " +
+                        "`rowsWithVector` INTEGER NOT NULL, `model` TEXT, `priority` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`itemId`))"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `facts` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `itemId` TEXT NOT NULL, " +
+                        "`rowId` TEXT NOT NULL, `kind` TEXT NOT NULL, `valueText` TEXT NOT NULL, `valueNum` REAL, `valueDate` INTEGER, " +
+                        "`spanStart` INTEGER NOT NULL, `spanEnd` INTEGER NOT NULL, `trust` REAL NOT NULL, `ruleVersion` INTEGER NOT NULL)"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_facts_kind_num` ON `facts` (`kind`, `valueNum`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_facts_kind_date` ON `facts` (`kind`, `valueDate`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_facts_kind_text` ON `facts` (`kind`, `valueText`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_facts_item` ON `facts` (`itemId`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `aliases` (`term` TEXT NOT NULL, `standsFor` TEXT NOT NULL, `weight` REAL NOT NULL, " +
+                        "`learnedAt` INTEGER NOT NULL, PRIMARY KEY(`term`, `standsFor`))"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `opens` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `queryNorm` TEXT NOT NULL, " +
+                        "`itemId` TEXT NOT NULL, `verdict` TEXT NOT NULL, `at` INTEGER NOT NULL)"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_opens_queryNorm` ON `opens` (`queryNorm`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_opens_itemId` ON `opens` (`itemId`)")
+                db.execSQL(
+                    "INSERT INTO `facts` (`itemId`, `rowId`, `kind`, `valueText`, `valueNum`, `valueDate`, `spanStart`, `spanEnd`, `trust`, `ruleVersion`) " +
+                        "SELECT COALESCE(v.`parentDocumentId`, v.`id`), m.`vaultItemId`, CASE " +
+                        "WHEN m.`type` = 'AMOUNT' THEN 'AMOUNT' WHEN m.`type` = 'DATE' THEN 'DATE' " +
+                        "WHEN m.`type` IN ('ORGANIZATION', 'PAYMENT_APP', 'SOURCE_APP') THEN 'PARTY' " +
+                        "WHEN m.`type` IN ('DOCUMENT_TYPE', 'DOCUMENT_CLASS', 'CATEGORY') THEN 'DOC_KIND' " +
+                        "WHEN m.`type` = 'PHONE' THEN 'PHONE' ELSE 'ID_NUMBER' END, " +
+                        "m.`value`, m.`numericValue`, m.`timestampValue`, -1, -1, m.`confidence`, 0 " +
+                        "FROM `vault_metadata` m JOIN `vault_items` v ON v.`id` = m.`vaultItemId` " +
+                        "WHERE m.`type` IN ('AMOUNT', 'DATE', 'ORGANIZATION', 'PAYMENT_APP', 'SOURCE_APP', 'DOCUMENT_TYPE', " +
+                        "'DOCUMENT_CLASS', 'CATEGORY', 'PHONE', 'PNR', 'INVOICE_NUMBER', 'TRANSACTION_ID', 'UPI_ID', 'ACCOUNT_NUMBER')"
+                )
+                for (table in DROPPED_IN_19) db.execSQL("DROP TABLE IF EXISTS `" + table + "`")
+            }
+        }
+
+        internal val DROPPED_IN_19 = listOf(
+            "event_snapshot", "timeline_snapshot", "timeline_entry_snapshot", "reasoning_snapshot",
+            "agent_memory_snapshot", "agent_action_snapshot", "vault_relationship",
+        )
+
         /**
          * Every step from version 6 to the current one, in order. [context] is where the step to
          * version 14 leaves its account of what it changed ([MigrationReport]); a test that only
@@ -699,6 +726,7 @@ abstract class VaultDatabase : RoomDatabase() {
             MIGRATION_15_16,
             MIGRATION_16_17,
             MIGRATION_17_18,
+            MIGRATION_18_19,
         )
 
         fun get(context: Context): VaultDatabase {

@@ -63,7 +63,6 @@ class IndexingPipeline private constructor(private val context: Context) {
     private val metadataStage = com.amar.vault.indexing.MetadataStage()
     private val chunker: com.amar.vault.indexing.Chunker = com.amar.vault.indexing.WordWindowChunker()
     private val persister = com.amar.vault.indexing.IndexPersister(db)
-    private val vectorUpdater = com.amar.vault.indexing.VectorIndexUpdater(context, VectorSearchManager.getInstance(context))
     private val stagedDeepScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val bm25: com.amar.vault.retrieval.Bm25Index by lazy {
         dagger.hilt.android.EntryPointAccessors.fromApplication(
@@ -258,26 +257,7 @@ class IndexingPipeline private constructor(private val context: Context) {
         val t2     = System.currentTimeMillis()
 
         VaultLog.d("IndexingPipeline", "Index Time: ${t2-t0}ms | OCR: ${metaStartTime-t1}ms | Meta Extraction: ${metaTime}ms")
-        // ── Post-commit index update (embed chunks → HNSW) via IndexUpdater ──
-        val chunks = chunker.chunk(ocrText)
-        val entries = chunks.mapIndexed { index, text ->
-            com.amar.vault.indexing.IndexEntry(
-                id          = "${targetId}_chunk${index}",
-                text        = text,
-                parentId    = targetId,
-                chunkIndex  = index,
-                totalChunks = chunks.size,
-            )
-        }
-        if (entries.isNotEmpty()) {
-            stagedDeepScope.launch {
-                try {
-                    vectorUpdater.update(entries)
-                } catch (e: Exception) {
-                    VaultLog.w("IndexingPipeline", "Deferred vector indexing failed for $targetId: ${e.message}")
-                }
-            }
-        }
+        com.amar.vault.vectors.TextVectorWorker.enqueue(context)
 
         IndexMetrics.increment(IndexMetrics.Event.INDEX_SUCCESS)
         val totalMs = System.currentTimeMillis() - t0

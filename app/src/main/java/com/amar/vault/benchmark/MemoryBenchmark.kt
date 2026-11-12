@@ -36,9 +36,9 @@ class MemoryBenchmark(private val context: Context) {
 
     companion object {
         private const val SAMPLE_MS = 250L
-        // Production LRU capacities: DefaultSemanticRetriever query cache (30) + passage cache (32).
-        private const val QUERY_CACHE_ENTRIES = 30
-        private const val PASSAGE_CACHE_ENTRIES = 32
+        private const val QUERY_CACHE_ENTRIES = 32
+        private const val PASSAGE_CACHE_ENTRIES = 0
+        private const val VECTOR_DIM = 768
     }
 
     /** Polls memory while the suite runs; started/stopped by the orchestrator. */
@@ -82,7 +82,7 @@ class MemoryBenchmark(private val context: Context) {
         val samplerNote = if (sampler == null) "no sampler attached to this run" else "sampled every ${SAMPLE_MS}ms during the benchmark run (Java+native heap)"
 
         val cacheBoundBytes =
-            (QUERY_CACHE_ENTRIES + PASSAGE_CACHE_ENTRIES).toDouble() * VaultConfig.Embedding.DIM * 4
+            (QUERY_CACHE_ENTRIES + PASSAGE_CACHE_ENTRIES).toDouble() * VECTOR_DIM * 4
 
         return BenchmarkSection(
             id = "memory",
@@ -93,7 +93,7 @@ class MemoryBenchmark(private val context: Context) {
                 MetricValue("javaHeap.used", javaUsed.toDouble(), "bytes", false),
                 MetricValue("javaHeap.max", rt.maxMemory().toDouble(), "bytes", false, "heap ceiling (largeHeap manifest flag applies)"),
                 MetricValue("nativeHeap.allocated", nativeUsed.toDouble(), "bytes", false,
-                    "includes hnswlib + BM25 + ONNX allocations (JNI/native memory)"),
+                    "includes the keyword engine and ONNX allocations (JNI/native memory)"),
                 MetricValue("nativeHeap.size", nativeTotal.toDouble(), "bytes", false),
                 MetricValue("pss.total", pss?.totalPss?.let { it * 1024.0 }, "bytes", false,
                     if (pss == null) "ActivityManager unavailable" else ""),
@@ -104,7 +104,7 @@ class MemoryBenchmark(private val context: Context) {
                 MetricValue("bitmapAllocations", null, "bytes", false,
                     "not individually observable without instrumenting decode sites; contained in javaHeap.used"),
                 MetricValue("embeddingCache.capacityBound", cacheBoundBytes, "bytes", false,
-                    "$QUERY_CACHE_ENTRIES query + $PASSAGE_CACHE_ENTRIES passage LRU entries × ${VaultConfig.Embedding.DIM} dim × 4B — capacity bound, not occupancy"),
+                    "$QUERY_CACHE_ENTRIES query + $PASSAGE_CACHE_ENTRIES passage LRU entries × $VECTOR_DIM dim × 4B — capacity bound, not occupancy"),
             ),
         )
     }

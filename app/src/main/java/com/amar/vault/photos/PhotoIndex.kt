@@ -32,7 +32,7 @@ object PhotoVectors {
 }
 
 /** A photo found by what it looks like, and how close it came to the query (cosine, -1…1). */
-data class PhotoMatch(val itemId: String, val score: Float)
+data class PhotoMatch(val itemId: String, val score: Float, val margin: Float = 0f)
 
 /**
  * Every picture's vector of one model, held in memory and compared with a query by an exact scan:
@@ -105,12 +105,39 @@ class PhotoIndex(val dim: Int) {
      * first; ties go to the picture added first. [only] narrows the pictures that may be listed.
      */
     @Synchronized
-    fun top(query: FloatArray, k: Int, only: ((String) -> Boolean)? = null): List<PhotoMatch> {
+    fun top(query: FloatArray, k: Int, only: ((String) -> Boolean)? = null): List<PhotoMatch> = scan(query, k, only).top
+
+    class Scan(val top: List<PhotoMatch>, val mean: Float, val deviation: Float, val count: Int)
+
+    @Synchronized
+    fun loadAll(entries: List<Triple<String, ByteArray, Float>>) {
+        ids.clear(); positionOf.clear()
+        vectors = ByteArray(0); scales = FloatArray(0)
+        ensureCapacity(entries.size)
+        for ((id, bytes, scale) in entries) if (bytes.size == dim) put(id, bytes, scale)
+    }
+
+    @Synchronized
+    fun scan(query: FloatArray, k: Int, only: ((String) -> Boolean)? = null): Scan {
         require(query.size == dim) { "a $dim-dimension index was given a ${query.size}-dimension query" }
         val n = ids.size
-        if (n == 0 || k <= 0) return emptyList()
+        if (n == 0 || k <= 0) return Scan(emptyList(), 0f, 0f, 0)
         val scores = FloatArray(n)
         PhotoScan.scores(query, vectors, scales, dim, n, scores)
+        var sum = 0.0
+        var sumSq = 0.0
+        var counted = 0
+        for (p in 0 until n) {
+            if (only != null && !only(ids[p])) continue
+            val s = scores[p].toDouble()
+            sum += s; sumSq += s * s; counted++
+        }
+        val mean = if (counted > 0) sum / counted else 0.0
+        val deviation = if (counted > 1) kotlin.math.sqrt(maxOf(0.0, sumSq / counted - mean * mean)) else 0.0
+        return Scan(select(scores, n, k, only), mean.toFloat(), deviation.toFloat(), counted)
+    }
+
+    private fun select(scores: FloatArray, n: Int, k: Int, only: ((String) -> Boolean)?): List<PhotoMatch> {
         // Partial selection of the best k by a small min-heap of positions.
         val heap = IntArray(minOf(k, n))
         var size = 0

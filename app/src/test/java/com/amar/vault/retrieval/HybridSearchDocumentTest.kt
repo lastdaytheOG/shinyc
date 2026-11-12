@@ -18,6 +18,10 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [32])
 class HybridSearchDocumentTest {
+    private suspend fun RetrievalService.retrieveFull(r: RetrievalRequest) = retrieve(r.copy(tuning = r.tuning.copy(candidateBounded = false)))
+
+    private fun RetrievalService.retrieveProgressiveFull(r: RetrievalRequest) = retrieveProgressive(r.copy(tuning = r.tuning.copy(candidateBounded = false)))
+
 
     private fun chunk(doc: String, index: Int, text: String, file: String = "$doc.pdf", timestamp: Long = 0L) =
         VaultItem(
@@ -42,15 +46,8 @@ class HybridSearchDocumentTest {
         override suspend fun fts(query: String, limit: Int) = emptyList<String>()
     }
 
-    private object NoSemantic : SemanticRetriever {
-        override val isReady = false
-        override suspend fun embedQuery(query: String, trueLength: Boolean) = floatArrayOf()
-        override suspend fun embedText(text: String) = floatArrayOf()
-        override fun searchVectors(vector: FloatArray, k: Int) = emptyList<String>()
-    }
-
     private fun service(corpus: List<VaultItem>, bm25: List<String> = emptyList()) =
-        HybridSearchService(Repo(corpus), Lexical(bm25), NoSemantic, BoostConfig())
+        HybridSearchService(Repo(corpus), Lexical(bm25), BoostConfig())
 
     private fun List<VaultItem>.documents() = map { it.parentDocumentId ?: it.id }
 
@@ -64,7 +61,7 @@ class HybridSearchDocumentTest {
 
     @Test
     fun aLongDocumentLeavesRoomForTheOtherDocuments() = runBlocking {
-        val result = service(crowded, crowdedBm25).retrieve(RetrievalRequest("invoice"))
+        val result = service(crowded, crowdedBm25).retrieveFull(RetrievalRequest("invoice"))
         assertEquals(setOf("book", "rent", "phone", "school"), result.items.documents().toSet())
         assertEquals("each document appears once", 4, result.items.size)
     }
@@ -72,7 +69,7 @@ class HybridSearchDocumentTest {
     @Test
     fun perPageResultsAreTheBehaviourThatHidTheOtherDocuments() = runBlocking {
         val perPage = RetrievalTuning(onePerDocument = false)
-        val result = service(crowded, crowdedBm25).retrieve(RetrievalRequest("invoice", tuning = perPage))
+        val result = service(crowded, crowdedBm25).retrieveFull(RetrievalRequest("invoice", tuning = perPage))
         assertEquals(50, result.items.size)
         assertEquals("the book's pages fill every slot", setOf("book"), result.items.documents().toSet())
     }
@@ -81,7 +78,7 @@ class HybridSearchDocumentTest {
     fun everyLaneNamesADocumentByTheSameRow() = runBlocking {
         // The keyword engine prefers page 2; the scan lanes meet page 1 first.
         val doc = listOf(chunk("policy", 0, "refund terms"), chunk("policy", 1, "refund refund policy"))
-        val result = service(doc, bm25 = listOf("policy_chunk1")).retrieve(RetrievalRequest("refund"))
+        val result = service(doc, bm25 = listOf("policy_chunk1")).retrieveFull(RetrievalRequest("refund"))
         assertEquals(listOf("policy_chunk1"), result.items.map { it.id })
     }
 
@@ -115,13 +112,13 @@ class HybridSearchDocumentTest {
         val corpus = listOf(saved) + pages
         val engineOrder = listOf("handbook", "handbook_chunk0", "handbook_chunk2", "handbook_chunk1")
 
-        val listed = service(corpus, engineOrder).retrieve(RetrievalRequest.forResultList("kritagyata")).items
+        val listed = service(corpus, engineOrder).retrieveFull(RetrievalRequest.forResultList("kritagyata")).items
         assertEquals("the document once, by the page that says the word", listOf("handbook_chunk1"), listed.map { it.id })
 
         // The control: with the rules that tell a page from a name off, the document is listed
         // by whichever row the engine named first.
         val before = RetrievalTuning(typoHelpOnlyForMissingWords = false, pageWordsBeforeTags = false)
-        val asBefore = service(corpus, engineOrder).retrieve(RetrievalRequest("kritagyata", tuning = before)).items
+        val asBefore = service(corpus, engineOrder).retrieveFull(RetrievalRequest("kritagyata", tuning = before)).items
         assertEquals(listOf("handbook"), asBefore.map { it.id })
     }
 
@@ -132,27 +129,27 @@ class HybridSearchDocumentTest {
             chunk("card", 0, "Unique Identification Authority of India", file = "Aadhaar_Card.pdf"),
             chunk("card", 1, "Address and date of birth", file = "Aadhaar_Card.pdf"),
         )
-        val listed = service(pages, listOf("card_chunk1", "card_chunk0")).retrieve(RetrievalRequest.forResultList("aadhaar")).items
+        val listed = service(pages, listOf("card_chunk1", "card_chunk0")).retrieveFull(RetrievalRequest.forResultList("aadhaar")).items
         assertEquals(listOf("card_chunk1"), listed.map { it.id })
     }
 
     @Test
     fun aPdfIsFoundByItsFileName() = runBlocking {
         // Nothing in the keyword index and no page says "aadhaar": only the file name does.
-        val result = service(named).retrieve(RetrievalRequest("aadhaar card"))
+        val result = service(named).retrieveFull(RetrievalRequest("aadhaar card"))
         assertEquals(listOf("id"), result.items.documents())
     }
 
     @Test
     fun aMisspeltFileNameStillFindsThePdf() = runBlocking {
         // "aadhar" is not a substring of "aadhaar": only the typo lane can match it.
-        val result = service(named).retrieve(RetrievalRequest("aadhar"))
+        val result = service(named).retrieveFull(RetrievalRequest("aadhar"))
         assertEquals(listOf("id"), result.items.documents())
     }
 
     @Test
     fun anImageIsNotMatchedByItsGeneratedFileName() = runBlocking {
-        val result = service(named).retrieve(RetrievalRequest("aadhaar"))
+        val result = service(named).retrieveFull(RetrievalRequest("aadhaar"))
         assertFalse("photo" in result.items.map { it.id })
     }
 
@@ -160,7 +157,7 @@ class HybridSearchDocumentTest {
     fun anItemIsFoundByItsTitle() = runBlocking {
         val saved = VaultItem(id = "link", uri = "https://example.com/a", ocrText = "terms between the parties",
             lang = "en", itemType = ItemType.LINK, timestamp = 0L, title = "Flat rent agreement")
-        val result = service(listOf(saved)).retrieve(RetrievalRequest("rent agreement"))
+        val result = service(listOf(saved)).retrieveFull(RetrievalRequest("rent agreement"))
         assertEquals(listOf("link"), result.items.map { it.id })
     }
 
@@ -171,7 +168,7 @@ class HybridSearchDocumentTest {
             chunk("pp", 0, "republic of india type p country code ind", file = "passport.pdf"),
         )
         // The keyword index only knows the page that mentions the word.
-        val result = service(corpus, bm25 = listOf("notes_chunk0")).retrieve(RetrievalRequest("passport"))
+        val result = service(corpus, bm25 = listOf("notes_chunk0")).retrieveFull(RetrievalRequest("passport"))
         assertEquals(setOf("notes", "pp"), result.items.documents().toSet())
     }
 

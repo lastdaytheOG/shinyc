@@ -4,13 +4,12 @@ import android.content.Context
 import android.os.Build
 import com.amar.vault.VaultDatabase
 import com.amar.vault.VaultLog
-import com.amar.vault.VectorSearchManager
 import com.amar.vault.planning.PlannerShadowRegistry
 import com.amar.vault.retrieval.Bm25Index
 import com.amar.vault.retrieval.LexicalRetriever
 import com.amar.vault.retrieval.RetrievalService
 import com.amar.vault.retrieval.SearchRepository
-import com.amar.vault.retrieval.SemanticRetriever
+import com.amar.vault.retrieval.MeaningRetriever
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -42,10 +41,9 @@ class BenchmarkRunner private constructor(
     private val retrieval: RetrievalService,
     private val repository: SearchRepository,
     private val lexical: LexicalRetriever,
-    private val semantic: SemanticRetriever,
+    private val meaning: MeaningRetriever,
     private val bm25: Bm25Index,
     private val db: VaultDatabase,
-    private val vectorSearch: VectorSearchManager,
 ) {
 
     companion object {
@@ -57,7 +55,7 @@ class BenchmarkRunner private constructor(
             return BenchmarkRunner(
                 context.applicationContext,
                 ep.retrievalService(), ep.searchRepository(), ep.lexicalRetriever(),
-                ep.semanticRetriever(), ep.bm25Index(), ep.database(), ep.vectorSearchManager(),
+                ep.meaningRetriever(), ep.bm25Index(), ep.database(),
             )
         }
     }
@@ -68,10 +66,10 @@ class BenchmarkRunner private constructor(
         fun retrievalService(): RetrievalService
         fun searchRepository(): SearchRepository
         fun lexicalRetriever(): LexicalRetriever
-        fun semanticRetriever(): SemanticRetriever
+        fun meaningRetriever(): MeaningRetriever
         fun bm25Index(): Bm25Index
         fun database(): VaultDatabase
-        fun vectorSearchManager(): VectorSearchManager
+        fun photoSearch(): com.amar.vault.photos.PhotoSearch
     }
 
     private val datasetStore = GoldenDatasetStore(context)
@@ -126,7 +124,7 @@ class BenchmarkRunner private constructor(
         // The same golden queries under each behaviour-sensitive retrieval switch — measurement
         // only (per-request tuning; no production default changes).
         runModule("Retrieval ablation", full || suite == BenchmarkSuite.RETRIEVAL) {
-            RetrievalAblationBenchmark(RetrievalEvaluator(retrieval, repository), semantic).run(cases)
+            RetrievalAblationBenchmark(RetrievalEvaluator(retrieval, repository), meaning).run(cases)
         }
         // Sprint 4B: acronym equivalence rides the retrieval suite (self-contained pairs,
         // no golden dataset dependency).
@@ -146,10 +144,10 @@ class BenchmarkRunner private constructor(
             OcrAblationBenchmark(context, datasetStore).run(cases)
         }
         runModule("Embedding", full || suite == BenchmarkSuite.EMBEDDING) {
-            EmbeddingBenchmark(context, vectorSearch, semantic).run()
+            TextEncoderBenchmark.section(context)
         }
         runModule("Retrieval performance", full || perf) {
-            PerformanceBenchmark(retrieval, lexical, semantic, repository).run(cases)
+            PerformanceBenchmark(retrieval, lexical, meaning, repository).run(cases)
         }
         runModule("Indexing", full || perf) {
             IndexingBenchmark(context, db, bm25).run()

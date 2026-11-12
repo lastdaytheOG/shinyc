@@ -109,7 +109,7 @@ class Migration17To18Test {
     @Test
     fun theChatTableTheModelTableAndTheirIndicesAreGone() {
         aVaultWithAChatAndTwoModels()
-        val db = open(VaultDatabase.MIGRATION_17_18)
+        val db = open(VaultDatabase.MIGRATION_17_18, VaultDatabase.MIGRATION_18_19)
         assertEquals(emptyList<String>(), db.tablesAndIndicesNamedLike("%chat_history%"))
         assertEquals(emptyList<String>(), db.tablesAndIndicesNamedLike("%local_models%"))
     }
@@ -117,7 +117,7 @@ class Migration17To18Test {
     @Test
     fun everythingInTheVaultIsStillThere() = runBlocking {
         aVaultWithAChatAndTwoModels()
-        val db = open(VaultDatabase.MIGRATION_17_18)
+        val db = open(VaultDatabase.MIGRATION_17_18, VaultDatabase.MIGRATION_18_19)
 
         val items = db.vaultDao().getAll().associateBy { it.id }
         assertEquals(setOf("receipt", "beach"), items.keys)
@@ -131,7 +131,7 @@ class Migration17To18Test {
     @Test
     fun writingAnItemAgainAndRemovingItStillWork() = runBlocking {
         aVaultWithAChatAndTwoModels()
-        val db = open(VaultDatabase.MIGRATION_17_18)
+        val db = open(VaultDatabase.MIGRATION_17_18, VaultDatabase.MIGRATION_18_19)
         val receipt = db.vaultDao().getAll().single { it.id == "receipt" }
 
         db.vaultDao().insert(receipt.copy(ocrText = "Paid to Ravi 450 today"))
@@ -168,7 +168,7 @@ class Migration17To18Test {
     fun aVersion13VaultGoesAllTheWay() {
         V13Vault.create(context, name).close()
         val db = open(*VaultDatabase.migrations())
-        assertEquals(18, db.openHelper.readableDatabase.version)
+        assertEquals(19, db.openHelper.readableDatabase.version)
         assertEquals(emptyList<String>(), db.tablesAndIndicesNamedLike("%chat_history%"))
         assertEquals(emptyList<String>(), db.tablesAndIndicesNamedLike("%local_models%"))
     }

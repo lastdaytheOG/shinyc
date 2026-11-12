@@ -124,7 +124,7 @@ internal fun oneCardPerDocument(
         SearchHit(
             row = row,
             page = row.pdfPage?.takeIf { excerpt != null },
-            excerpt = excerpt,
+            excerpt = excerpt?.let(com.amar.vault.vectors.Sensitive::mask),
             similarWord = similar,
             filedUnder = unexplained?.takeIf { similar == null }?.let { MatchExcerpt.tag(it.tags, queryWords) },
         )
@@ -134,9 +134,9 @@ internal fun oneCardPerDocument(
 @HiltViewModel
 class SearchViewModel @Inject constructor(
     private val db: VaultDatabase,
-    private val vectorSearchManager: VectorSearchManager,
     private val retrievalService: com.amar.vault.retrieval.RetrievalService,
     private val photoSearch: com.amar.vault.photos.PhotoSearch,
+    private val learned: com.amar.vault.vectors.AliasMemory,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -144,6 +144,12 @@ class SearchViewModel @Inject constructor(
      * The search screen opened: photo search starts loading its models now (on demand, not at
      * app start), so the photos for the first query are not held up by the load.
      */
+    fun recordOpen(query: String, item: VaultItem) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { learned.opened(query, item.parentDocumentId ?: item.id, "OPENED") }
+        }
+    }
+
     fun warmUpPhotoSearch() = photoSearch.warmUp()
 
     // Entity Pages: read-only projection over the existing retrieval engine (no new storage/index).
@@ -168,13 +174,6 @@ class SearchViewModel @Inject constructor(
     val allItems: StateFlow<List<VaultItem>> = db.vaultDao()
         .getAllItems()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    init {
-        viewModelScope.launch(Dispatchers.IO) {
-            if (!vectorSearchManager.initialized) vectorSearchManager.initialize()
-            android.util.Log.d("SearchVM", "VectorSearch ready: ${vectorSearchManager.getIndexedCount()} vectors")
-        }
-    }
 
     val activeFilter = MutableStateFlow(SearchFilter.ALL)
     val recentSearches = MutableStateFlow<List<String>>(emptyList())
@@ -232,6 +231,12 @@ class SearchViewModel @Inject constructor(
      */
     val photoMatches = MutableStateFlow<List<VaultItem>>(emptyList())
 
+    val meaningMatches = MutableStateFlow<List<SearchHit>>(emptyList())
+
+    val meaningFirst = MutableStateFlow(false)
+
+    val meaningCoverage = MutableStateFlow(1f)
+
     /**
      * Takes one reading back. A filter that was written out (`type:pdf`) is taken out of the
      * box, there being nothing else it could mean; any other reading leaves the box as it is
@@ -272,12 +277,15 @@ class SearchViewModel @Inject constructor(
                 understood.value = emptyList()
                 readingNote.value = null
                 photoMatches.value = emptyList()
+            meaningMatches.value = emptyList()
+                meaningMatches.value = emptyList()
                 emit(emptyList())
                 return@transformLatest
             }
             isSearchLoading.value = true
             readingNote.value = null
             photoMatches.value = emptyList()
+            meaningMatches.value = emptyList()
             // True once any result list for this query is on screen — a later-stage failure must
             // not wipe results the user is already looking at.
             var painted = false
@@ -321,6 +329,7 @@ class SearchViewModel @Inject constructor(
                     // Progressive retrieval: keyword hits paint as soon as the native BM25 lane
                     // returns; the substring/fuzzy and semantic stages then replace the list in
                     // place. The FINAL stage is the same ranking retrieve() returns.
+                    learned.searched(effectiveQuery)
                     retrievalService.retrieveProgressive(request.copy(only = only)).collect { update ->
                         val rows = toRows(update.result.items)
                         val isFinal = update.stage == com.amar.vault.retrieval.RetrievalStage.FINAL
@@ -334,6 +343,13 @@ class SearchViewModel @Inject constructor(
                             // Filters written into the query narrow them as they narrow the list.
                             val photoRows = update.result.photos.map { it.item }
                             photoMatches.value = if (ops.hasAny) applyOperators(photoRows, ops) else photoRows
+                            val meaningRows = update.result.meaning?.shown?.map { it.item }.orEmpty()
+                            val keptMeaning = if (ops.hasAny) applyOperators(meaningRows, ops) else meaningRows
+                            meaningMatches.value = keptMeaning.map { row ->
+                                SearchHit(row, page = row.pdfPage, excerpt = com.amar.vault.vectors.Sensitive.mask(row.ocrText.replace(Regex("\\s+"), " ").trim()).take(180))
+                            }
+                            meaningFirst.value = update.result.groups.firstOrNull()?.kind == com.amar.vault.retrieval.EvidenceKind.MEANING
+                            meaningCoverage.value = update.result.meaning?.coverage ?: 1f
                             // A period or an amount that left nothing is no longer in force:
                             // its chip goes, and the screen says what is shown instead.
                             val dropped = if (update.result.filterDropped) read.filter { it.narrows } else emptyList()
@@ -426,7 +442,7 @@ class SearchViewModel @Inject constructor(
                     ).bm25Index().removeDocuments(ids)
                 },
                 forgetFile = { hash -> com.amar.vault.indexing.PdfSourceReuseCache.forget(context, hash) },
-                forgetVectors = { id -> vectorSearchManager.removeItem(id) },
+                forgetVectors = { id -> photoSearch.forgetRows(listOf(id)) },
                 letGo = { address ->
                     val uri = android.net.Uri.parse(address)
                     if (uri.scheme == "content") context.contentResolver.releasePersistableUriPermission(

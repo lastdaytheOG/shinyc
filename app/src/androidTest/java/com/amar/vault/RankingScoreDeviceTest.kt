@@ -47,7 +47,7 @@ class RankingScoreDeviceTest {
         val kinds = StringBuilder("variant\tkind\tqueries\tmrr\tfirst\n")
         // Without the embedding model the switches that only steer it change nothing: they are
         // left to a build that has the model.
-        val hasModel = services.semanticRetriever().isReady
+        val hasModel = services.meaningRetriever().isReady
         // The app as it was before photo search: the same search with its photo band left out.
         val noPhotos = RetrievalAblationBenchmark.Variant(
             "noPhotoLane", RetrievalTuning(photoLane = false), "no photo search: the word lanes alone",

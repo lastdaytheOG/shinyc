@@ -53,6 +53,10 @@ class PhotoModelDownloader(private val context: Context) {
         if (!dir.exists()) dir.mkdirs()
 
         try {
+            if (!trusted(baseUrl)) {
+                _state.value = DownloadState.Failed("Model downloads are only allowed over HTTPS from ${TRUSTED_HOSTS.joinToString()}")
+                return@withContext false
+            }
             val normalizedBase = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
             val filesJsonUrl = normalizedBase + "files.json"
 
@@ -62,6 +66,7 @@ class PhotoModelDownloader(private val context: Context) {
                 return@withContext false
             }
 
+            java.io.File(dir, FILES_JSON).writeText(filesJsonText)
             val rootJson = JSONObject(filesJsonText)
             val filesArray = rootJson.getJSONArray("files")
             val items = mutableListOf<ModelFileEntry>()
@@ -257,6 +262,16 @@ class PhotoModelDownloader(private val context: Context) {
 
     companion object {
         private const val TAG = "PhotoModelDownloader"
+        const val FILES_JSON = "files.json"
+        val TRUSTED_HOSTS = setOf("huggingface.co")
+
+        fun trusted(url: String): Boolean = try {
+            val u = java.net.URI(url)
+            u.scheme == "https" && u.host in TRUSTED_HOSTS
+        } catch (e: Exception) {
+            false
+        }
+
         const val DEFAULT_BASE_URL = "https://huggingface.co/lastabhi/amar-photo-search/resolve/main/siglip2-b16-v2cw1-w4a8/"
     }
 }

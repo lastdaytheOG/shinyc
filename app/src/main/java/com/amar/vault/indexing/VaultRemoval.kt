@@ -47,12 +47,20 @@ class VaultRemoval(
         val own = db.vaultDao().getByIds(listOf(documentId)).firstOrNull()
         if (document == null && pieces.isEmpty() && own == null) return null
         db.withTransaction {
+            val gone = pieces + listOfNotNull(own?.id)
+            if (gone.isNotEmpty()) {
+                db.textVectorDao().deleteRows(gone)
+                db.factDao().deleteRows(gone)
+            }
+            db.factDao().deleteItems(listOf(documentId))
+            db.coverageDao().deleteItems(listOf(documentId))
             db.vaultDao().deleteChunksOfDocument(documentId)
             db.vaultDocumentDao().deleteById(documentId)
             db.documentImportDao().delete(documentId)
             if (own != null) db.vaultDao().deleteById(documentId)
         }
         forgetKeywords(pieces + listOfNotNull(own?.id))
+        runCatching { (pieces + listOfNotNull(own?.id)).forEach(forgetVectors) }
         (document?.contentHash ?: own?.contentHash)?.takeIf { it.isNotEmpty() }?.let { hash -> runCatching { forgetFile(hash) } }
         if (document != null) {
             // Nothing opens it from there any more, unless another document does.
@@ -69,6 +77,9 @@ class VaultRemoval(
             db.vaultDao().deleteById(itemId)
             // What a picture looks like goes with it (photo search keeps it apart, see PhotoVector).
             db.photoVectorDao().deleteItems(listOf(itemId))
+            db.textVectorDao().deleteRows(listOf(itemId))
+            db.factDao().deleteItems(listOf(itemId))
+            db.coverageDao().deleteItems(listOf(itemId))
             // A shared file still waiting to be read must not be read after this.
             db.documentImportDao().delete(itemId)
         }

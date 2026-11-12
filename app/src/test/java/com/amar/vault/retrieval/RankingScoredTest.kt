@@ -53,14 +53,7 @@ class RankingScoredTest {
         override suspend fun fts(query: String, limit: Int) = emptyList<String>()
     }
 
-    private object NoSemantic : SemanticRetriever {
-        override val isReady = false
-        override suspend fun embedQuery(query: String, trueLength: Boolean) = floatArrayOf()
-        override suspend fun embedText(text: String) = floatArrayOf()
-        override fun searchVectors(vector: FloatArray, k: Int) = emptyList<String>()
-    }
-
-    private fun service(vault: List<VaultItem>) = HybridSearchService(Repo(vault), NoKeywordIndex, NoSemantic, BoostConfig())
+    private fun service(vault: List<VaultItem>) = HybridSearchService(Repo(vault), NoKeywordIndex, BoostConfig())
 
     private fun order(vault: List<VaultItem>, typed: String, tuning: RetrievalTuning = RetrievalTuning()): List<String> = runBlocking {
         val request = RetrievalRequest.forResultList(typed)

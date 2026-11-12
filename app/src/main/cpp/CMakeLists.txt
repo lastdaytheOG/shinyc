@@ -12,7 +12,7 @@ find_library(log-lib log)
 # Vector Engine & Search Engine
 # ═══════════════════════════════════════════════════════════════════════
 
-add_library(amar_vector_engine SHARED vector_jni_bridge.cpp VectorEngine.cpp photo_scan.cpp photo_pixels.cpp)
+add_library(amar_vector_engine SHARED photo_scan.cpp photo_pixels.cpp)
 target_include_directories(amar_vector_engine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # Optimised in debug builds too: photo search scans every stored picture per query.
 target_compile_options(amar_vector_engine PRIVATE -O3 -ffast-math)

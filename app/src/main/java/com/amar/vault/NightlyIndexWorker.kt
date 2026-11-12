@@ -21,7 +21,6 @@ class NightlyIndexWorker @dagger.assisted.AssistedInject constructor(
     @dagger.assisted.Assisted params: WorkerParameters,
     private val engine: DiscoveryEngine,
     private val pipeline: IndexingPipeline,
-    private val vectorSearchManager: VectorSearchManager,
 ) : CoroutineWorker(ctx, params) {
 
     override suspend fun doWork(): Result {
@@ -56,10 +55,6 @@ class NightlyIndexWorker @dagger.assisted.AssistedInject constructor(
                         } finally {
                             bmp?.recycle(); bmp = null
                         }
-                    },
-                    onBatchCommitted = { _, _ ->
-                        // Flush the vector search state (native graph + ID mappings) after every batch.
-                        try { vectorSearchManager.saveState() } catch (e: Exception) { e.printStackTrace() }
                     },
                 )
 

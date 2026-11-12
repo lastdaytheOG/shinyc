@@ -4,14 +4,12 @@ import android.content.Context
 import com.amar.vault.retrieval.Bm25Index
 import com.amar.vault.retrieval.BoostConfig
 import com.amar.vault.retrieval.DefaultLexicalRetriever
-import com.amar.vault.retrieval.DefaultSemanticRetriever
 import com.amar.vault.retrieval.HybridSearchService
 import com.amar.vault.retrieval.KeywordIndexFill
 import com.amar.vault.retrieval.LexicalRetriever
 import com.amar.vault.retrieval.NativeBm25Index
 import com.amar.vault.retrieval.RetrievalService
 import com.amar.vault.retrieval.SearchRepository
-import com.amar.vault.retrieval.SemanticRetriever
 import com.amar.vault.retrieval.VaultSearchRepository
 import dagger.Module
 import dagger.Provides
@@ -29,14 +27,6 @@ object VaultModule {
     fun provideVaultDatabase(@ApplicationContext context: Context): VaultDatabase {
         return VaultDatabase.get(context)
     }
-
-    @Provides
-    @Singleton
-    fun provideVectorSearchManager(@ApplicationContext context: Context): VectorSearchManager {
-        return VectorSearchManager.getInstance(context)
-    }
-
-    // ── Native-engine boundaries (Phase 2A) — single owners behind JNI-isolating interfaces ──
 
     @Provides
     @Singleton
@@ -89,10 +79,8 @@ object VaultModule {
 
     @Provides
     @Singleton
-    fun provideSemanticRetriever(
-        @ApplicationContext context: Context,
-        vectorSearchManager: VectorSearchManager,
-    ): SemanticRetriever = DefaultSemanticRetriever(context, vectorSearchManager)
+    fun provideMeaningRetriever(photoSearch: com.amar.vault.photos.PhotoSearch): com.amar.vault.retrieval.MeaningRetriever =
+        photoSearch.meaning
 
     @Provides
     @Singleton
@@ -112,8 +100,13 @@ object VaultModule {
     fun provideRetrievalService(
         repository: SearchRepository,
         lexical: LexicalRetriever,
-        semantic: SemanticRetriever,
         boostConfig: BoostConfig,
         photos: com.amar.vault.retrieval.PhotoRetriever,
-    ): RetrievalService = HybridSearchService(repository, lexical, semantic, boostConfig, photos)
+        meaning: com.amar.vault.retrieval.MeaningRetriever,
+        learned: com.amar.vault.vectors.AliasMemory,
+    ): RetrievalService = HybridSearchService(repository, lexical, boostConfig, photos, meaning, learned)
+
+    @Provides
+    @Singleton
+    fun provideAliasMemory(db: VaultDatabase): com.amar.vault.vectors.AliasMemory = com.amar.vault.vectors.AliasMemory(db)
 }

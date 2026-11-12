@@ -40,8 +40,10 @@ class IndexPersister(private val db: VaultDatabase) {
         metadata: List<VaultMetadata>,
         reviewItems: List<CanonicalReviewQueue>,
     ) {
+        val item = guarded(item)
         db.withTransaction {
             vaultDao.insert(item)
+            derived(listOf(item))
             metaDao.deleteByItemId(item.id)
             if (metadata.isNotEmpty()) metaDao.insertAll(metadata)
             for (reviewItem in reviewItems) {
@@ -60,7 +62,11 @@ class IndexPersister(private val db: VaultDatabase) {
 
     /** Staged image path: make/refresh the row visible without touching metadata. */
     suspend fun persistImageShell(item: VaultItem) {
-        vaultDao.insert(item)
+        val item = guarded(item)
+        db.withTransaction {
+            vaultDao.insert(item)
+            derived(listOf(item))
+        }
     }
 
     /** Staged image path: replace metadata after OCR text is already committed. */
@@ -98,8 +104,10 @@ class IndexPersister(private val db: VaultDatabase) {
 
     /** Document path, page by page: the next pieces of a document that was begun. */
     suspend fun appendDocumentChunks(documentId: String, items: List<VaultItem>) {
+        val items = items.map(::guarded)
         db.withTransaction {
             vaultDao.insertAll(items)
+            derived(items)
             documentDao.refreshChunkCount(documentId)
         }
     }
@@ -108,10 +116,13 @@ class IndexPersister(private val db: VaultDatabase) {
      * Document path, all at once: the record of [document] and all its pieces, or none of it.
      * Returns the ids of the pieces that were there before and are not among [items].
      */
-    suspend fun persistDocument(document: VaultDocument, items: List<VaultItem>): List<String> =
+    suspend fun persistDocument(document: VaultDocument, items: List<VaultItem>): List<String> = persistGuarded(document, items.map(::guarded))
+
+    private suspend fun persistGuarded(document: VaultDocument, items: List<VaultItem>): List<String> =
         db.withTransaction {
             val removed = replaceDocument(document)
             vaultDao.insertAll(items)
+            derived(items)
             documentDao.refreshChunkCount(document.id)
             val stored = items.mapTo(HashSet()) { it.id }
             removed.filter { it !in stored }
@@ -150,9 +161,27 @@ class IndexPersister(private val db: VaultDatabase) {
             removed
         }
 
+    private fun guarded(item: VaultItem): VaultItem =
+        if (com.amar.vault.vectors.Sensitive.excludeFromIndex) item.copy(ocrText = com.amar.vault.vectors.Sensitive.forIndex(item.ocrText)) else item
+
+    private suspend fun derived(rows: List<VaultItem>) {
+        if (rows.isEmpty()) return
+        val ids = rows.map { it.id }
+        ids.chunked(500).forEach { some ->
+            db.textVectorDao().deleteRows(some)
+            db.factDao().deleteRows(some)
+        }
+        val facts = rows.flatMap { com.amar.vault.vectors.FactsStage.of(it) }
+        if (facts.isNotEmpty()) db.factDao().insertAll(facts)
+    }
+
     private suspend fun replaceDocument(document: VaultDocument): List<String> {
         val removed = (vaultDao.chunkIdsByContentHash(document.contentHash) +
             vaultDao.chunkIdsOfDocument(document.id)).distinct()
+        removed.chunked(500).forEach { some ->
+            db.textVectorDao().deleteRows(some)
+            db.factDao().deleteRows(some)
+        }
         vaultDao.deleteChunksByContentHash(document.contentHash)
         vaultDao.deleteChunksOfDocument(document.id)
         documentDao.deleteByContentHash(document.contentHash)
