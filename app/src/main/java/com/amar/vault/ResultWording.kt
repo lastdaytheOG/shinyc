@@ -18,6 +18,8 @@ internal object ResultWording {
         "mein", "ka", "ki", "ke", "ko", "se", "par", "pe", "aur", "hai", "hain", "ek",
     )
 
+    fun isSmall(word: String): Boolean = word in SMALL
+
     /** The words of [query] a result has to say: all but the small ones, or all when that is all there is. */
     fun contentWords(query: String): List<String> {
         val words = queryWordsOf(query).filter { it.isNotBlank() }.distinct()
