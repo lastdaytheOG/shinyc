@@ -103,6 +103,21 @@ object VaultStrings {
         else -> "Photos ($count)"
     }
 
+    fun meaningSection(lang: AppLanguage, count: Int) = when (lang) {
+        AppLanguage.HINDI -> "अर्थ से मिलते-जुलते ($count)"
+        else -> "Related by meaning ($count)"
+    }
+
+    fun meaningNote(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "इनमें आपके शब्द नहीं हैं; ये उसी बात के बारे में हैं।"
+        else -> "These don't contain your words; they are about the same thing."
+    }
+
+    fun nothingYet(lang: AppLanguage, percent: Int) = when (lang) {
+        AppLanguage.HINDI -> "अभी कुछ नहीं मिला। आपकी तिजोरी का $percent% हिस्सा अर्थ के लिए पढ़ा जा चुका है।"
+        else -> "Nothing found yet. $percent% of your vault has been read for meaning so far."
+    }
+
     fun docsSection(lang: AppLanguage, count: Int) = when (lang) {
         AppLanguage.HINDI -> "दस्तावेज़ ($count)"
         else -> "Documents ($count)"

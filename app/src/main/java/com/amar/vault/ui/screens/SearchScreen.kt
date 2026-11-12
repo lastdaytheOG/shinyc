@@ -59,6 +59,9 @@ fun SearchScreen(
     val understood by viewModel.understood.collectAsState()
     val readingNote by viewModel.readingNote.collectAsState()
     val photoMatches by viewModel.photoMatches.collectAsState()
+    val meaningMatches by viewModel.meaningMatches.collectAsState()
+    val meaningFirst by viewModel.meaningFirst.collectAsState()
+    val meaningCoverage by viewModel.meaningCoverage.collectAsState()
 
     val db = remember { VaultDatabase.get(context) }
     val documentsCount by remember { db.vaultDocumentDao().observeCount() }.collectAsState(initial = 0)
@@ -78,7 +81,7 @@ fun SearchScreen(
         }
     }
 
-    val partialOpen = showPartial || (directHits.isEmpty() && photoMatches.isEmpty() && !similarSpellingsOnly)
+    val partialOpen = showPartial || (directHits.isEmpty() && photoMatches.isEmpty() && meaningMatches.isEmpty() && !similarSpellingsOnly)
     val listState = rememberLazyListState()
 
     LaunchedEffect(Unit) {
@@ -264,6 +267,9 @@ fun SearchScreen(
                 directHits = directHits,
                 partialHits = partialHits,
                 photoMatches = photoMatches,
+                meaningMatches = meaningMatches,
+                meaningFirst = meaningFirst,
+                meaningCoverage = meaningCoverage,
                 partialOpen = partialOpen,
                 similarSpellingsOnly = similarSpellingsOnly,
                 lang = lang,
@@ -271,6 +277,7 @@ fun SearchScreen(
                 onShowPartial = { showPartial = true },
                 onResultClick = { hit ->
                     viewModel.recordSearch(queryText)
+                    viewModel.recordOpen(queryText, hit.row)
                     openHitAtMatch(context, hit, queryText, onOpenItemDetail)
                 },
                 onResultLongClick = { hit ->
@@ -529,6 +536,9 @@ private fun SearchResultsContent(
     directHits: List<SearchHit>,
     partialHits: List<SearchHit>,
     photoMatches: List<VaultItem>,
+    meaningMatches: List<SearchHit>,
+    meaningFirst: Boolean,
+    meaningCoverage: Float,
     partialOpen: Boolean,
     similarSpellingsOnly: Boolean,
     lang: com.amar.vault.ui.AppLanguage,
@@ -538,7 +548,7 @@ private fun SearchResultsContent(
     onResultLongClick: (SearchHit) -> Unit,
     onPhotoClick: (VaultItem) -> Unit
 ) {
-    if (isLoading && directHits.isEmpty() && photoMatches.isEmpty()) {
+    if (isLoading && directHits.isEmpty() && photoMatches.isEmpty() && meaningMatches.isEmpty()) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -550,7 +560,7 @@ private fun SearchResultsContent(
         return
     }
 
-    if (directHits.isEmpty() && partialHits.isEmpty() && photoMatches.isEmpty()) {
+    if (directHits.isEmpty() && partialHits.isEmpty() && photoMatches.isEmpty() && meaningMatches.isEmpty()) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -570,6 +580,14 @@ private fun SearchResultsContent(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (meaningCoverage < 1f) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = VaultStrings.nothingYet(lang, (meaningCoverage * 100).toInt()),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
         return
@@ -604,6 +622,8 @@ private fun SearchResultsContent(
                 }
             }
         }
+
+        if (meaningFirst) meaningSection(meaningMatches, queryText, lang, onResultClick, onResultLongClick)
 
         // Direct Documents match section
         if (directHits.isNotEmpty()) {
@@ -647,6 +667,8 @@ private fun SearchResultsContent(
                 }
             }
         }
+
+        if (!meaningFirst) meaningSection(meaningMatches, queryText, lang, onResultClick, onResultLongClick)
 
         if (partialOpen && partialHits.isNotEmpty()) {
             item(key = "partial_note") {
@@ -831,6 +853,40 @@ private fun openDocumentAtStart(context: Context, doc: VaultDocument) {
             searchQuery = "",
             fileName = doc.name,
             matchText = ""
+        )
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.meaningSection(
+    hits: List<SearchHit>,
+    queryText: String,
+    lang: com.amar.vault.ui.AppLanguage,
+    onResultClick: (SearchHit) -> Unit,
+    onResultLongClick: (SearchHit) -> Unit,
+) {
+    if (hits.isEmpty()) return
+    item(key = "meaning_header") {
+        Column {
+            Text(
+                text = VaultStrings.meaningSection(lang, hits.size).uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.5.sp
+            )
+            Text(
+                text = VaultStrings.meaningNote(lang),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+    items(hits, key = { "meaning_" + it.row.id }) { hit ->
+        DocumentHitCard(
+            hit = hit,
+            query = queryText,
+            onClick = { onResultClick(hit) },
+            onLongClick = { onResultLongClick(hit) }
         )
     }
 }
