@@ -115,6 +115,10 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(24.dp))
 
+        SearchPrivacySection()
+
+        Spacer(Modifier.height(24.dp))
+
         // Photo Search Section (ADR-0002 dynamic download)
         SectionHeader(title = "PHOTO SEARCH")
 
