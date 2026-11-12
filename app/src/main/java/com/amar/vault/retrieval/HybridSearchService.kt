@@ -14,6 +14,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Phase-1 retrieval implementation: the exact pre-existing hybrid pipeline (BM25 + HNSW +
@@ -34,13 +35,12 @@ import kotlinx.coroutines.flow.flow
 class HybridSearchService(
     private val repository: SearchRepository,
     private val lexical: LexicalRetriever,
-    private val semantic: SemanticRetriever,
     private val boostConfig: BoostConfig,
     /** Pictures by what is in them ([RetrievalResult.photos]); [PhotoRetriever.NONE] lists none. */
     private val photos: PhotoRetriever = PhotoRetriever.NONE,
+    private val meaning: MeaningRetriever = MeaningRetriever.NONE,
+    private val learned: com.amar.vault.vectors.AliasMemory? = null,
 ) : RetrievalService {
-
-    private enum class QueryType { EXACT_KEYWORD, SEMANTIC_PHRASE, GIBBERISH }
 
     private companion object {
         /** Compiled once — the lanes previously re-compiled Regex("\\s+") per item/query. */
@@ -49,6 +49,7 @@ class HybridSearchService(
         val NOT_A_WORD = Regex("[^\\p{L}\\p{M}\\p{N}]+")
         /** More than a query has words: the scan lane's sort key is `words said * this + words`. */
         const val SAID_RADIX = 1024
+        const val TYPED_TERM_CANDIDATES = 2000
     }
 
     override suspend fun retrieve(request: RetrievalRequest): RetrievalResult =
@@ -112,7 +113,6 @@ class HybridSearchService(
         val budget = request.budget
         val tuning = request.tuning
         val sink = request.traceSink
-        val queryType = classifyQuery(q)
         val qLower = q.lowercase().trim()
 
         // Sprint 4B.1: deterministic acronym expansion computed ONCE at THIS single query
@@ -145,6 +145,13 @@ class HybridSearchService(
         val wordOrder = typedWords.flatMap { it.typed.split(NOT_A_WORD) }.filter { it.isNotEmpty() }
             .takeIf { tuning.wordOrderBonus && it.size >= 2 }?.let(::WordsInOrder)
 
+        val aliasTerms: List<String> = if (tuning.learning && learned != null) {
+            runCatching { learned.expand(qLower) }.getOrDefault(emptyList()).flatMap { it.split(' ') }.distinct()
+        } else emptyList()
+        val openedBefore: Map<String, Float> = if (tuning.learning && learned != null) {
+            runCatching { learned.openedBefore(qLower) }.getOrDefault(emptyMap())
+        } else emptyMap()
+
         // ── 0. STRICT constraint pushdown (SQLite) — batched fallback ──────
         val strictIds = computeStrictIds(plan)
         if (strictIds != null && strictIds.isEmpty()) {
@@ -174,13 +181,41 @@ class HybridSearchService(
                 val matches = photos.search(q, VaultConfig.Retrieval.PHOTO_BUDGET, inPeriod)
                 if (matches.isEmpty()) return@async emptyList<PhotoHit>()
                 val rows = repository.getByIds(matches.map { it.itemId }).associateBy { it.id }
-                matches.mapNotNull { m -> rows[m.itemId]?.let { PhotoHit(it, m.score) } }
+                matches.mapNotNull { m -> rows[m.itemId]?.let { PhotoHit(it, m.score, m.margin) } }
                     .filter { only == null || only(it.item) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 // Like the other lanes: a failed photo search lists no photos, and the words still work.
                 VaultLog.e("HybridSearch", "Photo lane error: ${e.message}"); emptyList<PhotoHit>()
+            }
+        }
+
+        val meaningDeferred = async(Dispatchers.Default) {
+            if (!tuning.semanticEnabled || qLower.isBlank() || !meaning.isReady) return@async null
+            try {
+                val inPeriod: ((String) -> Boolean)? = strictIds?.let { ids -> { id: String -> id in ids } }
+                val scan = withTimeoutOrNull(VaultConfig.Retrieval.MEANING_DEADLINE_MS) { meaning.scan(q, budget.meaning, inPeriod) }
+                when {
+                    scan == null -> MeaningResult(emptyList(), emptyList(), Verdict.NOTHING, 0f, timedOut = true)
+                    else -> MeaningLane.resolve(scan, repository, meaning, only, tuning.onePerDocument)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                VaultLog.e("HybridSearch", "Meaning lane error: ${e.message}"); null
+            }
+        }
+
+        val factsDeferred = async(Dispatchers.IO) {
+            if (!tuning.factsLane || qLower.isBlank()) return@async null
+            try {
+                FactsLane.find(q, repository, only?.let { o -> { row: VaultItem -> o(row) && (strictIds == null || row.id in strictIds) } }
+                    ?: strictIds?.let { ids -> { row: VaultItem -> row.id in ids } }, tuning.onePerDocument)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                VaultLog.e("HybridSearch", "Facts lane error: ${e.message}"); null
             }
         }
 
@@ -196,40 +231,13 @@ class HybridSearchService(
                 // Just after the app is opened the engine is still being filled; the list
                 // must not depend on how soon the query was typed.
                 lexical.awaitReady()
-                hydrateRanked(lexical.bm25(expandedQuery, fetch), tuning).applyStrictFilter()
+                val folded = if (tuning.hinglishBridge) Hinglish.foldedQueryWords(qLower).filter { it !in qLower.split(WHITESPACE) } else emptyList()
+                val extra = folded + aliasTerms
+                val engineQuery = if (extra.isEmpty()) expandedQuery else expandedQuery + " " + extra.joinToString(" ")
+                hydrateRanked(lexical.bm25(engineQuery, fetch), tuning).applyStrictFilter()
                     .let { if (tuning.onePerDocument) it.firstPerDocument(budget.bm25) else it }
             } catch (e: Exception) {
                 VaultLog.e("HybridSearch", "BM25 error: ${e.message}"); emptyList()
-            }
-        }
-
-        val vectorDeferred = async(Dispatchers.IO) {
-            if (!tuning.semanticEnabled) return@async emptyList<VaultItem>()
-            if (queryType == QueryType.GIBBERISH) return@async emptyList<VaultItem>()
-            // Sprint 4B: the <4-char skip stays for junk queries, but a recognized acronym
-            // ("AI", "ML", "PDF") now reaches the semantic lane via its expansion. (A <4-char
-            // query is single-token, so containsKnownAcronym == the old isKnownAcronym check.)
-            if (qLower.length < 4 && !expanded.containsKnownAcronym)
-                return@async emptyList<VaultItem>()
-            // An empty vector index can return nothing, so the query embedding (one full model
-            // inference) would be pure waste — skip it. Result-identical by construction.
-            if (!semantic.isReady || !semantic.hasVectors) return@async emptyList<VaultItem>()
-            try {
-                val vec = semantic.embedQuery(expandedQuery, tuning.queryTrueLength)
-                ensureActive()
-                val hits = if (tuning.semanticParentHits)
-                    ownedSemanticHits(vec, budget.vector, tuning.semanticMinSimilarity)
-                else
-                    hydrateRanked(semantic.searchVectors(vec, budget.vector), tuning)
-                hits.applyStrictFilter()
-                    .let { if (tuning.onePerDocument) it.firstPerDocument(budget.vector) else it }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                // Same policy as the BM25 lane: a failed lane contributes nothing instead of
-                // failing the whole search (a missing/broken embedding model must still leave
-                // keyword search working).
-                VaultLog.e("HybridSearch", "Vector lane error: ${e.message}"); emptyList<VaultItem>()
             }
         }
 
@@ -242,7 +250,7 @@ class HybridSearchService(
         // so it is built once per name rather than once per row.
         val loweredBaseDeferred = async(Dispatchers.IO) {
             val base = if (tuning.candidateBounded)
-                boundedBaseSet(expandedQuery, budget, bm25Deferred.await())
+                strictIds?.let { repository.inSnapshotOrder(it.toList()) } ?: boundedBaseSet(expandedQuery, budget, bm25Deferred.await())
             else
                 repository.allItemsSnapshot()
             val fileNames = HashMap<String, String>()
@@ -290,9 +298,12 @@ class HybridSearchService(
         // decides which typed words are missing from the vault; until it has, the keyword
         // stage shows only rows that do have a query word, rather than flash look-alikes.
         val gateWords = typedWords.distinctBy { it.typed } + meanings
+        val foldedTyped = if (tuning.hinglishBridge) Hinglish.foldedQueryWords(qLower).toSet() else emptySet()
         fun gate(missingWords: List<String>) = Gate(
             gateWords, barePhrase, bareWords, wordOrder, legacyTypoHelp, tuning.pageWordsBeforeTags,
             nameBonus = tuning.nameBonus,
+            shadowWords = foldedTyped + aliasTerms.map { Hinglish.fold(it) },
+            aliasWords = aliasTerms.toSet(),
             nearMissing = missingWords.filter { it.length >= 3 }.takeIf { it.isNotEmpty() }
                 ?.let { FuzzyMatcher(it, roots = true) },
         )
@@ -333,8 +344,8 @@ class HybridSearchService(
         val bm25Lane = bm25Deferred.await()
         claimDocuments(bm25Lane, judge = null)
         if (onStage != null && bm25Lane.isNotEmpty()) {
-            surface(RetrievalStage.KEYWORD, fuseAndRank(bm25Lane.asDocumentRows(), emptyList(), emptyList(), emptyList(),
-                emptyMap(), plan, qLower, gate(emptyList()), keepVectorOnly = false))
+            surface(RetrievalStage.KEYWORD, fuseAndRank(bm25Lane.asDocumentRows(), emptyList(), emptyList(),
+                plan, qLower, gate(emptyList()), openedBefore))
         }
 
         val substringLane = substringDeferred.await().hits
@@ -352,43 +363,32 @@ class HybridSearchService(
         var lexicalFusion: Fusion? = null
         if (onStage != null &&
             (bm25Results.isNotEmpty() || substringResults.isNotEmpty() || fuzzyResults.isNotEmpty())) {
-            lexicalFusion = fuseAndRank(bm25Results, emptyList(), substringResults, fuzzyResults,
-                emptyMap(), plan, qLower, lexicalGate, keepVectorOnly = false)
+            lexicalFusion = fuseAndRank(bm25Results, substringResults, fuzzyResults, plan, qLower, lexicalGate, openedBefore)
             surface(RetrievalStage.LEXICAL, lexicalFusion)
         }
 
-        // The vector lane names pages by meaning, which the gate has no measure of: a document
-        // a keyword lane has named keeps that lane's page, so the rows above stay as they are.
-        val vectorLane = vectorDeferred.await()
-        claimDocuments(vectorLane, judge = null)
-        val vectorResults = vectorLane.asDocumentRows()
-
         VaultLog.d("HybridSearch",
-            "q='${VaultLog.redact(q)}' bm25=${bm25Results.size} vec=${vectorResults.size} " +
+            "q='${VaultLog.redact(q)}' bm25=${bm25Results.size} " +
             "sub=${substringResults.size} fuzzy=${fuzzyResults.size}")
 
-        if (bm25Results.isEmpty() && vectorResults.isEmpty() &&
-            substringResults.isEmpty() && fuzzyResults.isEmpty()) {
-            // No row says a word of it; pictures may still look like it.
-            return@coroutineScope RetrievalResult(emptyList(), photos = photoDeferred.await())
+        if (bm25Results.isEmpty() && substringResults.isEmpty() && fuzzyResults.isEmpty()) {
+            val photosFound = photoDeferred.await()
+            val meaningFound = meaningDeferred.await()
+            val factsFound = factsDeferred.await()
+            val (groups, verdict) = Groups.of(emptyList(), 0, 0, false, meaningFound, photosFound, factsFound)
+            return@coroutineScope RetrievalResult(emptyList(), photos = photosFound, meaning = meaningFound, facts = factsFound, groups = groups,
+                verdict = verdict, keywordWords = typedWords.distinctBy { it.typed }.size)
         }
 
-        // ── 5. Late embedding for semantic document queries ───────────────
-        val semanticDocBoosts = lateDocumentBoosts(queryType, qLower, q, bm25Results, substringResults, tuning, this)
-
         // ── 6–8. Fuse, boost, gate, re-rank ───────────────────────────────
-        // With no semantic signal the FINAL fusion has exactly the LEXICAL stage's inputs, so
-        // the progressive path reuses that fusion instead of ranking the same lanes twice.
-        val fusion = lexicalFusion?.takeIf { vectorResults.isEmpty() && semanticDocBoosts.isEmpty() }
-            ?: fuseAndRank(bm25Results, vectorResults, substringResults, fuzzyResults,
-                semanticDocBoosts, plan, qLower, lexicalGate, keepVectorOnly = tuning.semanticParentHits)
+        val fusion = lexicalFusion
+            ?: fuseAndRank(bm25Results, substringResults, fuzzyResults, plan, qLower, lexicalGate, openedBefore)
 
         val trace = sink?.let {
             RetrievalTrace(
                 query = q,
                 lanes = listOf(
                     LaneTrace("bm25", bm25Results.map { r -> r.id }),
-                    LaneTrace("vector", vectorResults.map { r -> r.id }),
                     LaneTrace("substring", substringResults.map { r -> r.id }),
                     LaneTrace("fuzzy", fuzzyResults.map { r -> r.id }),
                 ),
@@ -397,8 +397,22 @@ class HybridSearchService(
                 notes = if (tuning.candidateBounded) listOf("candidate-bounded") else emptyList(),
             ).also(it::accept)
         }
+        val photosFound = photoDeferred.await()
+        val meaningFound = meaningDeferred.await()
+        val distinctTyped = typedWords.distinctBy { it.typed }
+            .let { all -> all.filter { !com.amar.vault.ResultWording.isSmall(it.bare) }.ifEmpty { all } }
+        val said = fusion.items.firstOrNull()?.let { top ->
+            val row = RowText.of(top)
+            val name = loweredName(top)
+            val pageEnd = lexicalGate.pageEnd(row)
+            distinctTyped.count { it.isIn(name) || it.isIn(row.all, pageEnd) }
+        } ?: 0
+        val keywordVerdict = Groups.keywordVerdict(fusion.items, said, distinctTyped.size, fusion.similarSpellingsOnly)
+        val factsFound = factsDeferred.await()
+        val (groups, verdict) = Groups.of(fusion.items, said, distinctTyped.size, fusion.similarSpellingsOnly, meaningFound, photosFound, factsFound)
         RetrievalResult(fusion.items, trace, similarSpellingsOnly = fusion.similarSpellingsOnly,
-            photos = photoDeferred.await())
+            photos = photosFound, meaning = meaningFound, facts = factsFound, groups = groups, verdict = verdict,
+            keywordWordsSaid = said, keywordWords = distinctTyped.size)
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -414,8 +428,7 @@ class HybridSearchService(
                 constraint.timestampValue != null) {
                 val lo = constraint.timestampValue[0]; val hi = constraint.timestampValue[1]
                 matchingIds.addAll(repository.dateRangeItemIds(lo, hi))
-                // Batched fallback: items with NO date metadata but timestamp in range.
-                val haveDate = repository.itemIdsHavingDate()
+                matchingIds.addAll(repository.undatedItemIdsInRange(lo, hi))
                 // A document has no date metadata and its timestamp is when it was imported, so
                 // "marksheet 2023" excluded a marksheet added this year. An item that itself
                 // says the year or month typed — in its text or its name — belongs to it too.
@@ -431,10 +444,15 @@ class HybridSearchService(
                             }
                         }
                 }
-                repository.allItemsSnapshot().forEach { item ->
-                    if (item.id !in haveDate && item.timestamp in lo..hi) matchingIds.add(item.id)
-                    else if (typed.isNotEmpty() && saysIt(item)) matchingIds.add(item.id)
+                if (typed.isNotEmpty()) {
+                    lexical.awaitReady()
+                    val candidates = typed.flatMap { (term, _) -> lexical.bm25(term, TYPED_TERM_CANDIDATES) + lexical.fts(term, TYPED_TERM_CANDIDATES) }.distinct()
+                    candidates.chunked(500).forEach { some ->
+                        repository.getByIds(some).forEach { item -> if (item.id !in matchingIds && saysIt(item)) matchingIds.add(item.id) }
+                    }
                 }
+            } else if (constraint.type == "AMOUNT" && constraint.amountRange != null) {
+                matchingIds.addAll(repository.amountBetweenIds(constraint.amountRange.first, constraint.amountRange.second))
             } else if (constraint.type == "AMOUNT" && constraint.operator == ConstraintOperator.GREATER_THAN &&
                 constraint.numericValue != null) {
                 matchingIds.addAll(repository.amountGreaterThanIds(constraint.numericValue))
@@ -461,20 +479,6 @@ class HybridSearchService(
         if (!tuning.rankOrderHydration) return rows
         val byId = rows.associateBy { it.id }
         return ids.distinct().mapNotNull { byId[it] }
-    }
-
-    /**
-     * Vector hits resolved to rows that exist, via each chunk's EXPLICIT ownership record: a
-     * document chunk vector is its own Room row; an image chunk vector belongs to the image
-     * row its parentId names. Hits under [minSimilarity] are dropped, and each row is kept
-     * once, at the rank of its most similar chunk.
-     */
-    private suspend fun ownedSemanticHits(vector: FloatArray, k: Int, minSimilarity: Float): List<VaultItem> {
-        val hits = semantic.searchHits(vector, k).filter { it.similarity >= minSimilarity }
-        if (hits.isEmpty()) return emptyList()
-        val rows = repository.getByIds(hits.flatMap { listOf(it.chunkId, it.parentId) }.distinct())
-            .associateBy { it.id }
-        return hits.mapNotNull { rows[it.chunkId] ?: rows[it.parentId] }.distinctBy { it.id }
     }
 
     private suspend fun blankStrict(
@@ -665,39 +669,11 @@ class HybridSearchService(
      *  only when the index lanes recall nothing — bounded frequency, not per-query O(N). */
     private suspend fun boundedBaseSet(q: String, budget: CandidateBudget, bm25Hydrated: List<VaultItem>): List<VaultItem> {
         val ftsIds = lexical.fts(q, budget.fts)
-        val unionIds = (bm25Hydrated.map { it.id } + ftsIds).distinct()
-        val union = repository.getByIds(unionIds)
+        val words = q.lowercase().split(WHITESPACE).filter { it.length >= 2 && !com.amar.vault.ResultWording.isSmall(it) }.distinct()
+        val perWord = if (words.size < 2) emptyList() else words.flatMap { lexical.bm25(it, budget.bm25) }
+        val unionIds = (bm25Hydrated.map { it.id } + ftsIds + perWord).distinct()
+        val union = repository.inSnapshotOrder(unionIds)
         return if (union.isEmpty()) repository.allItemsSnapshot() else union
-    }
-
-    private suspend fun lateDocumentBoosts(
-        queryType: QueryType, qLower: String, q: String,
-        bm25Results: List<VaultItem>, substringResults: List<VaultItem>,
-        tuning: RetrievalTuning,
-        scope: kotlinx.coroutines.CoroutineScope,
-    ): Map<String, Double> {
-        if (queryType != QueryType.SEMANTIC_PHRASE || qLower.length < 6) return emptyMap()
-        if (!tuning.semanticEnabled || !semantic.isReady) return emptyMap()
-        val docCandidates = (bm25Results + substringResults)
-            .filter { it.isDocumentPiece }
-            .distinctBy { it.id }
-            .take(VaultConfig.Retrieval.LATE_EMBED_DOC_LIMIT)
-        if (docCandidates.isEmpty()) return emptyMap()
-        val boosts = mutableMapOf<String, Double>()
-        try {
-            val queryVec = semantic.embedQuery(q, tuning.queryTrueLength)
-            docCandidates.forEach { item ->
-                scope.ensureActive()
-                val chunkText = item.ocrText.trim()
-                if (chunkText.length >= 20) {
-                    val sim = cosineSimilarity(queryVec, semantic.embedText(chunkText))
-                    if (sim > VaultConfig.Retrieval.LATE_EMBED_SIM_THRESHOLD) boosts[item.id] = sim.toDouble()
-                }
-            }
-        } catch (e: Exception) {
-            VaultLog.e("HybridSearch", "Late embedding error: ${e.message}")
-        }
-        return boosts
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -738,7 +714,18 @@ class HybridSearchService(
         val pageFirst: Boolean,
         val nearMissing: FuzzyMatcher?,
         val nameBonus: Boolean = true,
+        val shadowWords: Set<String> = emptySet(),
+        val aliasWords: Set<String> = emptySet(),
     ) {
+        fun saysAnAlias(text: String, name: String): Boolean =
+            aliasWords.any { w -> QueryWord.of(w).firstOrNull()?.let { it.isIn(text) || it.isIn(name) } == true }
+
+        fun hasAShadow(item: VaultItem): Boolean {
+            if (shadowWords.isEmpty() || !Hinglish.isDevanagari(item.ocrText + item.sourceFile)) return false
+            val shadows = Hinglish.shadows(item.ocrText + " " + item.sourceFile).split(' ')
+            return shadows.any { it in shadowWords }
+        }
+
         /** Where the page ends in a row's lowered text, for the checks below. */
         fun pageEnd(row: RowText): Int = if (pageFirst) row.pageEnd else row.all.length
 
@@ -783,17 +770,15 @@ class HybridSearchService(
     }
 
     private suspend fun fuseAndRank(
-        bm25Results: List<VaultItem>, vectorResults: List<VaultItem>,
+        bm25Results: List<VaultItem>,
         substringResults: List<VaultItem>, fuzzyResults: List<VaultItem>,
-        semanticDocBoosts: Map<String, Double>, plan: QueryPlan?, qLower: String,
+        plan: QueryPlan?, qLower: String,
         gate: Gate,
-        // When true, a vector-lane hit survives the presence gate with no query word in its
-        // text: the lane has already held it to the similarity floor (semanticParentHits).
-        keepVectorOnly: Boolean,
+        openedBefore: Map<String, Float> = emptyMap(),
     ): Fusion {
         val cfg = VaultConfig.Retrieval
         val weights = mapOf(
-            "bm25" to cfg.WEIGHT_BM25, "vector" to cfg.WEIGHT_VECTOR,
+            "bm25" to cfg.WEIGHT_BM25,
             "substring" to cfg.WEIGHT_SUBSTRING, "fuzzy" to cfg.WEIGHT_FUZZY,
         )
         val rrfScores = mutableMapOf<String, Double>()
@@ -806,12 +791,8 @@ class HybridSearchService(
                 rrfScores[item.id] = (rrfScores[item.id] ?: 0.0) + w * (1.0 / (cfg.RRF_K + rank))
             }
         }
-        scoreLane(bm25Results, "bm25"); scoreLane(vectorResults, "vector")
+        scoreLane(bm25Results, "bm25")
         scoreLane(substringResults, "substring"); scoreLane(fuzzyResults, "fuzzy")
-
-        for ((id, sim) in semanticDocBoosts) {
-            rrfScores[id] = (rrfScores[id] ?: 0.0) + sim * cfg.LATE_SEMANTIC_WEIGHT
-        }
 
         // PREFERRED metadata boosts (multiplicative) — batched repository lookups.
         if (plan != null && plan.preferred.isNotEmpty()) {
@@ -834,11 +815,9 @@ class HybridSearchService(
         val bm25Ids = bm25Results.map { it.id }.toSet()
         val substringIds = substringResults.map { it.id }.toSet()
         val fuzzyIds = fuzzyResults.map { it.id }.toSet()
-        val vectorIds = if (keepVectorOnly) vectorResults.map { it.id }.toSet() else emptySet()
         val queryWords = gate.words
         val barePhrase = gate.barePhrase.takeIf { it != qLower }
         var anyHasAQueryWord = false
-        var anyByMeaning = false
         val toRemove = mutableListOf<String>()
         for ((id, item) in itemMap) {
             val row = RowText.of(item)
@@ -871,16 +850,20 @@ class HybridSearchService(
                 }
             } else {
                 val stays = when {
-                    id in vectorIds -> { anyByMeaning = true; true }
                     gate.legacy -> id in bm25Ids || id in substringIds || id in fuzzyIds
                     gate.hasAPartOfAWord(text, name) -> { anyHasAQueryWord = true; true }
-                    // Whichever lane named it: the row itself has to have the near spelling.
+                    gate.hasAShadow(item) -> true
+                    gate.saysAnAlias(text, name) -> true
                     else -> gate.hasANearSpelling(text, name)
                 }
                 if (!stays) toRemove.add(id)
             }
         }
         toRemove.forEach { itemMap.remove(it); rrfScores.remove(it) }
+        if (openedBefore.isNotEmpty()) for ((id, item) in itemMap) {
+            val w = openedBefore[item.parentDocumentId ?: item.id] ?: continue
+            rrfScores[id] = (rrfScores[id] ?: 0.0) + cfg.OPENED_BONUS * w
+        }
 
         // Sort with a STABLE secondary key (ties → id) for deterministic results.
         val ranked = itemMap.entries
@@ -899,7 +882,7 @@ class HybridSearchService(
         if (limit != null) finalResults = finalResults.take(limit)
         return Fusion(
             finalResults, rrfScores,
-            similarSpellingsOnly = finalResults.isNotEmpty() && !anyHasAQueryWord && !anyByMeaning,
+            similarSpellingsOnly = finalResults.isNotEmpty() && !anyHasAQueryWord,
         )
     }
 
@@ -914,20 +897,5 @@ class HybridSearchService(
             if (order == SortOrder.DESC) db.compareTo(da) else da.compareTo(db)
         }
         return byDate.thenBy { it.id }
-    }
-
-    private fun classifyQuery(q: String): QueryType {
-        if (q.matches(Regex("^[^a-zA-Z\\u0900-\\u097F]+$"))) return QueryType.GIBBERISH
-        if (q.length == 1) return QueryType.EXACT_KEYWORD
-        if (q.length < 6 && q.matches(Regex("^[a-zA-Z]{1,3}\\d+.*$"))) return QueryType.GIBBERISH
-        return if (q.contains(" ")) QueryType.SEMANTIC_PHRASE else QueryType.EXACT_KEYWORD
-    }
-
-    private fun cosineSimilarity(a: FloatArray, b: FloatArray): Float {
-        if (a.size != b.size) return 0f
-        var dot = 0f; var normA = 0f; var normB = 0f
-        for (i in a.indices) { dot += a[i] * b[i]; normA += a[i] * a[i]; normB += b[i] * b[i] }
-        val denom = kotlin.math.sqrt(normA) * kotlin.math.sqrt(normB)
-        return if (denom > 0f) dot / denom else 0f
     }
 }
