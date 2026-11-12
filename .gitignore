@@ -143,3 +143,7 @@ tools/phone-screenshots/
 tools/visual-search/models/
 # Results of the indexing speed bench (tools/index-bench).
 tools/index-bench/results/
+
+# Search benchmark: the raw article dump is re-fetched by fetch_wiki.py; raw run results stay local.
+tools/search-bench/corpus/wiki.json
+tools/search-bench/results/
