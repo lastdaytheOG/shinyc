@@ -28,6 +28,10 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [32])
 class HybridSearchProgressiveTest {
+    private suspend fun RetrievalService.retrieveFull(r: RetrievalRequest) = retrieve(r.copy(tuning = r.tuning.copy(candidateBounded = false)))
+
+    private fun RetrievalService.retrieveProgressiveFull(r: RetrievalRequest) = retrieveProgressive(r.copy(tuning = r.tuning.copy(candidateBounded = false)))
+
 
     private fun item(id: String, text: String, type: ItemType = ItemType.PHOTO) =
         VaultItem(id = id, uri = "u/$id", ocrText = text, lang = "en", itemType = type, timestamp = 0L)
@@ -51,20 +55,19 @@ class HybridSearchProgressiveTest {
 
     private class FakeSemantic(
         override val isReady: Boolean = true,
-        override val hasVectors: Boolean = true,
+        val hasVectors: Boolean = true,
         private val hits: List<String> = emptyList(),
         private val gate: CompletableDeferred<Unit>? = null,
         private val fail: Boolean = false,
-    ) : SemanticRetriever {
+    ) : MeaningRetriever {
         @Volatile var embedCalls = 0
-        override suspend fun embedQuery(query: String, trueLength: Boolean): FloatArray {
+        override suspend fun scan(query: String, k: Int, only: ((String) -> Boolean)?): MeaningScan? {
+            if (!hasVectors) return MeaningScan(emptyList(), 0f, 0f, 0, 1f)
             embedCalls++
             gate?.await()
             if (fail) throw IllegalStateException("embedding model unavailable")
-            return floatArrayOf(1f, 0f)
+            return MeaningScan(hits.mapIndexed { i, id -> MeaningHit(id, 0.6f - i * 0.01f, 0.2f) }, 0.1f, 0.05f, 10, 1f)
         }
-        override suspend fun embedText(text: String) = floatArrayOf(1f, 0f)
-        override fun searchVectors(vector: FloatArray, k: Int) = hits
     }
 
     private val corpus = listOf(
@@ -77,8 +80,8 @@ class HybridSearchProgressiveTest {
     private fun service(
         repo: SearchRepository = FakeRepository(corpus),
         bm25: List<String> = listOf("b", "a"),
-        semantic: SemanticRetriever = FakeSemantic(hits = listOf("c")),
-    ) = HybridSearchService(repo, FakeLexical(bm25), semantic, BoostConfig())
+        semantic: MeaningRetriever = FakeSemantic(hits = listOf("c")),
+    ) = HybridSearchService(repo, FakeLexical(bm25), BoostConfig(), meaning = semantic)
 
     private fun List<VaultItem>.ids() = map { it.id }
 
@@ -86,8 +89,8 @@ class HybridSearchProgressiveTest {
     fun finalStageIsExactlyWhatRetrieveReturns() = runBlocking {
         for (query in listOf("invoice", "tax invoice number", "holiday", "zzzz")) {
             val svc = service()
-            val updates = svc.retrieveProgressive(RetrievalRequest(query)).toList()
-            val expected = svc.retrieve(RetrievalRequest(query)).items.ids()
+            val updates = svc.retrieveProgressiveFull(RetrievalRequest(query)).toList()
+            val expected = svc.retrieveFull(RetrievalRequest(query)).items.ids()
             assertEquals("last emission must be FINAL for '$query'", RetrievalStage.FINAL, updates.last().stage)
             assertEquals("FINAL must equal retrieve() for '$query'", expected, updates.last().result.items.ids())
             assertEquals("exactly one FINAL for '$query'", 1, updates.count { it.stage == RetrievalStage.FINAL })
@@ -106,7 +109,7 @@ class HybridSearchProgressiveTest {
 
         val seen = Channel<RetrievalUpdate>(Channel.UNLIMITED)
         val collector = launch(Dispatchers.Default) {
-            svc.retrieveProgressive(RetrievalRequest("invoice")).collect { seen.send(it) }
+            svc.retrieveProgressiveFull(RetrievalRequest("invoice")).collect { seen.send(it) }
             seen.close()
         }
 
@@ -136,22 +139,22 @@ class HybridSearchProgressiveTest {
         // Only "b" matches anything: the LEXICAL order equals the KEYWORD order.
         val only = listOf(item("b", "passport renewal form"))
         val svc = service(repo = FakeRepository(only), bm25 = listOf("b"), semantic = FakeSemantic(hasVectors = false))
-        val stages = svc.retrieveProgressive(RetrievalRequest("passport")).toList().map { it.stage }
+        val stages = svc.retrieveProgressiveFull(RetrievalRequest("passport")).toList().map { it.stage }
         assertEquals(listOf(RetrievalStage.KEYWORD, RetrievalStage.FINAL), stages)
     }
 
     @Test
     fun emptyVectorIndexSkipsTheQueryEmbedding() = runBlocking {
         val semantic = FakeSemantic(hasVectors = false)
-        val result = service(semantic = semantic).retrieve(RetrievalRequest("invoice"))
+        val result = service(semantic = semantic).retrieveFull(RetrievalRequest("invoice"))
         assertEquals("no model inference when the vector index is empty", 0, semantic.embedCalls)
         assertTrue(result.items.isNotEmpty())
     }
 
     @Test
     fun aFailingVectorLaneLeavesKeywordResults() = runBlocking {
-        val withFailure = service(semantic = FakeSemantic(fail = true)).retrieve(RetrievalRequest("invoice"))
-        val lexicalOnly = service(semantic = FakeSemantic(isReady = false)).retrieve(RetrievalRequest("invoice"))
+        val withFailure = service(semantic = FakeSemantic(fail = true)).retrieveFull(RetrievalRequest("invoice"))
+        val lexicalOnly = service(semantic = FakeSemantic(isReady = false)).retrieveFull(RetrievalRequest("invoice"))
         assertTrue(withFailure.items.isNotEmpty())
         assertEquals(lexicalOnly.items.ids(), withFailure.items.ids())
     }
@@ -167,8 +170,8 @@ class HybridSearchProgressiveTest {
         val svc = service(repo = FakeRepository(items), bm25 = listOf("z", "a", "m"),
             semantic = FakeSemantic(isReady = false))
         val everyEngineHit = RetrievalTuning(typoHelpOnlyForMissingWords = false)
-        assertEquals(listOf("z", "a", "m"), svc.retrieve(RetrievalRequest("budget", tuning = everyEngineHit)).items.ids())
-        assertTrue("and by default they are not listed at all", svc.retrieve(RetrievalRequest("budget")).items.isEmpty())
+        assertEquals(listOf("z", "a", "m"), svc.retrieveFull(RetrievalRequest("budget", tuning = everyEngineHit)).items.ids())
+        assertTrue("and by default they are not listed at all", svc.retrieveFull(RetrievalRequest("budget")).items.isEmpty())
     }
 
     /**
@@ -192,17 +195,17 @@ class HybridSearchProgressiveTest {
         val request = RetrievalRequest("budget", tuning = RetrievalTuning(typoHelpOnlyForMissingWords = false))
         fun service(filled: CompletableDeferred<Unit>, waits: Boolean) = HybridSearchService(
             FakeRepository(items), FillingLexical(filled, listOf("z", "a", "m"), waits),
-            FakeSemantic(isReady = false), BoostConfig(),
+            BoostConfig(), meaning = FakeSemantic(isReady = false),
         )
 
         val filled = CompletableDeferred<Unit>()
-        val answer = async(Dispatchers.Default) { service(filled, waits = true).retrieve(request).items.ids() }
+        val answer = async(Dispatchers.Default) { service(filled, waits = true).retrieveFull(request).items.ids() }
         assertEquals("no answer while the engine is being filled", null, withTimeoutOrNull(300) { answer.await() })
         filled.complete(Unit)
         assertEquals(listOf("z", "a", "m"), withTimeout(5_000) { answer.await() })
 
         // The control: asked without waiting, the same query lists nothing.
-        val early = service(CompletableDeferred(), waits = false).retrieve(request).items.ids()
+        val early = service(CompletableDeferred(), waits = false).retrieveFull(request).items.ids()
         assertEquals(emptyList<String>(), early)
     }
 }

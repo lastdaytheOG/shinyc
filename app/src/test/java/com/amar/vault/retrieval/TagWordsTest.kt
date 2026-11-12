@@ -42,13 +42,6 @@ class TagWordsTest {
         override suspend fun fts(query: String, limit: Int) = emptyList<String>()
     }
 
-    private object NoSemantic : SemanticRetriever {
-        override val isReady = false
-        override suspend fun embedQuery(query: String, trueLength: Boolean) = floatArrayOf()
-        override suspend fun embedText(text: String) = floatArrayOf()
-        override fun searchVectors(vector: FloatArray, k: Int) = emptyList<String>()
-    }
-
     private val notes = VaultItem(
         id = "notes_chunk0", uri = "content://docs/notes", ocrText = "minutes of the first meeting", lang = "en",
         itemType = ItemType.WORD, sourceFile = "notes.docx", timestamp = 0L, tags = "word document",
@@ -56,7 +49,7 @@ class TagWordsTest {
     )
 
     private fun found(typed: String) = runBlocking {
-        HybridSearchService(Repo(listOf(message, notes)), NoEngine, NoSemantic, BoostConfig())
+        HybridSearchService(Repo(listOf(message, notes)), NoEngine, BoostConfig())
             .retrieve(RetrievalRequest.forResultList(typed))
     }
 

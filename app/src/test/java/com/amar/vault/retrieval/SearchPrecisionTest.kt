@@ -28,6 +28,10 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [32])
 class SearchPrecisionTest {
+    private suspend fun RetrievalService.retrieveFull(r: RetrievalRequest) = retrieve(r.copy(tuning = r.tuning.copy(candidateBounded = false)))
+
+    private fun RetrievalService.retrieveProgressiveFull(r: RetrievalRequest) = retrieveProgressive(r.copy(tuning = r.tuning.copy(candidateBounded = false)))
+
 
     private val now = System.currentTimeMillis()
 
@@ -98,19 +102,12 @@ class SearchPrecisionTest {
         override suspend fun fts(query: String, limit: Int) = emptyList<String>()
     }
 
-    private object NoSemantic : SemanticRetriever {
-        override val isReady = false
-        override suspend fun embedQuery(query: String, trueLength: Boolean) = floatArrayOf()
-        override suspend fun embedText(text: String) = floatArrayOf()
-        override fun searchVectors(vector: FloatArray, k: Int) = emptyList<String>()
-    }
-
-    private val service = HybridSearchService(Repo(vault), EngineLike(vault), NoSemantic, BoostConfig())
+    private val service = HybridSearchService(Repo(vault), EngineLike(vault), BoostConfig())
 
     private fun result(typed: String, chip: String = SearchFilter.ALL) = runBlocking {
         val only: ((VaultItem) -> Boolean)? =
             if (chip == SearchFilter.ALL) null else { item -> SearchFilter.accepts(chip, item) }
-        service.retrieve(RetrievalRequest.forResultList(typed, only))
+        service.retrieveFull(RetrievalRequest.forResultList(typed, only))
     }
 
     /** The documents and pictures listed for [typed], best first. */
@@ -152,7 +149,7 @@ class SearchPrecisionTest {
     @Test
     fun theOldBehaviourIsStillThereToMeasureAgainst() = runBlocking {
         val before = RetrievalTuning(typoHelpOnlyForMissingWords = false)
-        val listed = service.retrieve(RetrievalRequest("claude", tuning = before)).items.map { it.parentDocumentId ?: it.id }
+        val listed = service.retrieveFull(RetrievalRequest("claude", tuning = before)).items.map { it.parentDocumentId ?: it.id }
         assertTrue("look-alikes were listed: $listed", "book" in listed && "syllabus" in listed)
     }
 
@@ -193,7 +190,7 @@ class SearchPrecisionTest {
     // ── Which page stands for a document ────────────────────────────────────────────────
 
     private fun rowsOf(pages: List<VaultItem>, typed: String, tuning: RetrievalTuning? = null) = runBlocking {
-        HybridSearchService(Repo(pages), EngineLike(pages), NoSemantic, BoostConfig()).retrieve(
+        HybridSearchService(Repo(pages), EngineLike(pages), BoostConfig()).retrieveFull(
             if (tuning == null) RetrievalRequest.forResultList(typed) else RetrievalRequest(typed, tuning = tuning)
         )
     }
@@ -296,8 +293,8 @@ class SearchPrecisionTest {
         val manual = (1..400).map { page("manual", it, "annual report section $it", "manual.pdf") }
         val picture = screenshot("whiteboard", "photo of the report on a whiteboard")
         val crowded = manual + picture
-        val service = HybridSearchService(Repo(crowded), EngineLike(crowded), NoSemantic, BoostConfig())
-        val images = service.retrieve(
+        val service = HybridSearchService(Repo(crowded), EngineLike(crowded), BoostConfig())
+        val images = service.retrieveFull(
             RetrievalRequest.forResultList("report") { SearchFilter.accepts(SearchFilter.IMAGES, it) }
         ).items.map { it.id }
         assertEquals(listOf("whiteboard"), images)
@@ -324,7 +321,7 @@ class SearchPrecisionTest {
     @Test
     fun withoutTheBonusTheCalendarIsNotFirst() = runBlocking {
         val before = RetrievalTuning(wordOrderBonus = false)
-        val listed = service.retrieve(RetrievalRequest("last working days", tuning = before)).items
+        val listed = service.retrieveFull(RetrievalRequest("last working days", tuning = before)).items
             .map { it.parentDocumentId ?: it.id }
         assertFalse("the bonus is what this ranking rests on: $listed", listed.first() == "calendar")
     }

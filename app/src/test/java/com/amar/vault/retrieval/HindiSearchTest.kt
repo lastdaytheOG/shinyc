@@ -47,13 +47,6 @@ class HindiSearchTest {
         override suspend fun fts(query: String, limit: Int) = emptyList<String>()
     }
 
-    private object NoSemantic : SemanticRetriever {
-        override val isReady = false
-        override suspend fun embedQuery(query: String, trueLength: Boolean) = floatArrayOf()
-        override suspend fun embedText(text: String) = floatArrayOf()
-        override fun searchVectors(vector: FloatArray, k: Int) = emptyList<String>()
-    }
-
     // One word, "qanoon", spelt the two ways Unicode allows. Stored text is NFC, in which its
     // first letter is KA (U+0915) followed by a nukta (U+093C); a keyboard may send the single
     // code point QA (U+0958) instead.
@@ -74,7 +67,7 @@ class HindiSearchTest {
 
     /** What the search box shows for [typed]: document, page it opens on, words shown. */
     private fun search(typed: String) = runBlocking {
-        val service = HybridSearchService(Repo(corpus), NoKeywordEngine, NoSemantic, BoostConfig())
+        val service = HybridSearchService(Repo(corpus), NoKeywordEngine, BoostConfig())
         val items = service.retrieve(RetrievalRequest.forResultList(typed)).items
         oneCardPerDocument(items, queryWordsOf(typed))
             .map { Triple(corpus.first { c -> c.id == it.row.id }.parentDocumentId, it.page, it.excerpt) }

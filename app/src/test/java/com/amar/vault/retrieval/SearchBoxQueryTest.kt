@@ -60,14 +60,7 @@ class SearchBoxQueryTest {
         override suspend fun fts(query: String, limit: Int) = emptyList<String>()
     }
 
-    private object NoSemantic : SemanticRetriever {
-        override val isReady = false
-        override suspend fun embedQuery(query: String, trueLength: Boolean) = floatArrayOf()
-        override suspend fun embedText(text: String) = floatArrayOf()
-        override fun searchVectors(vector: FloatArray, k: Int) = emptyList<String>()
-    }
-
-    private val service = HybridSearchService(Repo(vault), NoKeywordIndex, NoSemantic, BoostConfig())
+    private val service = HybridSearchService(Repo(vault), NoKeywordIndex, BoostConfig())
 
     /** What SearchViewModel sends for text typed into the search box. */
     private fun typed(text: String): List<String> = runBlocking {
