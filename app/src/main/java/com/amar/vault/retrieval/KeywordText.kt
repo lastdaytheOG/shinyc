@@ -21,11 +21,12 @@ object KeywordText {
         of(row.ocrText, row.tags, row.itemType, row.sourceFile, row.title)
 
     fun of(text: String, tags: String, type: ItemType, sourceFile: String?, title: String?): String =
-        "$text ${besidesTheText(tags, type, SearchableName.of(type, sourceFile, title))}"
+        "$text ${besidesTheText(tags, type, SearchableName.of(type, sourceFile, title), text)}"
 
     /** What a row is indexed by besides its text: [of] is the text, a space, and this. */
-    private fun besidesTheText(tags: String, type: ItemType, name: String): String =
-        "$tags ${type.stored} $name"
+    private fun besidesTheText(tags: String, type: ItemType, name: String, text: String): String =
+        if (Hinglish.isDevanagari(text) || Hinglish.isDevanagari(name)) "$tags ${type.stored} $name ${Hinglish.shadows("$text $name")}"
+        else "$tags ${type.stored} $name"
 
     /**
      * For many rows one after another, as when the engine is filled at start-up: what each is
@@ -44,7 +45,7 @@ object KeywordText {
             } else {
                 nameOfFile.getOrPut(row.sourceFile) { SearchableName.of(row.itemType, row.sourceFile, null) }
             }
-            return besidesTheText(row.tags, row.itemType, name)
+            return besidesTheText(row.tags, row.itemType, name, row.ocrText)
         }
     }
 }
