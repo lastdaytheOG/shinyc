@@ -72,6 +72,12 @@ object TemporalParser {
             "|(?:(?<![\\p{L}\\p{M}\\p{N}_])may\\s+\\d{1,2}(?:st|nd|rd|th)?(?![\\p{L}\\p{M}\\p{N}_]))"
     )
 
+    private val EITHER_DAY = setOf("kal", "कल")
+    private val FUTURE_VERB = Regex(
+        "(?<![\\p{L}\\p{M}\\p{N}_])(?!omega(?![a-z]))[a-z]{2,}(?:ega|egi|enge|unga|ungi|oge|ogi)(?![\\p{L}\\p{M}\\p{N}_])" +
+            "|(?:ेगा|ेगी|ेंगे|ूंगा|ूँगा|ूंगी|ूँगी|ोगे|ोगी|एगा|एगी|एंगे)(?![\\p{L}\\p{M}\\p{N}_])"
+    )
+
     private val QUOTED = Regex("\"([^\"]*)\"")
     /** Stands in for a quoted stretch while the rest is read: no letter, mark or digit. */
     private const val HELD = ''
@@ -119,6 +125,7 @@ object TemporalParser {
         for (period in PERIODS) {
             for (phrase in period.phrases) {
                 if (phrase in periodWordsOff) continue
+                if (phrase in EITHER_DAY && FUTURE_VERB.containsMatchIn(cleanedQuery)) continue
                 val regex = termRegex(phrase)
                 if (!regex.containsMatchIn(cleanedQuery)) continue
                 val range = period.range(now)
