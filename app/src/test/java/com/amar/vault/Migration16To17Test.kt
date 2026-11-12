@@ -109,14 +109,14 @@ class Migration16To17Test {
     @Test
     fun theSavedTableAndItsIndicesAreGone() {
         aVaultWithSavedThings()
-        val db = open(VaultDatabase.MIGRATION_16_17, VaultDatabase.MIGRATION_17_18)
+        val db = open(VaultDatabase.MIGRATION_16_17, VaultDatabase.MIGRATION_17_18, VaultDatabase.MIGRATION_18_19)
         assertEquals(emptyList<String>(), db.tablesAndIndicesNamedLike("%stash%"))
     }
 
     @Test
     fun everythingThatWasSavedIsStillInTheVault() = runBlocking {
         aVaultWithSavedThings()
-        val db = open(VaultDatabase.MIGRATION_16_17, VaultDatabase.MIGRATION_17_18)
+        val db = open(VaultDatabase.MIGRATION_16_17, VaultDatabase.MIGRATION_17_18, VaultDatabase.MIGRATION_18_19)
 
         val items = db.vaultDao().getAll().associateBy { it.id }
         assertEquals(setOf("receipt", "link", "beach"), items.keys)
@@ -128,7 +128,7 @@ class Migration16To17Test {
     @Test
     fun whatAPictureLooksLikeIsUntouched() = runBlocking {
         aVaultWithSavedThings()
-        val db = open(VaultDatabase.MIGRATION_16_17, VaultDatabase.MIGRATION_17_18)
+        val db = open(VaultDatabase.MIGRATION_16_17, VaultDatabase.MIGRATION_17_18, VaultDatabase.MIGRATION_18_19)
         assertEquals(
             listOf(PhotoVector("beach", "m1", 11L, byteArrayOf(1, -2, 3), 0.01f, madeAt = 5L)),
             db.photoVectorDao().allOf("m1"),
@@ -139,7 +139,7 @@ class Migration16To17Test {
     fun writingAnItemAgainAndRemovingItWorkWithNothingHangingOffIt() = runBlocking {
         // Before: writing a row again took its Saved entry with it, through the foreign key.
         aVaultWithSavedThings()
-        val db = open(VaultDatabase.MIGRATION_16_17, VaultDatabase.MIGRATION_17_18)
+        val db = open(VaultDatabase.MIGRATION_16_17, VaultDatabase.MIGRATION_17_18, VaultDatabase.MIGRATION_18_19)
         val receipt = db.vaultDao().getAll().single { it.id == "receipt" }
 
         db.vaultDao().insert(receipt.copy(ocrText = "Paid to Ravi 450 today"))
@@ -175,7 +175,7 @@ class Migration16To17Test {
     fun aVersion13VaultGoesAllTheWay() {
         V13Vault.create(context, name).close()
         val db = open(*VaultDatabase.migrations())
-        assertEquals(18, db.openHelper.readableDatabase.version)
+        assertEquals(19, db.openHelper.readableDatabase.version)
         assertEquals(emptyList<String>(), db.tablesAndIndicesNamedLike("%stash%"))
     }
 }
