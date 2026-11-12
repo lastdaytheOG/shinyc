@@ -12,11 +12,22 @@ interface SearchRepository {
     suspend fun getByIds(ids: List<String>): List<VaultItem>
     suspend fun allItemsSnapshot(): List<VaultItem>
 
+    suspend fun inSnapshotOrder(ids: List<String>): List<VaultItem> = getByIds(ids)
+
     /** Item ids whose DATE metadata falls in [startMs, endMs] (inclusive). */
     suspend fun dateRangeItemIds(startMs: Long, endMs: Long): List<String>
 
     /** Item ids that carry at least one DATE row — used to compute the "no-date" fallback set. */
     suspend fun itemIdsHavingDate(): Set<String>
+
+    suspend fun factRows(ids: List<String>, amounts: List<Double>): List<Triple<String, String, String>> = emptyList()
+
+    suspend fun amountBetweenIds(low: Double, high: Double): List<String> = amountGreaterThanIds(low - 0.001)
+
+    suspend fun undatedItemIdsInRange(startMs: Long, endMs: Long): List<String> {
+        val haveDate = itemIdsHavingDate()
+        return allItemsSnapshot().filter { it.id !in haveDate && it.timestamp in startMs..endMs }.map { it.id }
+    }
 
     suspend fun amountGreaterThanIds(value: Double): List<String>
 
@@ -40,8 +51,26 @@ class VaultSearchRepository(private val db: VaultDatabase) : SearchRepository {
 
     override suspend fun allItemsSnapshot(): List<VaultItem> = vaultDao.getAll()
 
+    override suspend fun inSnapshotOrder(ids: List<String>): List<VaultItem> =
+        ids.distinct().chunked(900).flatMap { vaultDao.getByIdsInSnapshotOrder(it) }
+            .sortedWith(compareByDescending { it.timestamp })
+
     override suspend fun dateRangeItemIds(startMs: Long, endMs: Long): List<String> =
         metaDao.findItemsByTypeAndTimestampRange("DATE", startMs, endMs)
+
+    override suspend fun undatedItemIdsInRange(startMs: Long, endMs: Long): List<String> =
+        vaultDao.undatedIdsInRange(startMs, endMs)
+
+    override suspend fun amountBetweenIds(low: Double, high: Double): List<String> =
+        vaultDao.amountBetweenIds(low, high)
+
+    override suspend fun factRows(ids: List<String>, amounts: List<Double>): List<Triple<String, String, String>> {
+        val facts = db.factDao()
+        val out = ArrayList<Triple<String, String, String>>()
+        for (id in ids) facts.textEquals(com.amar.vault.vectors.FactKind.ID_NUMBER, id).forEach { out += Triple(it.rowId, it.kind, it.valueText) }
+        for (a in amounts) facts.numbersBetween(com.amar.vault.vectors.FactKind.AMOUNT, a - 0.5, a + 0.5).forEach { out += Triple(it.rowId, it.kind, it.valueText) }
+        return out.distinctBy { it.first to it.second }
+    }
 
     override suspend fun itemIdsHavingDate(): Set<String> =
         metaDao.getItemIdsByType("DATE").toHashSet()
