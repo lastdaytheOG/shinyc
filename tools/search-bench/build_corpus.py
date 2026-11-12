@@ -205,6 +205,8 @@ def main():
 
     for q, spec in H.HINGLISH:
         case("hinglish", q, resolve(spec), {"lang": "hi-latn"})
+    for q, spec in H.HINGLISH_HELDOUT:
+        case("hinglish_heldout", q, resolve(spec), {"lang": "hi-latn"})
 
     exact_from = [it for it in items if it["kind"] != "photo"]
     R.shuffle(exact_from)
