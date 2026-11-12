@@ -1,10 +1,5 @@
 package com.amar.vault.indexing
 
-import android.content.Context
-import com.amar.vault.AppEmbeddingEngine
-import com.amar.vault.IndexMetrics
-import com.amar.vault.VaultLog
-import com.amar.vault.VectorSearchManager
 import com.amar.vault.retrieval.Bm25Index
 
 /**
@@ -38,38 +33,6 @@ data class IndexEntry(
  */
 interface IndexUpdater {
     suspend fun update(entries: List<IndexEntry>, onIndexed: suspend (Int) -> Unit = {})
-}
-
-/** Image path: embed each chunk and add it to the HNSW vector index, then persist mappings. */
-class VectorIndexUpdater(
-    private val context: Context,
-    private val vectorSearch: VectorSearchManager,
-) : IndexUpdater {
-
-    override suspend fun update(entries: List<IndexEntry>, onIndexed: suspend (Int) -> Unit) {
-        // No embedding model on this install: the item is already keyword-searchable (BM25
-        // was updated before this step), so there is simply nothing to add to the vector index.
-        if (!AppEmbeddingEngine.isAvailable(context)) return
-        if (!vectorSearch.initialized) {
-            VaultLog.w("IndexingPipeline", "VectorSearchManager not ready — initializing now")
-            vectorSearch.initialize()
-        }
-
-        val embedStart = System.currentTimeMillis()
-        entries.forEachIndexed { index, entry ->
-            val vector = AppEmbeddingEngine.embedPassage(context, entry.text)
-            val added = vectorSearch.indexVector(
-                entry.id, vector, entry.parentId, entry.chunkIndex, entry.totalChunks
-            )
-            VaultLog.v("IndexTiming", "Chunk $index indexed: $added")
-            onIndexed(index)
-        }
-        IndexMetrics.recordDuration(IndexMetrics.Timing.EMBED, System.currentTimeMillis() - embedStart)
-
-        // Coalesced: one mappings write per cool-down window instead of a full JSON rewrite
-        // per image. Batch flush points (worker saveState calls) remain immediate.
-        vectorSearch.persistIdMappingsDeferred()
-    }
 }
 
 /** Document path: add each chunk to the native BM25 index (no embedding). */
