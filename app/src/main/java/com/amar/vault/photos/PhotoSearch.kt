@@ -16,6 +16,13 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
+import com.amar.vault.retrieval.MeaningHit
+import com.amar.vault.retrieval.MeaningRetriever
+import com.amar.vault.retrieval.MeaningScan
 
 /**
  * Searching pictures by what is in them: the one owner of photo search's models, of the vectors
@@ -29,10 +36,18 @@ import java.io.File
  * Every picture's vector is stored in Room ([PhotoVector]); this holds those of the model in use
  * in a [PhotoIndex], filled from Room on first use and kept up to date as pictures are embedded.
  */
-class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
+class PhotoSearch(private val context: Context, private val db: VaultDatabase) : com.amar.vault.vectors.PassageSpace {
 
     private val files = PhotoModelFiles(context)
     private val encodeLock = Mutex()
+    private val sessions = ReentrantReadWriteLock()
+    private val queryCache = object : androidx.collection.LruCache<String, FloatArray>(32) {}
+    private val inFlight = HashMap<String, Deferred<FloatArray?>>()
+    private val textLoad = Mutex()
+    @Volatile private var textIndex: PhotoIndex? = null
+    private val textHashes = ConcurrentHashMap<String, String>()
+    @Volatile private var textAnchors: List<FloatArray> = emptyList()
+    @Volatile private var textEligible: Int = 0
 
     /**
      * Where the models load: not in the caller's coroutine. Each keystroke cancels the search
@@ -88,6 +103,7 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
             val idx = PhotoIndex(manifest.dim)
             idx.load(vectorsFor(manifest))
             generic = PhotoGate.GENERIC.map { q.encode(it) }
+            textAnchors = TEXT_ANCHORS.map { q.encode(it) }
             query = q; photo = p; index = idx
             VaultLog.i(TAG, "photo search ready: ${manifest.id}, ${idx.size} pictures")
             true
@@ -128,8 +144,8 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
         if (text.isBlank() || !ensureLoaded()) return emptyList()
         val idx = index ?: return emptyList()
         if (idx.size == 0) return emptyList()
+        val v = queryVector(text) ?: return emptyList()
         return withContext(Dispatchers.Default) {
-            val v = query!!.encode(text)
             PhotoGate.keep(idx.top(v, maxOf(k, CANDIDATES), only), generic, idx::vectorOf, margin = PhotoGate.marginFor(text)).take(k)
         }
     }
@@ -155,7 +171,7 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
         val manifest = files.manifest() ?: return false
         // One picture at a time: the model already uses several cores, and a burst of new
         // pictures run side by side would only fight over them.
-        val vector = encodeLock.withLock { withContext(Dispatchers.Default) { photo!!.encode(pixels) } }
+        val vector = encodeLock.withLock { withContext(Dispatchers.Default) { sessions.read { (photo ?: return@withContext null).encode(pixels) } } } ?: return false
         val (bytes, scale) = PhotoVectors.quantize(vector)
         db.photoVectorDao().upsert(PhotoVector(itemId, manifest.id, pHash, bytes, scale, System.currentTimeMillis()))
         index?.put(itemId, bytes, scale)
@@ -178,6 +194,124 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
     /** Pictures held in memory for search. */
     val indexed: Int get() = index?.size ?: 0
 
+    override val textModelId: String? get() = files.manifest()?.let { m ->
+        m.textModel ?: "eg2-text-${File(files.dir, m.queryModel + "_data").length()}"
+    }
+
+    suspend fun queryVector(text: String): FloatArray? {
+        if (text.isBlank() || !ensureLoaded()) return null
+        synchronized(queryCache) { queryCache.get(text) }?.let { return it }
+        val job = synchronized(inFlight) {
+            inFlight.getOrPut(text) {
+                loader.async(Dispatchers.Default) { sessions.read { query?.encode(text) } }
+            }
+        }
+        val v = try {
+            job.await()
+        } finally {
+            synchronized(inFlight) { if (inFlight[text] === job) inFlight.remove(text) }
+        }
+        if (v != null) synchronized(queryCache) { queryCache.put(text, v) }
+        return v
+    }
+
+    override suspend fun embedPassage(title: String?, text: String, maxTokens: Int): FloatArray? {
+        if (!ensureLoaded()) return null
+        return encodeLock.withLock { withContext(Dispatchers.Default) { sessions.read { query?.passage(title, text, maxTokens) } } }
+    }
+
+    override suspend fun textIndex(): PhotoIndex? {
+        textIndex?.let { return it }
+        if (!ensureLoaded()) return null
+        val model = textModelId ?: return null
+        return textLoad.withLock {
+            textIndex ?: run {
+                val dao = db.textVectorDao()
+                val rows = dao.allOf(model)
+                val idx = PhotoIndex(files.manifest()!!.dim)
+                idx.loadAll(rows.filter { it.part == 0 }.map { Triple(it.rowId, it.vector, it.scale) })
+                textHashes.clear()
+                rows.forEach { if (it.part == 0) textHashes[it.rowId] = it.textHash }
+                textEligible = idx.size + dao.countWithout(model, 2, com.amar.vault.vectors.TextPassages.MIN_CHARS)
+                textIndex = idx
+                VaultLog.i(TAG, "text vectors ready: ${idx.size} of $textEligible rows")
+                idx
+            }
+        }
+    }
+
+    override fun putText(rowId: String, bytes: ByteArray, scale: Float, hash: String) {
+        textIndex?.let { idx ->
+            val had = idx.contains(rowId)
+            idx.put(rowId, bytes, scale)
+            if (!had && textEligible < idx.size) textEligible = idx.size
+        }
+        textHashes[rowId] = hash
+    }
+
+    fun textHashOf(rowId: String): String? = textHashes[rowId]
+
+    override fun setTextEligible(count: Int) {
+        textEligible = count
+    }
+
+    val textCoverage: Float get() {
+        val held = textIndex?.size ?: return 0f
+        return if (textEligible <= 0) 1f else (held.toFloat() / textEligible).coerceAtMost(1f)
+    }
+
+    override fun forgetRows(rowIds: Collection<String>) {
+        if (rowIds.isEmpty()) return
+        textIndex?.let { idx -> rowIds.forEach { idx.remove(it) } }
+        index?.let { idx -> rowIds.forEach { idx.remove(it) } }
+        rowIds.forEach { textHashes.remove(it) }
+    }
+
+    fun release() {
+        sessions.write {
+            val q = query
+            val p = photo
+            query = null; photo = null; index = null; textIndex = null
+            synchronized(this) { loading = null }
+            synchronized(queryCache) { queryCache.evictAll() }
+            runCatching { q?.close() }
+            runCatching { p?.close() }
+        }
+        VaultLog.i(TAG, "search models released")
+    }
+
+    val meaning: MeaningRetriever = object : MeaningRetriever {
+        override val isReady: Boolean get() = this@PhotoSearch.isReady
+
+        override suspend fun scan(query: String, k: Int, only: ((String) -> Boolean)?): MeaningScan? {
+            val v = queryVector(query) ?: return null
+            val idx = textIndex() ?: return null
+            val anchors = textAnchors
+            return withContext(Dispatchers.Default) {
+                val s = idx.scan(v, k, only)
+                val hits = s.top.map { m ->
+                    val vec = idx.vectorOf(m.itemId)
+                    val margin = if (vec == null || anchors.isEmpty()) 0f else m.score - anchors.maxOf { dot(it, vec) }
+                    MeaningHit(m.itemId, m.score, margin)
+                }
+                MeaningScan(hits, s.mean, s.deviation, s.count, textCoverage)
+            }
+        }
+
+        override fun isCurrent(row: com.amar.vault.VaultItem): Boolean =
+            textHashes[row.id] == com.amar.vault.vectors.TextPassages.hash(com.amar.vault.vectors.TextPassages.of(row))
+
+        override fun clearCaches() {
+            synchronized(queryCache) { queryCache.evictAll() }
+        }
+    }
+
+    private fun dot(a: FloatArray, b: FloatArray): Float {
+        var s = 0f
+        for (i in a.indices) s += a[i] * b[i]
+        return s
+    }
+
     /** Encoders for Developer Tools' timing; null without models. */
     suspend fun encodersForBenchmark(): Pair<QueryEncoder, PhotoEncoder>? =
         if (ensureLoaded()) query!! to photo!! else null
@@ -187,6 +321,10 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
         private const val TAG = "PhotoSearch"
         /** The most alike photos [PhotoGate] looks at, before it keeps the ones that match. */
         private const val CANDIDATES = 48
+        val TEXT_ANCHORS = listOf(
+            "a document", "some text", "a page of a document", "a screenshot", "a file", "a message",
+            "एक दस्तावेज़", "कुछ लिखा हुआ", "ek document",
+        )
     }
 }
 
@@ -198,6 +336,7 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) {
 data class PhotoModelManifest(
     val id: String, val dim: Int, val inputSize: Int, val queryModel: String, val photoModel: String,
     val sameSpaceAs: List<String> = emptyList(),
+    val textModel: String? = null,
 ) {
     /** The files it names, apart from itself. */
     val files: List<String> get() = listOf(PhotoModelFiles.TOKENIZER, queryModel, "${queryModel}_data", photoModel)
@@ -240,6 +379,7 @@ class PhotoModelFiles internal constructor(
             id = j.getString("id"), dim = j.getInt("dim"), inputSize = j.getInt("inputSize"),
             queryModel = j.getString("queryModel"), photoModel = j.getString("photoModel"),
             sameSpaceAs = if (same == null) emptyList() else List(same.length()) { same.getString(it) },
+            textModel = j.optString("textModel").takeIf { it.isNotEmpty() },
         )
     }
 
@@ -268,7 +408,22 @@ class PhotoModelFiles internal constructor(
     }
 
     private fun complete(m: PhotoModelManifest): Boolean =
-        tokenizer().exists() && File(dir, m.queryModel).exists() && File(dir, m.photoModel).exists()
+        tokenizer().exists() && File(dir, m.queryModel).exists() && File(dir, m.photoModel).exists() && sizesMatch()
+
+    fun sizesMatch(): Boolean {
+        val listed = File(dir, PhotoModelDownloader.FILES_JSON).takeIf { it.exists() } ?: return true
+        return try {
+            val files = JSONObject(listed.readText()).getJSONArray("files")
+            (0 until files.length()).all { i ->
+                val f = files.getJSONObject(i)
+                val name = f.getString("name")
+                name == MANIFEST || File(dir, name).let { !it.exists() || it.length() == f.getLong("size") }
+            }
+        } catch (e: Exception) {
+            VaultLog.w("PhotoSearch", "unreadable model file list: ${e.message}")
+            false
+        }
+    }
 
     fun tokenizer(): File = File(dir, TOKENIZER)
     fun queryModel(): File = File(dir, manifest()!!.queryModel)
