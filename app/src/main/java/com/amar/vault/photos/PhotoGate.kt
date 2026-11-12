@@ -62,9 +62,10 @@ object PhotoGate {
         gap: Float = VaultConfig.Retrieval.PHOTO_BEST_GAP,
     ): List<PhotoMatch> {
         if (generic.isEmpty()) return candidates
-        val matches = candidates.filter { c ->
-            val v = vectorOf(c.itemId) ?: return@filter false
-            c.score - generic.maxOf { dot(it, v) } >= margin
+        val matches = candidates.mapNotNull { c ->
+            val v = vectorOf(c.itemId) ?: return@mapNotNull null
+            val m = c.score - generic.maxOf { dot(it, v) }
+            if (m >= margin) c.copy(margin = m) else null
         }
         val best = matches.maxOfOrNull { it.score } ?: return emptyList()
         return matches.filter { it.score >= best - gap }
