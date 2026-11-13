@@ -10,8 +10,8 @@ import com.amar.vault.isDocumentPiece
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withTimeoutOrNull
@@ -291,7 +291,9 @@ class HybridSearchService(
                 typedWords.any { Hinglish.isMarker(it.bare) }
             if (!readsAsHinglish) return@async hinglish
             try {
-                Hinglish.Query(hinglishTyped, hinglishTyped.map { w -> ensureActive(); Hinglish.keysFor(w, guesser) })
+                Hinglish.Query(hinglishTyped, coroutineScope {
+                    hinglishTyped.map { w -> async { Hinglish.keysFor(w, guesser) } }.awaitAll()
+                })
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

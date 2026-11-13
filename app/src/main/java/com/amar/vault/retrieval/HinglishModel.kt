@@ -61,9 +61,9 @@ class HinglishModel private constructor(
         repeat(MAX_OUT) {
             if (beams.isEmpty()) return@repeat
             val cand = ArrayList<Candidate>()
-            for (b in beams) {
-                val (logp, h, ctx) = step(b.tokens.last(), b.h, b.ctx, encOut)
-                for (tok in topIndices(logp, width)) cand += Candidate(b.score + logp[tok], b.tokens + tok, h, ctx)
+            val stepped = stepAll(beams, encOut)
+            for ((b, s) in beams.zip(stepped)) {
+                for (tok in topIndices(s.logp, width)) cand += Candidate(b.score + s.logp[tok], b.tokens + tok, s.h, s.ctx)
             }
             val sorted = cand.sortedByDescending { it.score }
             val next = ArrayList<Beam>()
@@ -86,29 +86,75 @@ class HinglishModel private constructor(
         }
 
     private fun topIndices(values: FloatArray, k: Int): IntArray {
-        val order = values.indices.sortedWith(compareByDescending<Int> { values[it] }.thenBy { it })
-        return order.take(k).toIntArray()
+        val count = minOf(k, values.size)
+        val taken = BooleanArray(values.size)
+        return IntArray(count) {
+            var best = -1
+            for (v in values.indices) {
+                if (!taken[v] && (best < 0 || values[v] > values[best])) best = v
+            }
+            taken[best] = true
+            best
+        }
     }
 
-    private fun step(token: Int, hPrev: FloatArray, ctxPrev: FloatArray, encOut: Array<FloatArray>): Triple<FloatArray, FloatArray, FloatArray> {
-        val gi = decGates[token].copyOf()
-        if (feed && cellCtxW != null) {
-            val width = 2 * enc
-            for (i in gi.indices) {
-                var s = 0f
-                val row = i * width
-                for (j in 0 until width) s += cellCtxW[row + j] * ctxPrev[j]
-                gi[i] += s
+    private class Stepped(val logp: FloatArray, val h: FloatArray, val ctx: FloatArray)
+
+    private fun stepAll(beams: List<Beam>, encOut: Array<FloatArray>): List<Stepped> =
+        beams.map { beam ->
+            val gi = decGates[beam.tokens.last()].copyOf()
+            if (feed && cellCtxW != null) {
+                val fed = matVec(cellCtxW, null, 3 * dec, 2 * enc, beam.ctx)
+                for (i in gi.indices) gi[i] += fed[i]
             }
+            val h = combine(gi, matVec(cellWhh, cellBhh, 3 * dec, dec, beam.h), beam.h, dec)
+            val ctx = attend(matVec(attnW, null, 2 * enc, dec, h), encOut)
+            val logits = matVec(outW, outB, vocab, dec + 2 * enc, h + ctx)
+            var top = Float.NEGATIVE_INFINITY
+            for (v in logits.indices) if (logits[v] > top) top = logits[v]
+            var total = 0.0
+            for (v in logits.indices) total += exp((logits[v] - top).toDouble())
+            val norm = top + ln(total).toFloat()
+            for (v in logits.indices) logits[v] -= norm
+            Stepped(logits, h, ctx)
         }
-        val h = gru(gi, hPrev, cellWhh, cellBhh, dec)
-        val q = FloatArray(2 * enc)
-        for (i in q.indices) {
-            var s = 0f
-            val row = i * dec
-            for (j in 0 until dec) s += attnW[row + j] * h[j]
-            q[i] = s
+
+    private fun matVec(w: FloatArray, bias: FloatArray?, rows: Int, cols: Int, x: FloatArray): FloatArray {
+        val out = FloatArray(rows)
+        var i = 0
+        while (i + 4 <= rows) {
+            var s0 = if (bias == null) 0f else bias[i]
+            var s1 = if (bias == null) 0f else bias[i + 1]
+            var s2 = if (bias == null) 0f else bias[i + 2]
+            var s3 = if (bias == null) 0f else bias[i + 3]
+            val r0 = i * cols
+            val r1 = r0 + cols
+            val r2 = r1 + cols
+            val r3 = r2 + cols
+            for (j in 0 until cols) {
+                val xj = x[j]
+                s0 += w[r0 + j] * xj
+                s1 += w[r1 + j] * xj
+                s2 += w[r2 + j] * xj
+                s3 += w[r3 + j] * xj
+            }
+            out[i] = s0
+            out[i + 1] = s1
+            out[i + 2] = s2
+            out[i + 3] = s3
+            i += 4
         }
+        while (i < rows) {
+            var s = if (bias == null) 0f else bias[i]
+            val r = i * cols
+            for (j in 0 until cols) s += w[r + j] * x[j]
+            out[i] = s
+            i++
+        }
+        return out
+    }
+
+    private fun attend(q: FloatArray, encOut: Array<FloatArray>): FloatArray {
         val scores = FloatArray(encOut.size)
         var best = Float.NEGATIVE_INFINITY
         for (t in encOut.indices) {
@@ -129,32 +175,13 @@ class HinglishModel private constructor(
             val e = encOut[t]
             for (j in ctx.indices) ctx[j] += a * e[j]
         }
-        val logits = FloatArray(vocab)
-        val width = dec + 2 * enc
-        var top = Float.NEGATIVE_INFINITY
-        for (v in 0 until vocab) {
-            var s = outB[v]
-            val row = v * width
-            for (j in 0 until dec) s += outW[row + j] * h[j]
-            for (j in 0 until 2 * enc) s += outW[row + dec + j] * ctx[j]
-            logits[v] = s
-            if (s > top) top = s
-        }
-        var total = 0.0
-        for (v in logits.indices) total += exp((logits[v] - top).toDouble())
-        val norm = top + ln(total).toFloat()
-        for (v in logits.indices) logits[v] -= norm
-        return Triple(logits, h, ctx)
+        return ctx
     }
 
-    private fun gru(gi: FloatArray, h: FloatArray, whh: FloatArray, bhh: FloatArray, size: Int): FloatArray {
-        val gh = FloatArray(3 * size)
-        for (i in 0 until 3 * size) {
-            var s = bhh[i]
-            val row = i * size
-            for (j in 0 until size) s += whh[row + j] * h[j]
-            gh[i] = s
-        }
+    private fun gru(gi: FloatArray, h: FloatArray, whh: FloatArray, bhh: FloatArray, size: Int): FloatArray =
+        combine(gi, matVec(whh, bhh, 3 * size, size, h), h, size)
+
+    private fun combine(gi: FloatArray, gh: FloatArray, h: FloatArray, size: Int): FloatArray {
         val out = FloatArray(size)
         for (i in 0 until size) {
             val r = sigmoid(gi[i] + gh[i])
