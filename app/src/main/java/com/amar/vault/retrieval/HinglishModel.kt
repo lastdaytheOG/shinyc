@@ -12,6 +12,7 @@ class HinglishModel private constructor(
     private val enc: Int,
     private val dec: Int,
     private val vocab: Int,
+    private val symbols: List<String>,
     private val feed: Boolean,
     private val encGates: Array<Array<FloatArray>>,
     private val encWhh: Array<FloatArray>,
@@ -27,7 +28,7 @@ class HinglishModel private constructor(
     private val outB: FloatArray,
 ) {
 
-    class Guess(val key: String, val chance: Double)
+    class Guess(val text: String, val chance: Double)
 
     private class Beam(val score: Double, val tokens: IntArray, val h: FloatArray, val ctx: FloatArray)
 
@@ -60,9 +61,9 @@ class HinglishModel private constructor(
         repeat(MAX_OUT) {
             if (beams.isEmpty()) return@repeat
             val cand = ArrayList<Candidate>()
-            for (b in beams) {
-                val (logp, h, ctx) = step(b.tokens.last(), b.h, b.ctx, encOut)
-                for (tok in topIndices(logp, width)) cand += Candidate(b.score + logp[tok], b.tokens + tok, h, ctx)
+            val stepped = stepAll(beams, encOut)
+            for ((b, s) in beams.zip(stepped)) {
+                for (tok in topIndices(s.logp, width)) cand += Candidate(b.score + s.logp[tok], b.tokens + tok, s.h, s.ctx)
             }
             val sorted = cand.sortedByDescending { it.score }
             val next = ArrayList<Beam>()
@@ -81,33 +82,79 @@ class HinglishModel private constructor(
 
     private fun guessesOf(done: List<Pair<Double, IntArray>>): List<Guess> =
         done.filter { it.second.size > 2 }.map { (score, tokens) ->
-            Guess(String(CharArray(tokens.size - 2) { 'a' + (tokens[it + 1] - FIRST_LETTER) }), exp(score))
+            Guess((1 until tokens.size - 1).joinToString("") { symbols[tokens[it] - FIRST_LETTER] }, exp(score))
         }
 
     private fun topIndices(values: FloatArray, k: Int): IntArray {
-        val order = values.indices.sortedWith(compareByDescending<Int> { values[it] }.thenBy { it })
-        return order.take(k).toIntArray()
+        val count = minOf(k, values.size)
+        val taken = BooleanArray(values.size)
+        return IntArray(count) {
+            var best = -1
+            for (v in values.indices) {
+                if (!taken[v] && (best < 0 || values[v] > values[best])) best = v
+            }
+            taken[best] = true
+            best
+        }
     }
 
-    private fun step(token: Int, hPrev: FloatArray, ctxPrev: FloatArray, encOut: Array<FloatArray>): Triple<FloatArray, FloatArray, FloatArray> {
-        val gi = decGates[token].copyOf()
-        if (feed && cellCtxW != null) {
-            val width = 2 * enc
-            for (i in gi.indices) {
-                var s = 0f
-                val row = i * width
-                for (j in 0 until width) s += cellCtxW[row + j] * ctxPrev[j]
-                gi[i] += s
+    private class Stepped(val logp: FloatArray, val h: FloatArray, val ctx: FloatArray)
+
+    private fun stepAll(beams: List<Beam>, encOut: Array<FloatArray>): List<Stepped> =
+        beams.map { beam ->
+            val gi = decGates[beam.tokens.last()].copyOf()
+            if (feed && cellCtxW != null) {
+                val fed = matVec(cellCtxW, null, 3 * dec, 2 * enc, beam.ctx)
+                for (i in gi.indices) gi[i] += fed[i]
             }
+            val h = combine(gi, matVec(cellWhh, cellBhh, 3 * dec, dec, beam.h), beam.h, dec)
+            val ctx = attend(matVec(attnW, null, 2 * enc, dec, h), encOut)
+            val logits = matVec(outW, outB, vocab, dec + 2 * enc, h + ctx)
+            var top = Float.NEGATIVE_INFINITY
+            for (v in logits.indices) if (logits[v] > top) top = logits[v]
+            var total = 0.0
+            for (v in logits.indices) total += exp((logits[v] - top).toDouble())
+            val norm = top + ln(total).toFloat()
+            for (v in logits.indices) logits[v] -= norm
+            Stepped(logits, h, ctx)
         }
-        val h = gru(gi, hPrev, cellWhh, cellBhh, dec)
-        val q = FloatArray(2 * enc)
-        for (i in q.indices) {
-            var s = 0f
-            val row = i * dec
-            for (j in 0 until dec) s += attnW[row + j] * h[j]
-            q[i] = s
+
+    private fun matVec(w: FloatArray, bias: FloatArray?, rows: Int, cols: Int, x: FloatArray): FloatArray {
+        val out = FloatArray(rows)
+        var i = 0
+        while (i + 4 <= rows) {
+            var s0 = if (bias == null) 0f else bias[i]
+            var s1 = if (bias == null) 0f else bias[i + 1]
+            var s2 = if (bias == null) 0f else bias[i + 2]
+            var s3 = if (bias == null) 0f else bias[i + 3]
+            val r0 = i * cols
+            val r1 = r0 + cols
+            val r2 = r1 + cols
+            val r3 = r2 + cols
+            for (j in 0 until cols) {
+                val xj = x[j]
+                s0 += w[r0 + j] * xj
+                s1 += w[r1 + j] * xj
+                s2 += w[r2 + j] * xj
+                s3 += w[r3 + j] * xj
+            }
+            out[i] = s0
+            out[i + 1] = s1
+            out[i + 2] = s2
+            out[i + 3] = s3
+            i += 4
         }
+        while (i < rows) {
+            var s = if (bias == null) 0f else bias[i]
+            val r = i * cols
+            for (j in 0 until cols) s += w[r + j] * x[j]
+            out[i] = s
+            i++
+        }
+        return out
+    }
+
+    private fun attend(q: FloatArray, encOut: Array<FloatArray>): FloatArray {
         val scores = FloatArray(encOut.size)
         var best = Float.NEGATIVE_INFINITY
         for (t in encOut.indices) {
@@ -128,32 +175,13 @@ class HinglishModel private constructor(
             val e = encOut[t]
             for (j in ctx.indices) ctx[j] += a * e[j]
         }
-        val logits = FloatArray(vocab)
-        val width = dec + 2 * enc
-        var top = Float.NEGATIVE_INFINITY
-        for (v in 0 until vocab) {
-            var s = outB[v]
-            val row = v * width
-            for (j in 0 until dec) s += outW[row + j] * h[j]
-            for (j in 0 until 2 * enc) s += outW[row + dec + j] * ctx[j]
-            logits[v] = s
-            if (s > top) top = s
-        }
-        var total = 0.0
-        for (v in logits.indices) total += exp((logits[v] - top).toDouble())
-        val norm = top + ln(total).toFloat()
-        for (v in logits.indices) logits[v] -= norm
-        return Triple(logits, h, ctx)
+        return ctx
     }
 
-    private fun gru(gi: FloatArray, h: FloatArray, whh: FloatArray, bhh: FloatArray, size: Int): FloatArray {
-        val gh = FloatArray(3 * size)
-        for (i in 0 until 3 * size) {
-            var s = bhh[i]
-            val row = i * size
-            for (j in 0 until size) s += whh[row + j] * h[j]
-            gh[i] = s
-        }
+    private fun gru(gi: FloatArray, h: FloatArray, whh: FloatArray, bhh: FloatArray, size: Int): FloatArray =
+        combine(gi, matVec(whh, bhh, 3 * size, size, h), h, size)
+
+    private fun combine(gi: FloatArray, gh: FloatArray, h: FloatArray, size: Int): FloatArray {
         val out = FloatArray(size)
         for (i in 0 until size) {
             val r = sigmoid(gi[i] + gh[i])
@@ -167,7 +195,7 @@ class HinglishModel private constructor(
     private fun sigmoid(x: Float): Float = 1f / (1f + exp(-x))
 
     companion object {
-        private const val MAGIC = 0x484C5431
+        private const val MAGIC = 0x484C5432
         private const val BOS = 1
         private const val EOS = 2
         private const val FIRST_LETTER = 3
@@ -176,22 +204,30 @@ class HinglishModel private constructor(
 
         fun read(input: InputStream): HinglishModel {
             val data = DataInputStream(input.buffered())
-            val header = ByteArray(24)
+            val header = ByteArray(28)
             data.readFully(header)
             val hb = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
             require(hb.int == MAGIC) { "not a Hinglish model" }
             val emb = hb.int
             val enc = hb.int
             val dec = hb.int
+            val inVocab = hb.int
             val vocab = hb.int
             val feed = hb.int == 1
+            val symbols = List(vocab - FIRST_LETTER) {
+                val lb = ByteArray(2)
+                data.readFully(lb)
+                val bytes = ByteArray(ByteBuffer.wrap(lb).order(ByteOrder.LITTLE_ENDIAN).short.toInt() and 0xFFFF)
+                data.readFully(bytes)
+                String(bytes, Charsets.UTF_8)
+            }
             fun tensor(n: Int): FloatArray {
                 val bytes = ByteArray(2 * n)
                 data.readFully(bytes)
                 val b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
                 return FloatArray(n) { halfToFloat(b.short.toInt() and 0xFFFF) }
             }
-            val srcEmb = tensor(vocab * emb)
+            val srcEmb = tensor(inVocab * emb)
             val encWih = Array(2) { FloatArray(0) }
             val encWhh = Array(2) { FloatArray(0) }
             val encBih = Array(2) { FloatArray(0) }
@@ -214,14 +250,14 @@ class HinglishModel private constructor(
             val outW = tensor(vocab * (dec + 2 * enc))
             val outB = tensor(vocab)
             val encGates = Array(2) { d ->
-                Array(vocab) { v -> project(encWih[d], encBih[d], srcEmb, v * emb, emb, 3 * enc, emb) }
+                Array(inVocab) { v -> project(encWih[d], encBih[d], srcEmb, v * emb, emb, 3 * enc, emb) }
             }
             val decGates = Array(vocab) { v -> project(cellWih, cellBih, tgtEmb, v * emb, emb, 3 * dec, inDim) }
             val cellCtxW = if (feed) FloatArray(3 * dec * 2 * enc) { i ->
                 val row = i / (2 * enc)
                 cellWih[row * inDim + emb + i % (2 * enc)]
             } else null
-            return HinglishModel(enc, dec, vocab, feed, encGates, encWhh, encBhh, bridgeW, bridgeB, decGates,
+            return HinglishModel(enc, dec, vocab, symbols, feed, encGates, encWhh, encBhh, bridgeW, bridgeB, decGates,
                 cellCtxW, cellWhh, cellBhh, attnW, outW, outB)
         }
 
@@ -258,19 +294,51 @@ class HinglishModel private constructor(
 
 class ModelSpellings(
     private val load: () -> HinglishModel?,
-    private val width: Int = 4,
+    private val vault: KnownWords? = null,
+    private val width: Int = 8,
     private val minChance: Double = 0.1,
+    private val floor: Double = 0.01,
+    private val ratio: Double = 0.5,
 ) : SpellingGuesser {
 
+    private class Reading(val keys: List<String>, val hindi: String?)
+
     private val model by lazy { runCatching { load() }.getOrNull() }
-    private val remembered = object : LinkedHashMap<String, List<String>>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<String>>?) = size > 512
+    private val remembered = object : LinkedHashMap<String, Reading>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Reading>?) = size > 512
     }
 
-    override fun keys(word: String): List<String> {
+    override fun keys(word: String): List<String> = read(word).keys
+
+    override fun hindi(word: String): String? = read(word).hindi
+
+    private fun read(word: String): Reading {
         synchronized(remembered) { remembered[word]?.let { return it } }
-        val found = model?.guesses(word, width)?.filter { it.chance >= minChance }?.map { it.key }.orEmpty()
-        synchronized(remembered) { remembered[word] = found }
-        return found
+        val byKey = LinkedHashMap<String, Pair<String, Double>>()
+        for (g in model?.guesses(word, width).orEmpty()) {
+            val k = Hinglish.key(g.text)
+            val kept = byKey[k]
+            byKey[k] = (kept?.first ?: g.text) to ((kept?.second ?: 0.0) + g.chance)
+        }
+        val ranked = byKey.entries.sortedByDescending { it.value.second }
+        val known = vault?.takeUnless { it.isEmpty }
+        val inVault = if (known == null) emptyList() else ranked.filter { known.has(it.key) }
+        val keys = if (known == null) {
+            ranked.filter { it.value.second >= minChance }.map { it.key }
+        } else {
+            val best = inVault.firstOrNull()?.value?.second ?: 0.0
+            inVault.filter { it.value.second >= maxOf(floor, ratio * best) }.map { it.key }
+        }
+        val top = ranked.firstOrNull()?.value
+        val vaultTop = inVault.firstOrNull()?.value
+        val hindi = when {
+            top == null -> null
+            vaultTop != null && vaultTop.second >= ratio * top.second -> vaultTop.first
+            top.second >= minChance -> top.first
+            else -> null
+        }
+        val reading = Reading(keys, hindi)
+        synchronized(remembered) { remembered[word] = reading }
+        return reading
     }
 }

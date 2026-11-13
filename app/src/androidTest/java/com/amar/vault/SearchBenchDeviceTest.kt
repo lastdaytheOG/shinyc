@@ -187,6 +187,7 @@ class SearchBenchDeviceTest {
         "nobridge" -> RetrievalTuning(hinglishBridge = false)
         "hlold" -> RetrievalTuning(hinglishSaid = false)
         "hlrules" -> RetrievalTuning(hinglishModel = false)
+        "hlnolanes" -> RetrievalTuning(hinglishLanes = false)
         else -> error("unknown config $config")
     }
 }

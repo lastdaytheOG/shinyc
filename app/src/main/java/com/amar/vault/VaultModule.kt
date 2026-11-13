@@ -112,7 +112,7 @@ object VaultModule {
     fun provideSpellingGuesser(@ApplicationContext context: Context): com.amar.vault.retrieval.SpellingGuesser =
         com.amar.vault.retrieval.ModelSpellings({
             context.assets.open("hinglish/translit.bin").use { com.amar.vault.retrieval.HinglishModel.read(it) }
-        })
+        }, vault = com.amar.vault.retrieval.HindiVocabulary)
 
     @Provides
     @Singleton

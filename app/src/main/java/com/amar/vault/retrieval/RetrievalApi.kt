@@ -60,6 +60,7 @@ data class RetrievalTuning(
     val hinglishBridge: Boolean = VaultConfig.Retrieval.HINGLISH_BRIDGE,
     val hinglishSaid: Boolean = VaultConfig.Retrieval.HINGLISH_SAID,
     val hinglishModel: Boolean = VaultConfig.Retrieval.HINGLISH_MODEL,
+    val hinglishLanes: Boolean = VaultConfig.Retrieval.HINGLISH_LANES,
     val factsLane: Boolean = VaultConfig.Retrieval.FACTS_LANE,
     val learning: Boolean = true,
 )

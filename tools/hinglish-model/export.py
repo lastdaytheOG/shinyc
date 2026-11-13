@@ -8,7 +8,7 @@ import torch
 from evaluate import load
 from model import VOCAB
 
-MAGIC = 0x484C5431
+MAGIC = 0x484C5432
 
 REFERENCE_WORDS = [
     "paani", "pani", "bijli", "bijlee", "pehchan", "patra", "mehndi", "parcel", "shaadi", "shadi", "chhutti",
@@ -47,8 +47,14 @@ def main():
     feed = 1 if model.feed else 0
     out = pathlib.Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
+    symbols = model.symbols
+    assert symbols, "export needs a model that writes Hindi"
     with open(out, "wb") as f:
-        f.write(struct.pack("<6i", MAGIC, emb, enc, dec, VOCAB, feed))
+        f.write(struct.pack("<7i", MAGIC, emb, enc, dec, VOCAB, 3 + len(symbols), feed))
+        for sym in symbols:
+            b = sym.encode("utf-8")
+            f.write(struct.pack("<H", len(b)))
+            f.write(b)
         for t in tensors(model):
             f.write(t.numpy().astype("<f2").tobytes())
     tab, newline = chr(9), chr(10)

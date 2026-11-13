@@ -12,6 +12,8 @@ import torch.nn as nn
 from model import BOS, EOS, LETTERS, MAX_IN, MAX_OUT, PAD, Translit, encode
 from rules import key
 
+HINDI_LETTERS = [chr(c) for c in range(0x0900, 0x0980)]
+
 HUMAN = {"Dakshina", "AK-Freq"}
 
 
@@ -33,14 +35,38 @@ def read_pairs(path, human_weight=1):
     return out
 
 
-def batches(pairs, size, shuffle=True):
+def hindi_target(native):
+    return "".join(c for c in unicodedata.normalize("NFC", native) if "\u0900" <= c <= "\u097f")
+
+
+def distilled(folder, floor, weight, held):
+    out = []
+    for path in sorted(pathlib.Path(folder).glob("shard*.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            r = json.loads(line)
+            if r["w"] in held or not r["g"]:
+                continue
+            raws = [g[1] for g in r["g"]]
+            top = max(raws)
+            z = sum(math.exp(x - top) for x in raws)
+            for d, raw in r["g"]:
+                p = math.exp(raw - top) / z
+                t = hindi_target(d)
+                if p >= floor and t and len(t) <= MAX_OUT - 2:
+                    out.append((r["w"], t, "teacher", d, p * weight))
+    return out
+
+
+def batches(pairs, size, shuffle=True, ids=encode):
     order = sorted(range(len(pairs)), key=lambda i: (len(pairs[i][0]), random.random() if shuffle else 0))
     chunks = [order[i:i + size] for i in range(0, len(order), size)]
     if shuffle:
         random.shuffle(chunks)
     for chunk in chunks:
         src = [encode(pairs[i][0]) for i in chunk]
-        tgt = [encode(pairs[i][1]) for i in chunk]
+        tgt = [ids(pairs[i][1]) for i in chunk]
         s_len = max(len(s) for s in src)
         t_len = max(len(t) for t in tgt) + 1
         src_t = torch.full((len(chunk), s_len), PAD, dtype=torch.long)
@@ -50,7 +76,8 @@ def batches(pairs, size, shuffle=True):
             src_t[j, :len(s)] = torch.tensor(s)
             tin[j, :len(t) + 1] = torch.tensor([BOS] + t)
             tout[j, :len(t) + 1] = torch.tensor(t + [EOS])
-        yield src_t, torch.tensor([len(s) for s in src]), tin, tout
+        weights = torch.tensor([pairs[i][4] if len(pairs[i]) > 4 else 1.0 for i in chunk])
+        yield src_t, torch.tensor([len(s) for s in src]), tin, tout, weights
 
 
 def evaluate(model, pairs, size=1024):
@@ -58,7 +85,7 @@ def evaluate(model, pairs, size=1024):
     loss_fn = nn.CrossEntropyLoss(ignore_index=PAD, reduction="sum")
     total, tokens, right = 0.0, 0, 0
     with torch.no_grad():
-        for src, lengths, tin, tout in batches(pairs, size, shuffle=False):
+        for src, lengths, tin, tout, _ in batches(pairs, size, shuffle=False, ids=model.out_ids):
             logits = model(src, lengths, tin)
             total += loss_fn(logits.reshape(-1, logits.size(-1)), tout.reshape(-1)).item()
             tokens += (tout != PAD).sum().item()
@@ -83,6 +110,10 @@ def main():
     ap.add_argument("--human-weight", type=int, default=4)
     ap.add_argument("--threads", type=int, default=8)
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--target", choices=["key", "hindi"], default="key")
+    ap.add_argument("--distill", default=None)
+    ap.add_argument("--teacher-floor", type=float, default=0.1)
+    ap.add_argument("--teacher-weight", type=float, default=1.0)
     a = ap.parse_args()
     torch.set_num_threads(a.threads)
     random.seed(1)
@@ -91,27 +122,40 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     data = pathlib.Path(a.data)
     train = read_pairs(data / "hin_train.json", a.human_weight)
+    valid = read_pairs(data / "hin_valid.json")
+    symbols = None
+    if a.target == "hindi":
+        held = {p[0] for f in ("hin_valid.json", "hin_test.json") for p in read_pairs(data / f)}
+        train = [(l, hindi_target(n), s, n) for l, k, s, n in train if hindi_target(n)]
+        valid = [(l, hindi_target(n), s, n) for l, k, s, n in valid if hindi_target(n)]
+        if a.distill:
+            taught = distilled(a.distill, a.teacher_floor, a.teacher_weight, held)
+            print(f"teacher pairs {len(taught)}", flush=True)
+            train += taught
+        symbols = sorted({c for p in train for c in p[1]} | {c for p in valid for c in p[1]})
+        valid = [p for p in valid if all(c in symbols for c in p[1])]
     if a.limit:
         random.shuffle(train)
         train = train[:a.limit]
-    valid = read_pairs(data / "hin_valid.json")
     valid_human = [p for p in valid if p[2] in HUMAN]
     print(f"train {len(train)} valid {len(valid)} valid human {len(valid_human)}", flush=True)
-    model = Translit(a.emb, a.enc, a.dec, bool(a.feed))
+    model = Translit(a.emb, a.enc, a.dec, bool(a.feed), symbols)
     print("params", sum(p.numel() for p in model.parameters()), flush=True)
     opt = torch.optim.Adam(model.parameters(), lr=a.lr)
     steps_per_epoch = math.ceil(len(train) / a.batch)
     total_steps = steps_per_epoch * a.epochs
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=a.lr, total_steps=total_steps, pct_start=0.05)
-    loss_fn = nn.CrossEntropyLoss(ignore_index=PAD)
+    loss_fn = nn.CrossEntropyLoss(ignore_index=PAD, reduction="none")
     step = 0
     log = open(out / "log.txt", "a", encoding="utf-8")
     for epoch in range(a.epochs):
         t0 = time.time()
         running = 0.0
-        for src, lengths, tin, tout in batches(train, a.batch):
+        for src, lengths, tin, tout, weights in batches(train, a.batch, ids=model.out_ids):
             logits = model(src, lengths, tin)
-            loss = loss_fn(logits.reshape(-1, logits.size(-1)), tout.reshape(-1))
+            per_token = loss_fn(logits.reshape(-1, logits.size(-1)), tout.reshape(-1)).view(tout.shape)
+            mask = (tout != PAD).float()
+            loss = (per_token * weights.unsqueeze(1)).sum() / (mask * weights.unsqueeze(1)).sum()
             opt.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -131,8 +175,8 @@ def main():
         print(msg, flush=True)
         log.write(msg + "\n")
         log.flush()
-        torch.save({"sizes": model.sizes, "state": model.state_dict()}, out / f"epoch{epoch}.pt")
-    torch.save({"sizes": model.sizes, "state": model.state_dict()}, out / "final.pt")
+        torch.save({"sizes": model.sizes, "symbols": model.symbols, "state": model.state_dict()}, out / f"epoch{epoch}.pt")
+    torch.save({"sizes": model.sizes, "symbols": model.symbols, "state": model.state_dict()}, out / "final.pt")
 
 
 if __name__ == "__main__":
