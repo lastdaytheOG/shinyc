@@ -4,6 +4,25 @@ import java.util.Locale
 
 fun interface SpellingGuesser {
     fun keys(word: String): List<String>
+    fun hindi(word: String): String? = null
+}
+
+interface KnownWords {
+    fun has(key: String): Boolean
+    val isEmpty: Boolean
+}
+
+object HindiVocabulary : KnownWords {
+    private val keys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private const val KEPT = 200_000
+
+    fun addShadows(shadows: String) {
+        if (keys.size >= KEPT) return
+        for (k in shadows.split(' ')) if (k.isNotEmpty()) keys.add(k)
+    }
+
+    override fun has(key: String): Boolean = key in keys
+    override val isEmpty: Boolean get() = keys.isEmpty()
 }
 
 object Hinglish {

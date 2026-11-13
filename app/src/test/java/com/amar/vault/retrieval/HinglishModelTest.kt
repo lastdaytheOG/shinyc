@@ -1,6 +1,7 @@
 package com.amar.vault.retrieval
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -10,6 +11,11 @@ class HinglishModelTest {
 
     private val model = File("src/main/hinglish-assets/hinglish/translit.bin").inputStream().use { HinglishModel.read(it) }
 
+    private class Vault(private val keys: Set<String>) : KnownWords {
+        override fun has(key: String) = key in keys
+        override val isEmpty get() = keys.isEmpty()
+    }
+
     @Test
     fun guessesAreTheOnesTheTrainingCodeMakes() {
         val lines = File("src/test/resources/hinglish/reference.tsv").readLines().filter { it.isNotBlank() }
@@ -18,9 +24,9 @@ class HinglishModelTest {
         for (line in lines.drop(1)) {
             val parts = line.split('\t')
             val word = parts[0]
-            val expected = parts.drop(1).map { it.substringBefore(':') to it.substringAfter(':').toDouble() }
+            val expected = parts.drop(1).map { it.substringBeforeLast(':') to it.substringAfterLast(':').toDouble() }
             val got = model.guesses(word, width)
-            assertEquals(word, expected.map { it.first }, got.map { it.key })
+            assertEquals(word, expected.map { it.first }, got.map { it.text })
             for ((e, g) in expected.zip(got)) {
                 assertTrue("$word ${e.first}: ${e.second} vs ${g.chance}", abs(e.second - g.chance) <= 0.002 + 0.01 * e.second)
             }
@@ -51,17 +57,27 @@ class HinglishModelTest {
     fun aModelThatCannotBeReadGivesNoGuesses() {
         val spellings = ModelSpellings({ error("missing") })
         assertTrue(spellings.keys("paani").isEmpty())
+        assertNull(spellings.hindi("paani"))
     }
 
     @Test
-    fun guessesAreRememberedAndFilteredByChance() {
+    fun keysAreTheHindiKeysOfTheGuessesAndAreRemembered() {
         var loads = 0
-        val spellings = ModelSpellings({ loads++; model }, width = 4, minChance = 0.0)
+        val spellings = ModelSpellings({ loads++; model }, width = 8, minChance = 0.0)
         val first = spellings.keys("paani")
         assertEquals(first, spellings.keys("paani"))
         assertEquals(1, loads)
-        assertEquals(model.guesses("paani", 4).map { it.key }, first)
-        val strict = ModelSpellings({ model }, width = 4, minChance = 1.01)
-        assertTrue(strict.keys("paani").isEmpty())
+        assertEquals(model.guesses("paani", 8).map { Hinglish.key(it.text) }.distinct().toSet(), first.toSet())
+        assertTrue(ModelSpellings({ model }, minChance = 1.01).keys("paani").isEmpty())
+    }
+
+    @Test
+    fun withAVaultOnlySpellingsTheVaultHasAreKept() {
+        val guesses = model.guesses("paani", 8)
+        val inVault = Hinglish.key(guesses.last().text)
+        val spellings = ModelSpellings({ model }, vault = Vault(setOf(inVault)), width = 8, floor = 0.0, ratio = 0.0)
+        assertEquals(listOf(inVault), spellings.keys("paani"))
+        assertEquals(guesses.last { Hinglish.key(it.text) == inVault }.text.let { Hinglish.key(it) }, spellings.hindi("paani")?.let { Hinglish.key(it) })
+        assertTrue(ModelSpellings({ model }, vault = Vault(setOf("zzzz")), width = 8).keys("paani").isEmpty())
     }
 }

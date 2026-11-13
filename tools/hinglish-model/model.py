@@ -19,17 +19,26 @@ def decode(ids):
 
 
 class Translit(nn.Module):
-    def __init__(self, emb=48, enc=128, dec=256, feed=True):
+    def __init__(self, emb=48, enc=128, dec=256, feed=True, symbols=None):
         super().__init__()
         self.sizes = (emb, enc, dec, int(feed))
         self.feed = feed
+        self.symbols = list(symbols) if symbols else None
+        self.index = {s: i for i, s in enumerate(self.symbols)} if self.symbols else None
+        out_vocab = 3 + len(self.symbols) if self.symbols else VOCAB
         self.src_emb = nn.Embedding(VOCAB, emb, padding_idx=PAD)
         self.encoder = nn.GRU(emb, enc, batch_first=True, bidirectional=True)
         self.bridge = nn.Linear(2 * enc, dec)
-        self.tgt_emb = nn.Embedding(VOCAB, emb, padding_idx=PAD)
+        self.tgt_emb = nn.Embedding(out_vocab, emb, padding_idx=PAD)
         self.cell = nn.GRUCell(emb + 2 * enc if feed else emb, dec)
         self.attn = nn.Linear(dec, 2 * enc, bias=False)
-        self.out = nn.Linear(dec + 2 * enc, VOCAB)
+        self.out = nn.Linear(dec + 2 * enc, out_vocab)
+
+    def out_ids(self, text):
+        return [3 + self.index[c] for c in text] if self.symbols else encode(text)
+
+    def out_text(self, ids):
+        return "".join(self.symbols[i - 3] for i in ids if i >= 3) if self.symbols else decode(ids)
 
     def encode(self, src, lengths):
         x = self.src_emb(src)
@@ -93,4 +102,4 @@ class Translit(nn.Module):
             done = done[:width]
             if len(done) >= width and (not beams or beams[0][0] < done[-1][0]):
                 break
-        return [(decode(toks[1:-1]), math.exp(score)) for score, toks in done if len(toks) > 2]
+        return [(self.out_text(toks[1:-1]), math.exp(score)) for score, toks in done if len(toks) > 2]

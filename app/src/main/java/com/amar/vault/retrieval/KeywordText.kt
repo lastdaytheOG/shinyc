@@ -25,8 +25,11 @@ object KeywordText {
 
     /** What a row is indexed by besides its text: [of] is the text, a space, and this. */
     private fun besidesTheText(tags: String, type: ItemType, name: String, text: String): String =
-        if (Hinglish.isDevanagari(text) || Hinglish.isDevanagari(name)) "$tags ${type.stored} $name ${Hinglish.shadows("$text $name")}"
-        else "$tags ${type.stored} $name"
+        if (Hinglish.isDevanagari(text) || Hinglish.isDevanagari(name)) {
+            val shadows = Hinglish.shadows("$text $name")
+            HindiVocabulary.addShadows(shadows)
+            "$tags ${type.stored} $name $shadows"
+        } else "$tags ${type.stored} $name"
 
     /**
      * For many rows one after another, as when the engine is filled at start-up: what each is

@@ -14,7 +14,7 @@ from train import HUMAN, read_pairs
 def load(path, half=False):
     ck = torch.load(path, map_location="cpu")
     sizes = ck["sizes"]
-    model = Translit(*sizes[:3], feed=bool(sizes[3]) if len(sizes) > 3 else True)
+    model = Translit(*sizes[:3], feed=bool(sizes[3]) if len(sizes) > 3 else True, symbols=ck.get("symbols"))
     state = ck["state"]
     if half:
         state = {k: v.half().float() for k, v in state.items()}
@@ -58,6 +58,12 @@ def main():
     t0 = time.time()
     for latin in sorted({p[0] for p in pairs}):
         guesses[latin] = model.beam(latin, a.width)
+        if model.symbols:
+            merged = {}
+            for g, p in guesses[latin]:
+                k = key(g)
+                merged[k] = merged.get(k, 0.0) + p
+            guesses[latin] = sorted(merged.items(), key=lambda x: -x[1])
     per_word = (time.time() - t0) / max(1, len(guesses))
     total = collections.Counter()
     rule_hit = collections.Counter()
