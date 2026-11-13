@@ -135,7 +135,14 @@ object Hinglish {
 
     fun isLittle(word: String): Boolean = word in LITTLE
 
+    private val ALSO_ENGLISH = setOf("me", "main", "par", "pe", "ho", "the", "to", "hi", "is", "us", "na", "ab", "jab", "sab",
+        "le", "lo", "de", "do", "tum", "hum", "ya", "ye", "vo", "wo", "jo", "ji", "ne", "tak", "phir")
+
+    fun isMarker(word: String): Boolean = word in LITTLE && word !in ALSO_ENGLISH
+
     private val ALL_LATIN = Regex("[a-z]+")
+
+    fun isLatinWord(word: String): Boolean = ALL_LATIN.matches(word)
 
     fun keysFor(word: String, guesser: SpellingGuesser?): Set<String> {
         if (!ALL_LATIN.matches(word)) return emptySet()
@@ -185,7 +192,14 @@ object Hinglish {
                             content = true
                             spellings += m.value
                         }
-                        current[i] = if (i > 0) previous[i - 1] + 1 else 1
+                        var best = 1
+                        var j = i - 1
+                        while (j >= 0) {
+                            if (previous[j] > 0) best = maxOf(best, previous[j] + (i - j))
+                            if (!little[j]) break
+                            j--
+                        }
+                        current[i] = best
                         if (current[i] > run) run = current[i]
                     }
                     previous = current

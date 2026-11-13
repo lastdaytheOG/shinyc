@@ -117,6 +117,51 @@ class HinglishSearchTest {
     }
 
     @Test
+    fun littleWordsMayBeLeftOutOfAHindiPhrase() {
+        val m = Hinglish.Query.of(listOf("bijli", "ka", "bill"), null).match(power.ocrText, "download1.pdf")!!
+        assertEquals(3, m.run)
+    }
+
+    @Test
+    fun hinglishLittleWordsMakeAQueryHinglishEvenWhenItsWordsAreEnglish() = runBlocking {
+        val guard = row("guard", "Security guard on duty at the gate", "en")
+        val chat = row("chatguard", "घर पर कोई नहीं है, गार्ड को दे देना", "hi", "Screenshot_3.png")
+        val guesser = SpellingGuesser { w -> if (w == "guard") listOf("gard") else emptyList() }
+        val service = HybridSearchService(Repo(listOf(guard, chat)), Engine(listOf("guard", "chatguard")), BoostConfig(), spellings = guesser)
+        assertEquals("chatguard", service.retrieve(RetrievalRequest("guard ko de dena")).items.first().id)
+        assertEquals("guard", service.retrieve(RetrievalRequest("security guard")).items.first().id)
+    }
+
+    @Test
+    fun aHinglishQueryAlsoLooksForPhotosInHindi() = runBlocking {
+        val asked = java.util.Collections.synchronizedList(ArrayList<String>())
+        val photo = VaultItem(id = "umbrella", uri = "content://p/1", ocrText = "", lang = "en", itemType = ItemType.PHOTO, sourceFile = "IMG_1.jpg", timestamp = 0L)
+        val photos = object : PhotoRetriever {
+            override suspend fun search(query: String, k: Int, only: ((String) -> Boolean)?): List<com.amar.vault.photos.PhotoMatch> {
+                asked += query
+                return listOf(com.amar.vault.photos.PhotoMatch("umbrella", if (Hinglish.isDevanagari(query)) 0.4f else 0.2f))
+            }
+        }
+        val guesser = object : SpellingGuesser {
+            override fun keys(word: String) = emptyList<String>()
+            override fun hindi(word: String) = mapOf("laal" to "लाल", "rang" to "रंग", "ka" to "का", "chhata" to "छाता")[word]
+        }
+        val service = HybridSearchService(Repo(english + photo), Engine(english.map { it.id }), BoostConfig(), photos = photos, spellings = guesser)
+        val hinglish = service.retrieve(RetrievalRequest("laal rang ka chhata"))
+        assertTrue(asked.toString(), asked.contains("laal rang ka chhata") && asked.contains("लाल रंग का छाता"))
+        assertEquals(0.4f, hinglish.photos.first().score)
+        asked.clear()
+        service.retrieve(RetrievalRequest("phone bill"))
+        assertEquals(listOf("phone bill"), asked.toList())
+        asked.clear()
+        service.retrieve(RetrievalRequest("laal rang ka chhata", tuning = RetrievalTuning(hinglishLanes = false)))
+        assertEquals(listOf("laal rang ka chhata"), asked.toList())
+        asked.clear()
+        service.retrieve(RetrievalRequest("bitcon"))
+        assertEquals(listOf("bitcon"), asked.toList())
+    }
+
+    @Test
     fun englishQueriesAreLeftAsTheyWere() {
         val result = search("phone bill")
         assertTrue(result.items.first().id.startsWith("en"))

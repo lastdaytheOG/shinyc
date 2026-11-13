@@ -179,12 +179,12 @@ class HybridSearchService(
         // ── Photos by what is in them: a list of their own, beside the lanes below ──
         // The period or amount narrows them inside the scan (by id), so the photos listed are
         // the best ones in the period, not the best ones overall that happen to fall in it.
-        val photoDeferred = async(Dispatchers.Default) {
-            if (!tuning.photoLane || qLower.isBlank()) return@async emptyList<PhotoHit>()
-            try {
+        suspend fun photoHits(text: String): List<PhotoHit> {
+            if (!tuning.photoLane || text.isBlank()) return emptyList()
+            return try {
                 val inPeriod: ((String) -> Boolean)? = strictIds?.let { ids -> { id: String -> id in ids } }
-                val matches = photos.search(q, VaultConfig.Retrieval.PHOTO_BUDGET, inPeriod)
-                if (matches.isEmpty()) return@async emptyList<PhotoHit>()
+                val matches = photos.search(text, VaultConfig.Retrieval.PHOTO_BUDGET, inPeriod)
+                if (matches.isEmpty()) return emptyList()
                 val rows = repository.getByIds(matches.map { it.itemId }).associateBy { it.id }
                 matches.mapNotNull { m -> rows[m.itemId]?.let { PhotoHit(it, m.score, m.margin) } }
                     .filter { only == null || only(it.item) }
@@ -192,15 +192,15 @@ class HybridSearchService(
                 throw e
             } catch (e: Exception) {
                 // Like the other lanes: a failed photo search lists no photos, and the words still work.
-                VaultLog.e("HybridSearch", "Photo lane error: ${e.message}"); emptyList<PhotoHit>()
+                VaultLog.e("HybridSearch", "Photo lane error: ${e.message}"); emptyList()
             }
         }
 
-        val meaningDeferred = async(Dispatchers.Default) {
-            if (!tuning.semanticEnabled || qLower.isBlank() || !meaning.isReady) return@async null
-            try {
+        suspend fun meaningOf(text: String): MeaningResult? {
+            if (!tuning.semanticEnabled || text.isBlank() || !meaning.isReady) return null
+            return try {
                 val inPeriod: ((String) -> Boolean)? = strictIds?.let { ids -> { id: String -> id in ids } }
-                val scan = withTimeoutOrNull(VaultConfig.Retrieval.MEANING_DEADLINE_MS) { meaning.scan(q, budget.meaning, inPeriod) }
+                val scan = withTimeoutOrNull(VaultConfig.Retrieval.MEANING_DEADLINE_MS) { meaning.scan(text, budget.meaning, inPeriod) }
                 when {
                     scan == null -> MeaningResult(emptyList(), emptyList(), Verdict.NOTHING, 0f, timedOut = true)
                     else -> MeaningLane.resolve(scan, repository, meaning, only, tuning.onePerDocument)
@@ -211,6 +211,9 @@ class HybridSearchService(
                 VaultLog.e("HybridSearch", "Meaning lane error: ${e.message}"); null
             }
         }
+
+        val photoDeferred = async(Dispatchers.Default) { if (qLower.isBlank()) emptyList() else photoHits(q) }
+        val meaningDeferred = async(Dispatchers.Default) { if (qLower.isBlank()) null else meaningOf(q) }
 
         val factsDeferred = async(Dispatchers.IO) {
             if (!tuning.factsLane || qLower.isBlank()) return@async null
@@ -284,7 +287,8 @@ class HybridSearchService(
         val readingDeferred = async(Dispatchers.Default) {
             if (guesser == null) return@async hinglish
             val found = substringDeferred.await().wordsFound
-            val readsAsHinglish = typedWords.any { it.bare.length >= 3 && !Hinglish.isLittle(it.bare) && it.typed !in found }
+            val readsAsHinglish = typedWords.any { it.bare.length >= 3 && !Hinglish.isLittle(it.bare) && it.typed !in found } ||
+                typedWords.any { Hinglish.isMarker(it.bare) }
             if (!readsAsHinglish) return@async hinglish
             try {
                 Hinglish.Query(hinglishTyped, hinglishTyped.map { w -> ensureActive(); Hinglish.keysFor(w, guesser) })
@@ -312,6 +316,25 @@ class HybridSearchService(
             } catch (e: Exception) {
                 VaultLog.e("HybridSearch", "Hinglish lane error: ${e.message}"); null
             }
+        }
+        val hindiQueryDeferred = async(Dispatchers.Default) {
+            val reading = readingDeferred.await()
+            if (guesser == null || !tuning.hinglishLanes || reading == null || reading === hinglish) return@async null
+            val marked = typedWords.any { Hinglish.isMarker(it.bare) }
+            val seenInHindi = marked || hinglishFound(reading, guessedLaneDeferred.await() ?: bm25Deferred.await())
+                .any { it.length >= 3 && !Hinglish.isLittle(it) }
+            if (!seenInHindi) return@async null
+            try {
+                val words = typedWords.map { w -> if (Hinglish.isLatinWord(w.bare)) guesser.hindi(w.bare) ?: w.bare else w.bare }
+                words.joinToString(" ").takeIf { Hinglish.isDevanagari(it) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                VaultLog.e("HybridSearch", "Hinglish spelling error: ${e.message}"); null
+            }
+        }
+        val photoHindiDeferred = async(Dispatchers.Default) {
+            hindiQueryDeferred.await()?.let { photoHits(it) }.orEmpty()
         }
         val missingWordsDeferred = async(Dispatchers.IO) {
             if (legacyTypoHelp) null
@@ -421,7 +444,7 @@ class HybridSearchService(
             "sub=${substringResults.size} fuzzy=${fuzzyResults.size}")
 
         if (bm25Results.isEmpty() && substringResults.isEmpty() && fuzzyResults.isEmpty()) {
-            val photosFound = photoDeferred.await()
+            val photosFound = mergedPhotos(photoDeferred.await(), photoHindiDeferred.await())
             val meaningFound = meaningDeferred.await()
             val factsFound = factsDeferred.await()
             val (groups, verdict) = Groups.of(emptyList(), 0, 0, false, meaningFound, photosFound, factsFound)
@@ -446,7 +469,7 @@ class HybridSearchService(
                 notes = if (tuning.candidateBounded) listOf("candidate-bounded") else emptyList(),
             ).also(it::accept)
         }
-        val photosFound = photoDeferred.await()
+        val photosFound = mergedPhotos(photoDeferred.await(), photoHindiDeferred.await())
         val meaningFound = meaningDeferred.await()
         val distinctTyped = typedWords.distinctBy { it.typed }
             .let { all -> all.filter { !com.amar.vault.ResultWording.isSmall(it.bare) }.ifEmpty { all } }
@@ -579,6 +602,16 @@ class HybridSearchService(
     }
 
     private fun loweredName(item: VaultItem): String = SearchableName.of(item).lowercase()
+
+    private fun mergedPhotos(typed: List<PhotoHit>, hindi: List<PhotoHit>): List<PhotoHit> {
+        if (hindi.isEmpty()) return typed
+        val best = LinkedHashMap<String, PhotoHit>()
+        for (hit in typed + hindi) {
+            val kept = best[hit.item.id]
+            if (kept == null || hit.score > kept.score) best[hit.item.id] = hit
+        }
+        return best.values.sortedByDescending { it.score }.take(VaultConfig.Retrieval.PHOTO_BUDGET)
+    }
 
     private fun hinglishFound(hinglish: Hinglish.Query?, rows: List<VaultItem>): Set<String> {
         if (hinglish == null || hinglish.isEmpty) return emptySet()
