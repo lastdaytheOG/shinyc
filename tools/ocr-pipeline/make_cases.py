@@ -22,7 +22,7 @@ UNCLIP = 1.4
 MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 REC_HEIGHT = 48
-REC_WIDTH = 320
+REC_WIDTHS = [320, 640, 960]
 REC_BATCH = 6
 
 
@@ -148,6 +148,15 @@ def rotate_crop(img, points):
     return out
 
 
+def width_for(crop):
+    ratio = crop.shape[1] / float(crop.shape[0])
+    need = int(math.ceil(REC_HEIGHT * ratio))
+    for width in REC_WIDTHS:
+        if width >= need:
+            return width
+    return max(int(REC_HEIGHT * ratio), 1)
+
+
 def strip_bytes(crop, batch_width):
     h, w = crop.shape[:2]
     ratio = w / float(h)
@@ -188,15 +197,16 @@ def main():
     rec = ort.InferenceSession(str(MODELS / "v5-en-rec.onnx"), providers=["CPUExecutionProvider"])
 
     crops = [rotate_crop(img, box) for box, _ in places]
-    order = np.argsort([c.shape[1] / float(c.shape[0]) for c in crops], kind="stable")
+    groups = {}
+    for i, crop in enumerate(crops):
+        groups.setdefault(width_for(crop), []).append(i)
+    batches = []
+    for batch_width in sorted(groups):
+        members = groups[batch_width]
+        batches += [(batch_width, members[s:s + REC_BATCH]) for s in range(0, len(members), REC_BATCH)]
     lines = [None] * len(crops)
     strips = []
-    for start in range(0, len(order), REC_BATCH):
-        group = order[start:start + REC_BATCH]
-        widest = REC_WIDTH / REC_HEIGHT
-        for i in group:
-            widest = max(widest, crops[i].shape[1] / float(crops[i].shape[0]))
-        batch_width = int(REC_HEIGHT * widest)
+    for batch_width, group in batches:
         batch = np.zeros((len(group), 3, REC_HEIGHT, batch_width), dtype=np.float32)
         for n, i in enumerate(group):
             small, wide = strip_bytes(crops[i], batch_width)

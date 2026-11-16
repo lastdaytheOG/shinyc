@@ -1,5 +1,6 @@
 package com.amar.vault.indexing.ppocr
 
+import com.amar.vault.indexing.LinePlace
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -12,17 +13,43 @@ class LineStripsTest {
     private val cases = PpOcrCases.strips()
 
     @Test
-    fun linesAreBatchedByShapeAsTheReferenceBatchesThem() {
-        val strips = places.map { Strip(it) }
-        val order = strips.indices.sortedBy { strips[it].shape }
+    fun eachLineGetsTheReferenceWidthAndFillsAsMuchOfItAsTheReference() {
+        for ((index, place) in places.withIndex()) {
+            val strip = Strip(place)
+            val case = cases.single { it.place == index }
+            assertEquals("width of line $index", case.batchWidth, LineStrips.widthFor(strip, LineStrips.WIDTHS))
+            assertEquals("filled part of line $index", case.wide, LineStrips.width(strip, case.batchWidth))
+        }
+        assertTrue(cases.map { it.batchWidth }.toSet().containsAll(LineStrips.WIDTHS))
+        assertTrue(cases.any { it.batchWidth > LineStrips.WIDTHS.last() && it.wide == it.batchWidth })
+    }
 
-        for (group in order.chunked(6)) {
-            val batchWidth = LineStrips.batchWidth(group.map { strips[it] })
-            for (index in group) {
-                val case = cases.single { it.place == index }
-                assertEquals("batch width of line $index", case.batchWidth, batchWidth)
-                assertEquals("width of line $index", case.wide, LineStrips.width(strips[index], batchWidth))
-            }
+    @Test
+    fun aLineGetsTheSmallestWidthThatHoldsItAndALongerOneItsOwn() {
+        fun line(length: Float, tall: Float = 40f) =
+            Strip(LinePlace(floatArrayOf(0f, 0f, length, 0f, length, tall, 0f, tall), 0.9f))
+
+        assertEquals(320, LineStrips.widthFor(line(200f), LineStrips.WIDTHS))
+        assertEquals(320, LineStrips.widthFor(line(266f), LineStrips.WIDTHS))
+        assertEquals(640, LineStrips.widthFor(line(267f), LineStrips.WIDTHS))
+        assertEquals(960, LineStrips.widthFor(line(800f), LineStrips.WIDTHS))
+        assertEquals(1200, LineStrips.widthFor(line(1000f), LineStrips.WIDTHS))
+        assertEquals(960, LineStrips.widthFor(line(800f), listOf(320, 640)))
+    }
+
+    @Test
+    fun theInterleavedStripHoldsTheSamePixelsAsTheOneInPlanes() {
+        val case = cases.first { it.wide < it.batchWidth }
+        val planes = filled(case)
+        val interleaved = FloatArray(planes.size)
+        LineStrips.fill(
+            screen.argb, screen.width, screen.height, Strip(places[case.place]), interleaved, 0, case.batchWidth,
+            interleaved = true,
+        )
+        val plane = LineStrips.HEIGHT * case.batchWidth
+
+        for (channel in 0 until 3) for (at in 0 until plane) {
+            assertEquals(planes[channel * plane + at], interleaved[3 * at + channel], 0f)
         }
     }
 

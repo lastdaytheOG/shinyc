@@ -18,7 +18,9 @@ SOURCES = {
 }
 READERS = {"all": "v6-tiny-rec", "numbers": "v5-en-rec", "hindi": "v5-devanagari-rec"}
 FINDER = "v6-tiny-det"
-GPU_FINDER = ("v6-tiny-det-576x1280.tflite", 576, 1280)
+FINDER_SIZES = [(544, 1280), (576, 1280), (608, 1280), (640, 1280), (704, 1280)]
+READER_WIDTHS = [320, 640, 960]
+FIXED_READERS = {"all", "numbers"}
 LONG_SIDE = 1280
 VERSION = 1
 
@@ -48,12 +50,24 @@ def main():
             if not isinstance(letter, str) or letter == "" or "\n" in letter or "\r" in letter:
                 raise SystemExit("%s: a dictionary entry cannot be written on a line: %r" % (name, letter))
         (PACK / (name + ".txt")).write_text("\n".join(letters) + "\n", encoding="utf-8", newline="\n")
-        readers[role] = {"model": name + ".onnx", "letters": name + ".txt"}
+        readers[role] = {"model": name + ".onnx", "letters": name + ".txt", "widths": READER_WIDTHS}
+        if role in FIXED_READERS:
+            fixed = []
+            for width in READER_WIDTHS:
+                file = "%s-48x%d.tflite" % (name, width)
+                if (MODELS / file).exists():
+                    shutil.copyfile(MODELS / file, PACK / file)
+                    fixed.append({"model": file, "width": width})
+            if fixed:
+                readers[role]["gpu"] = fixed
     post = settings(FINDER)["PostProcess"]
-    gpu = {}
-    if (MODELS / GPU_FINDER[0]).exists():
-        shutil.copyfile(MODELS / GPU_FINDER[0], PACK / GPU_FINDER[0])
-        gpu = {"gpu": {"model": GPU_FINDER[0], "width": GPU_FINDER[1], "height": GPU_FINDER[2]}}
+    sizes = []
+    for width, height in FINDER_SIZES:
+        file = "%s-%dx%d.tflite" % (FINDER, width, height)
+        if (MODELS / file).exists():
+            shutil.copyfile(MODELS / file, PACK / file)
+            sizes.append({"model": file, "width": width, "height": height})
+    gpu = {"gpu": sizes} if sizes else {}
     manifest = {
         "id": "ppocr-v6-tiny-finder-v5-readers",
         "version": VERSION,

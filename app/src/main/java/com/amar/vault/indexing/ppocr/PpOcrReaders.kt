@@ -61,6 +61,7 @@ class PpOcrLineReader(
     modelPath: String,
     private val dictionary: List<String>,
     threads: Int = 4,
+    private val widths: List<Int> = LineStrips.WIDTHS,
     private val batch: Int = 6,
 ) : LineReader, AutoCloseable {
 
@@ -80,9 +81,9 @@ class PpOcrLineReader(
     fun read(argb: IntArray, width: Int, height: Int, places: List<LinePlace>): List<ReadText> {
         val strips = places.map { Strip(it) }
         val texts = arrayOfNulls<ReadText>(places.size)
-        val order = strips.indices.filter { strips[it].readable }.sortedBy { strips[it].shape }
-        for (group in order.chunked(batch)) {
-            val batchWidth = LineStrips.batchWidth(group.map { strips[it] })
+        val readable = strips.indices.filter { strips[it].readable }
+        val groups = readable.groupBy { LineStrips.widthFor(strips[it], widths) }.toSortedMap()
+        for ((batchWidth, lines) in groups) for (group in lines.chunked(batch)) {
             val one = 3 * LineStrips.HEIGHT * batchWidth
             val pixels = FloatArray(group.size * one)
             for ((n, index) in group.withIndex()) {

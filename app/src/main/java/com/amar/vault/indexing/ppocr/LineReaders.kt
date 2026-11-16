@@ -6,6 +6,7 @@ import com.amar.vault.BuildConfig
 import com.amar.vault.VaultLog
 import com.amar.vault.indexing.LineFinder
 import com.amar.vault.indexing.LinePipeline
+import com.amar.vault.indexing.LineReader
 import com.amar.vault.indexing.PictureReader
 import com.amar.vault.indexing.SheetLineReader
 import kotlinx.coroutines.CancellationException
@@ -13,10 +14,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.File
 
-class PrefsFinderChoice(context: Context, manifestId: String) : FinderChoice {
+class PrefsChoice(context: Context, key: String) : RememberedChoice {
     private val prefs = context.applicationContext.getSharedPreferences("line_readers", Context.MODE_PRIVATE)
-    private val key = "finder|$manifestId|${Build.HARDWARE}|${Build.MODEL}"
+    private val key = "$key|${Build.HARDWARE}|${Build.MODEL}"
 
     override fun read(): String? = prefs.getString(key, null)
 
@@ -28,12 +30,12 @@ class PrefsFinderChoice(context: Context, manifestId: String) : FinderChoice {
 class LineReaders(
     private val files: LineModelFiles,
     private val hindi: PictureReader,
-    private val choice: ((String) -> FinderChoice)? = null,
+    private val choice: ((String) -> RememberedChoice)? = null,
     private val threads: Int = 4,
 ) : AutoCloseable {
 
     constructor(context: Context, hindi: PictureReader) :
-        this(LineModelFiles(context), hindi, { id -> PrefsFinderChoice(context, id) })
+        this(LineModelFiles(context), hindi, { key -> PrefsChoice(context, key) })
 
     private class Opened(val pipeline: LinePipeline, val sessions: List<AutoCloseable>)
 
@@ -68,38 +70,57 @@ class LineReaders(
     private fun open(manifest: LineModelManifest): Opened {
         val sessions = ArrayList<AutoCloseable>()
         try {
-            val steady = PpOcrLineFinder(files.finder().path, manifest.finder, threads).also { sessions += it }
-            val gpu = manifest.gpuFinder
-            val gpuFile = files.gpuFinder()
-            val finder: LineFinder = if (gpu != null && gpuFile != null && choice != null) {
-                val onGpu = LiteRtLineFinder(gpuFile.path, gpu.width, gpu.height, manifest.finder, onGpu = true)
-                val onProcessor = LiteRtLineFinder(gpuFile.path, gpu.width, gpu.height, manifest.finder, onGpu = false)
-                sessions += onGpu
-                sessions += onProcessor
-                FastestLineFinder(steady, linkedMapOf(GPU to onGpu, LITERT to onProcessor), choice.invoke(manifest.id))
+            val finders = files.fixedFinders()
+            val readers = mapOf(
+                LineModelFiles.ALL to files.fixedReaders(LineModelFiles.ALL),
+                LineModelFiles.NUMBERS to files.fixedReaders(LineModelFiles.NUMBERS),
+            )
+            val chooser = choice
+            val runners = if (chooser != null && (finders.isNotEmpty() || readers.values.any { it.isNotEmpty() })) {
+                LiteRtChip.entries.map { LiteRtRunner(it, threads) }
             } else {
-                steady
+                emptyList()
             }
-            val all = PpOcrLineReader(
-                files.reader(LineModelFiles.ALL).path, files.letters(LineModelFiles.ALL), threads,
-            ).also { sessions += it }
-            val numbers = PpOcrLineReader(
-                files.reader(LineModelFiles.NUMBERS).path, files.letters(LineModelFiles.NUMBERS), threads,
-            ).also { sessions += it }
+            sessions += runners
+
+            val steadyFinder = PpOcrLineFinder(files.finder().path, manifest.finder, threads).also { sessions += it }
+            val finder: LineFinder = if (chooser != null && runners.isNotEmpty() && finders.isNotEmpty()) {
+                val quick = runners.associateTo(LinkedHashMap()) { runner ->
+                    runner.chip.label to LiteRtLineFinder(runner, finders, manifest.finder)
+                }
+                FastestLineFinder(steadyFinder, quick, chooser(key(manifest, "finder", finders.map { it.path })))
+            } else {
+                steadyFinder
+            }
+
+            fun reader(role: String): LineReader {
+                val letters = files.letters(role)
+                val widths = files.widths(role)
+                val steady = PpOcrLineReader(files.reader(role).path, letters, threads, widths).also { sessions += it }
+                val models = readers.getValue(role)
+                if (chooser == null || runners.isEmpty() || models.isEmpty()) return steady
+                val quick = runners.associateTo(LinkedHashMap()) { runner ->
+                    runner.chip.label to LiteRtLineReader(runner, models, letters, steady, widths)
+                }
+                return FastestLineReader(
+                    "line reader $role", steady, quick, chooser(key(manifest, "reader-$role", models.map { it.path })),
+                )
+            }
+
+            val all = reader(LineModelFiles.ALL)
+            val numbers = reader(LineModelFiles.NUMBERS)
             return Opened(LinePipeline(finder, all, numbers, SheetLineReader(hindi)), sessions)
         } catch (e: Throwable) {
-            sessions.forEach { runCatching { it.close() } }
+            sessions.asReversed().forEach { runCatching { it.close() } }
             throw e
         }
     }
 
-    override fun close() {
-        opened?.sessions?.forEach { runCatching { it.close() } }
-        opened = null
-    }
+    private fun key(manifest: LineModelManifest, part: String, paths: List<String>): String =
+        "$part|${manifest.id}|${manifest.version}|" + paths.joinToString(",") { File(it).name }
 
-    companion object {
-        const val GPU = "gpu"
-        const val LITERT = "litert"
+    override fun close() {
+        opened?.sessions?.asReversed()?.forEach { runCatching { it.close() } }
+        opened = null
     }
 }

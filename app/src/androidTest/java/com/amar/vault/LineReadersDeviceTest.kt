@@ -9,7 +9,11 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.amar.vault.indexing.ppocr.FastestLineFinder
 import com.amar.vault.indexing.ppocr.LineModelFiles
+import com.amar.vault.indexing.ppocr.FastestLineReader
+import com.amar.vault.indexing.ppocr.LiteRtChip
 import com.amar.vault.indexing.ppocr.LiteRtLineFinder
+import com.amar.vault.indexing.ppocr.LiteRtLineReader
+import com.amar.vault.indexing.ppocr.LiteRtRunner
 import com.amar.vault.indexing.ppocr.PpOcrLineFinder
 import com.amar.vault.indexing.ppocr.PpOcrLineReader
 import kotlinx.coroutines.runBlocking
@@ -58,48 +62,90 @@ class LineReadersDeviceTest {
         return bitmap
     }
 
+    private fun drawSized(width: Int, height: Int): Bitmap {
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap).apply { drawColor(Color.WHITE) }
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
+        val words = listOf("Monthly statement", "The balance is carried forward", "paid within seven days", "Ref 48213 of 12/08/2031")
+        val rows = ((height - 200) / 100).coerceAtMost(22)
+        for (n in 0 until rows) {
+            paint.textSize = if (n % 5 == 0) 60f else 40f
+            canvas.drawText(words[n % words.size] + " " + (n + 1), 60f, 130f + 100f * n, paint)
+        }
+        return bitmap
+    }
+
+    private suspend fun <T> timed(label: String, work: suspend () -> T): T? = try {
+        work()
+        val started = System.nanoTime()
+        work().also { Log.i("LineReaders", "$label: ${(System.nanoTime() - started) / 1_000_000} ms") }
+    } catch (e: Throwable) {
+        Log.w("LineReaders", "$label cannot run here: ${e.javaClass.simpleName}: ${e.message}")
+        null
+    }
+
     @Test
-    fun theFixedSizeFinderFindsTheLinesTheSteadyFinderFinds() = runBlocking {
+    fun everyFixedSizeFinderFindsTheLinesTheSteadyFinderFinds() = runBlocking {
         val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
         val files = LineModelFiles(app)
         assumeTrue("put the line readers in ${files.dir}", files.present())
-        val model = files.gpuFinder()
-        assumeTrue("the pack has no finder for the graphics chip", model != null)
+        val models = files.fixedFinders()
+        assumeTrue("the pack has no fixed size finder", models.isNotEmpty())
         val manifest = files.manifest()!!
-        val size = manifest.gpuFinder!!
-        val picture = drawTall()
-
-        val steady = PpOcrLineFinder(files.finder().path, manifest.finder).use { finder ->
-            finder.find(picture)
-            val started = System.nanoTime()
-            finder.find(picture).also { Log.i("LineReaders", "steady finder: ${it.size} lines in ${(System.nanoTime() - started) / 1_000_000} ms") }
-        }
-        assertEquals(22, steady.size)
-
-        LiteRtLineFinder(model!!.path, size.width, size.height, manifest.finder, onGpu = false).use { finder ->
-            assertTrue(finder.fits(picture.width, picture.height))
-            finder.find(picture)
-            val started = System.nanoTime()
-            val found = finder.find(picture)
-            Log.i("LineReaders", "fixed finder on the processor: ${found.size} lines in ${(System.nanoTime() - started) / 1_000_000} ms")
-            assertTrue("${found.size} against ${steady.size}", FastestLineFinder.same(steady, found))
-        }
-
-        val onGpu = LiteRtLineFinder(model.path, size.width, size.height, manifest.finder, onGpu = true)
+        val runners = LiteRtChip.entries.map { LiteRtRunner(it) }
+        val steady = PpOcrLineFinder(files.finder().path, manifest.finder)
         try {
-            val found = try {
-                onGpu.find(picture)
-                val started = System.nanoTime()
-                onGpu.find(picture).also {
-                    Log.i("LineReaders", "fixed finder on the graphics chip: ${it.size} lines in ${(System.nanoTime() - started) / 1_000_000} ms")
+            for (model in models) {
+                val picture = drawSized(1080, 1080 * model.height / model.width)
+                val expected = timed("steady finder, ${picture.width} x ${picture.height}") { steady.find(picture) }!!
+                assertTrue(expected.size >= 10)
+                for (runner in runners) {
+                    val finder = LiteRtLineFinder(runner, models, manifest.finder)
+                    assertTrue(finder.fits(picture.width, picture.height))
+                    val found = timed("${runner.chip.label} finder ${model.width} x ${model.height}") { finder.find(picture) }
+                    if (runner.chip == LiteRtChip.PROCESSOR) assertTrue(found != null)
+                    if (found != null) assertTrue("${found.size} against ${expected.size}", FastestLineFinder.same(expected, found))
                 }
-            } catch (e: Throwable) {
-                Log.w("LineReaders", "the graphics chip cannot run the finder here: ${e.javaClass.simpleName}: ${e.message}")
-                null
+                picture.recycle()
             }
-            if (found != null) assertTrue("${found.size} against ${steady.size}", FastestLineFinder.same(steady, found))
         } finally {
-            onGpu.close()
+            steady.close()
+            runners.forEach { it.close() }
+        }
+    }
+
+    @Test
+    fun theFixedWidthReadersReadWhatTheSteadyReadersRead() = runBlocking {
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        val files = LineModelFiles(app)
+        assumeTrue("put the line readers in ${files.dir}", files.present())
+        val manifest = files.manifest()!!
+        val picture = drawTall()
+        val places = PpOcrLineFinder(files.finder().path, manifest.finder).use { it.find(picture) }
+        assertEquals(22, places.size)
+        val runners = LiteRtChip.entries.map { LiteRtRunner(it) }
+        try {
+            for (role in listOf(LineModelFiles.ALL, LineModelFiles.NUMBERS)) {
+                val models = files.fixedReaders(role)
+                if (models.isEmpty()) continue
+                val letters = files.letters(role)
+                val widths = files.widths(role)
+                PpOcrLineReader(files.reader(role).path, letters, widths = widths).use { steady ->
+                    val expected = timed("steady reader $role") { steady.read(picture, places) }!!
+                    for (runner in runners) {
+                        val reader = LiteRtLineReader(runner, models, letters, steady, widths)
+                        val read = timed("${runner.chip.label} reader $role") { reader.read(picture, places) }
+                        if (runner.chip == LiteRtChip.PROCESSOR) assertTrue(read != null)
+                        if (read != null) {
+                            val differ = expected.indices.filter { expected[it].text != read[it].text }
+                            Log.i("LineReaders", "${runner.chip.label} reader $role differs on: " + differ.joinToString { "${expected[it].text} / ${read[it].text}" })
+                            assertTrue(differ.joinToString(), FastestLineReader.same(expected, read))
+                        }
+                    }
+                }
+            }
+        } finally {
+            runners.forEach { it.close() }
             picture.recycle()
         }
     }

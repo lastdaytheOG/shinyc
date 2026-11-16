@@ -1,4 +1,5 @@
 import argparse
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -83,6 +84,104 @@ def fuse_gelu(model):
     return len(add)
 
 
+PER_CHANNEL = {"BatchNormalization", "HardSigmoid", "HardSwish", "Mul", "Add", "Relu", "Sigmoid"}
+
+
+def axes_of(node, found):
+    if len(node.input) > 1:
+        value = found.get(node.input[1])
+        return None if value is None else [int(v) for v in value.reshape(-1)]
+    for attribute in node.attribute:
+        if attribute.name == "axes":
+            return list(attribute.ints)
+    return None
+
+
+def perm_of(node):
+    for attribute in node.attribute:
+        if attribute.name == "perm":
+            return list(attribute.ints)
+    return None
+
+
+def keep_four_dims(model):
+    model = onnx.shape_inference.infer_shapes(model)
+    graph = model.graph
+    found = constants(graph)
+    shapes = {v.name: [d.dim_value for d in v.type.tensor_type.shape.dim] for v in graph.value_info}
+    consumers = {}
+    for node in graph.node:
+        for name in node.input:
+            consumers.setdefault(name, []).append(node)
+    outputs = {o.name for o in graph.output}
+    renamed = {}
+    gone = set()
+    for squeeze in [n for n in graph.node if n.op_type == "Squeeze"]:
+        shape = shapes.get(squeeze.input[0])
+        if axes_of(squeeze, found) != [2] or shape is None or len(shape) != 4 or shape[2] != 1:
+            continue
+        inside = {squeeze.output[0]}
+        ends = []
+        seen = set()
+        stack = [squeeze.output[0]]
+        while stack:
+            name = stack.pop()
+            if name in outputs:
+                raise SystemExit("a squeezed tensor is a model output: %s" % name)
+            for user in consumers.get(name, []):
+                if id(user) in seen:
+                    continue
+                seen.add(id(user))
+                if user.op_type == "Unsqueeze" and axes_of(user, found) == [2]:
+                    ends.append(user)
+                elif user.op_type == "Transpose" and perm_of(user) == [0, 2, 1]:
+                    ends.append(user)
+                elif user.op_type in PER_CHANNEL:
+                    for k, other in enumerate(user.input):
+                        if other in inside or other == "":
+                            continue
+                        if user.op_type == "BatchNormalization" and k > 0:
+                            continue
+                        value = found.get(other)
+                        if value is None or value.size != 1:
+                            raise SystemExit("%s mixes a squeezed tensor with %s" % (user.name, other))
+                    inside.add(user.output[0])
+                    stack.append(user.output[0])
+                else:
+                    raise SystemExit("a squeezed tensor reaches %s %s" % (user.op_type, user.name))
+        if not ends:
+            raise SystemExit("a squeeze is never undone: %s" % squeeze.name)
+        renamed[squeeze.output[0]] = squeeze.input[0]
+        gone.add(id(squeeze))
+        for end in ends:
+            if end.op_type == "Unsqueeze":
+                renamed[end.output[0]] = end.input[0]
+                gone.add(id(end))
+            else:
+                del end.attribute[:]
+                end.attribute.append(helper.make_attribute("perm", [0, 2, 3, 1]))
+    nodes = [n for n in graph.node if id(n) not in gone]
+    for node in nodes:
+        for k, name in enumerate(node.input):
+            while name in renamed:
+                name = renamed[name]
+            node.input[k] = name
+    del graph.node[:]
+    graph.node.extend(nodes)
+    del graph.value_info[:]
+    return onnx.shape_inference.infer_shapes(model), len(gone)
+
+
+def simplify(model):
+    import onnxsim
+
+    model.ir_version = max(model.ir_version, 9)
+    simpler, ok = onnxsim.simplify(model)
+    if not ok:
+        raise SystemExit("onnxsim could not check the simplified model")
+    return simpler
+
+
 def fix_shape(model, shape):
     dims = model.graph.input[0].type.tensor_type.shape.dim
     if len(dims) != len(shape):
@@ -101,7 +200,10 @@ def main():
     parser.add_argument("name")
     parser.add_argument("--shape", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--save")
+    parser.add_argument("--precision", choices=["float32", "float16"], default="float32")
     args = parser.parse_args()
+    sys.stdout.reconfigure(errors="replace")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     model = onnx.load(MODELS / (args.name + ".onnx"))
@@ -109,10 +211,13 @@ def main():
         model = version_converter.convert_version(model, OPSET)
     fused = fuse_gelu(model)
     model = fix_shape(model, [int(v) for v in args.shape.split(",")])
+    model = simplify(model)
+    model, unsqueezed = keep_four_dims(model)
     onnx.checker.check_model(model)
     rewritten = out / (args.name + "-gelu.onnx")
     onnx.save(model, rewritten)
-    print("GELU spots rewritten:", fused, "| left:", sorted({n.op_type for n in model.graph.node}))
+    print("GELU spots rewritten:", fused, "| squeezes undone:", unsqueezed,
+          "| left:", sorted({n.op_type for n in model.graph.node}))
     sample = out / "calibration_image_sample_data_20x128x128x3_float32.npy"
     np.save(sample, np.random.default_rng(7).random((20, 128, 128, 3), dtype=np.float32))
     done = subprocess.run(
@@ -125,6 +230,10 @@ def main():
         raise SystemExit("onnx2tf failed")
     for made in sorted((out / "tf").glob("*.tflite")):
         print(made.name, made.stat().st_size)
+    if args.save:
+        made = out / "tf" / ("%s-gelu_%s.tflite" % (args.name, args.precision))
+        shutil.copyfile(made, MODELS / args.save)
+        print("saved", MODELS / args.save)
 
 
 if __name__ == "__main__":

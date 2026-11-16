@@ -65,26 +65,66 @@ class LineModelFilesTest {
     }
 
     @Test
-    fun aFinderForTheGraphicsChipIsNamedByTheManifestAndIsOnlyThereWhenItsFileIs() {
+    fun fixedSizeFindersAreNamedByTheManifestAndOnlyThoseWhoseFileIsThereAreOffered() {
         putEverything()
-        put("manifest.json", manifest.replace("\"unclip\": 1.6}", "\"unclip\": 1.6, \"gpu\": {\"model\": \"finder.tflite\", \"width\": 576, \"height\": 1280}}"))
+        put(
+            "manifest.json",
+            manifest.replace(
+                "\"unclip\": 1.6}",
+                "\"unclip\": 1.6, \"gpu\": [{\"model\": \"f576.tflite\", \"width\": 576, \"height\": 1280}, " +
+                    "{\"model\": \"f704.tflite\", \"width\": 704, \"height\": 1280}]}",
+            ),
+        )
         val files = LineModelFiles(folder.root)
 
-        assertEquals(576, files.manifest()!!.gpuFinder!!.width)
-        assertEquals(1280, files.manifest()!!.gpuFinder!!.height)
+        assertEquals(listOf(576, 704), files.manifest()!!.fixedFinders.map { it.width })
         assertTrue(files.present())
-        assertNull(files.gpuFinder())
+        assertTrue(files.fixedFinders().isEmpty())
 
-        put("finder.tflite")
-        assertEquals(File(folder.root, "finder.tflite"), files.gpuFinder())
+        put("f704.tflite")
+        val offered = files.fixedFinders().single()
+        assertEquals(File(folder.root, "f704.tflite").path, offered.path)
+        assertEquals(704, offered.width)
+        assertEquals(1280, offered.height)
     }
 
     @Test
-    fun aManifestWithoutSuchAFinderHasNone() {
+    fun aSingleFixedSizeFinderWrittenTheOldWayIsStillRead() {
+        putEverything()
+        put("manifest.json", manifest.replace("\"unclip\": 1.6}", "\"unclip\": 1.6, \"gpu\": {\"model\": \"finder.tflite\", \"width\": 576, \"height\": 1280}}"))
+        put("finder.tflite")
+
+        assertEquals(576, LineModelFiles(folder.root).fixedFinders().single().width)
+    }
+
+    @Test
+    fun aReaderNamesItsWidthsAndAFileForEachWidthItCanReadAtOnTheGraphicsChip() {
+        putEverything()
+        put(
+            "manifest.json",
+            manifest.replace(
+                "\"numbers\": {\"model\": \"numbers.onnx\", \"letters\": \"numbers.txt\"}",
+                "\"numbers\": {\"model\": \"numbers.onnx\", \"letters\": \"numbers.txt\", \"widths\": [640, 320], " +
+                    "\"gpu\": [{\"model\": \"n320.tflite\", \"width\": 320}, {\"model\": \"n640.tflite\", \"width\": 640}]}",
+            ),
+        )
+        put("n320.tflite")
+        val files = LineModelFiles(folder.root)
+
+        assertEquals(listOf(320, 640), files.widths(LineModelFiles.NUMBERS))
+        assertEquals(LineStrips.WIDTHS, files.widths(LineModelFiles.ALL))
+        assertEquals(listOf(320), files.fixedReaders(LineModelFiles.NUMBERS).map { it.width })
+        assertTrue(files.fixedReaders(LineModelFiles.ALL).isEmpty())
+        assertTrue(files.present())
+    }
+
+    @Test
+    fun aManifestWithoutFixedSizeModelsHasNone() {
         putEverything()
 
-        assertNull(LineModelFiles(folder.root).manifest()!!.gpuFinder)
-        assertNull(LineModelFiles(folder.root).gpuFinder())
+        assertTrue(LineModelFiles(folder.root).manifest()!!.fixedFinders.isEmpty())
+        assertTrue(LineModelFiles(folder.root).fixedFinders().isEmpty())
+        assertTrue(LineModelFiles(folder.root).fixedReaders(LineModelFiles.ALL).isEmpty())
     }
 
     @Test

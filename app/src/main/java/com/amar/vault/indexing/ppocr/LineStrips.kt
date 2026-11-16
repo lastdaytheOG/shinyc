@@ -21,17 +21,21 @@ class Strip(val place: LinePlace) {
 object LineStrips {
 
     const val HEIGHT = 48
-    private const val BASE_WIDTH = 320
+    val WIDTHS = listOf(320, 640, 960)
 
-    fun batchWidth(strips: List<Strip>): Int {
-        var widest = BASE_WIDTH.toFloat() / HEIGHT
-        for (strip in strips) widest = max(widest, strip.shape)
-        return (HEIGHT * widest).toInt()
+    fun need(strip: Strip): Int = ceil(HEIGHT * strip.shape).toInt()
+
+    fun widthFor(strip: Strip, widths: List<Int>): Int {
+        val need = need(strip)
+        return widths.firstOrNull { it >= need } ?: max((HEIGHT * strip.shape).toInt(), 1)
     }
 
-    fun width(strip: Strip, batchWidth: Int): Int = min(ceil(HEIGHT * strip.shape).toInt(), batchWidth)
+    fun width(strip: Strip, batchWidth: Int): Int = min(need(strip), batchWidth)
 
-    fun fill(argb: IntArray, width: Int, height: Int, strip: Strip, into: FloatArray, at: Int, batchWidth: Int) {
+    fun fill(
+        argb: IntArray, width: Int, height: Int, strip: Strip, into: FloatArray, at: Int, batchWidth: Int,
+        interleaved: Boolean = false,
+    ) {
         if (!strip.readable) return
         val c = strip.place.corners
         val wide = width(strip, batchWidth)
@@ -57,9 +61,19 @@ object LineStrips {
                 val b = cut(argb, width, height, c, strip, x1, y0, alongX, alongY, downX, downY)
                 val d = cut(argb, width, height, c, strip, x0, y1, alongX, alongY, downX, downY)
                 val e = cut(argb, width, height, c, strip, x1, y1, alongX, alongY, downX, downY)
-                into[o] = mixed(a, b, d, e, 0, fx, fy) / 127.5f - 1f
-                into[plane + o] = mixed(a, b, d, e, 8, fx, fy) / 127.5f - 1f
-                into[2 * plane + o] = mixed(a, b, d, e, 16, fx, fy) / 127.5f - 1f
+                val blue = mixed(a, b, d, e, 0, fx, fy) / 127.5f - 1f
+                val green = mixed(a, b, d, e, 8, fx, fy) / 127.5f - 1f
+                val red = mixed(a, b, d, e, 16, fx, fy) / 127.5f - 1f
+                if (interleaved) {
+                    val p = at + 3 * (i * batchWidth + j)
+                    into[p] = blue
+                    into[p + 1] = green
+                    into[p + 2] = red
+                } else {
+                    into[o] = blue
+                    into[plane + o] = green
+                    into[2 * plane + o] = red
+                }
                 o++
             }
         }
