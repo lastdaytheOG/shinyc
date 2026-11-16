@@ -45,6 +45,9 @@ class ImageContentExtractor(private val context: Context) {
 
         private const val IMAGE_TIER1_MIN_WORDS = 8
 
+        @Volatile
+        internal var packUnsureLines = true
+
         private const val UNSURE_BELOW = 0.75f
         private const val UNSURE_MIN_CHARS = 5
 
@@ -394,10 +397,14 @@ class ImageContentExtractor(private val context: Context) {
     private suspend fun readScreen(bitmap: Bitmap, recorder: OcrStrategyRecorder? = null): String {
         var hiAsIs = ""
         var unsure = false
+        var enFound: com.google.mlkit.vision.text.Text? = null
+        var hiFound: com.google.mlkit.vision.text.Text? = null
         val asIs = timedStrategy(recorder, OcrStrategy.RAW) {
             val image = InputImage.fromBitmap(bitmap, 0)
             val en = process(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
             val hi = process(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
+            enFound = en
+            hiFound = hi
             unsure = hasUnsureLine(en) || hasUnsureLine(hi)
             hiAsIs = textOf(hi, inReadingOrder = true)
             mergeTexts(textOf(en, inReadingOrder = true), hiAsIs)
@@ -409,6 +416,21 @@ class ImageContentExtractor(private val context: Context) {
                 return tier1Final
             }
             IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_ESCALATED)
+            val en = enFound
+            val hi = hiFound
+            if (packUnsureLines && en != null && hi != null) {
+                val packed = try {
+                    packedReread(bitmap, en, hi, saysHindi(hiAsIs), recorder)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
+                }
+                if (packed != null) {
+                    IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_PACKED)
+                    return packed
+                }
+            }
         }
         val gray = timedPre(recorder, "grayscale") { preprocess { toHighContrastGrayscale(bitmap) } }
         try {
@@ -457,6 +479,84 @@ class ImageContentExtractor(private val context: Context) {
         } finally {
             gray.recycle()
         }
+    }
+
+    private suspend fun packedReread(
+        bitmap: Bitmap,
+        enFound: com.google.mlkit.vision.text.Text,
+        hiFound: com.google.mlkit.vision.text.Text,
+        hindi: Boolean,
+        recorder: OcrStrategyRecorder?,
+    ): String? {
+        val enLines = LinePacking.linesOf(enFound)
+        val hiLines = LinePacking.linesOf(hiFound)
+        val crops = LinePacking.crops(enLines + hiLines, bitmap.width, bitmap.height)
+        if (crops.isEmpty() || LinePacking.area(crops, bitmap.width, bitmap.height) > LinePacking.MAX_AREA_SHARE) return null
+        val gap = (enLines + hiLines).filter { l -> crops.any { LinePacking.inside(l.box, it) } }.maxOf { it.box.height() }
+        val sheets = LinePacking.sheets(bitmap, crops, gap)
+        val grayHi = Array(crops.size) { mutableListOf<PackedLine>() }
+        val grayEn = Array(crops.size) { mutableListOf<PackedLine>() }
+        val inverted = Array(crops.size) { mutableListOf<PackedLine>() }
+        val enlarged = Array(crops.size) { mutableListOf<PackedLine>() }
+        var hindiSeen = hindi
+        try {
+            for (sheet in sheets) {
+                val gray = preprocess { toHighContrastGrayscale(sheet.bitmap) }
+                try {
+                    val image = InputImage.fromBitmap(gray, 0)
+                    val hi = process(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
+                    LinePacking.assign(sheet, LinePacking.linesOf(hi), grayHi)
+                    if (hindiSeen || saysHindi(hi.text)) {
+                        hindiSeen = true
+                        val en = process(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
+                        LinePacking.assign(sheet, LinePacking.linesOf(en), grayEn)
+                    }
+                } finally {
+                    gray.recycle()
+                }
+                val inv = preprocess { invertBitmap(sheet.bitmap) }
+                try {
+                    val en = process(mlKitEn, InputImage.fromBitmap(inv, 0), IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
+                    LinePacking.assign(sheet, LinePacking.linesOf(en), inverted)
+                } finally {
+                    inv.recycle()
+                }
+                val big = preprocess { Bitmap.createScaledBitmap(sheet.bitmap, sheet.bitmap.width * 2, sheet.bitmap.height * 2, true) }
+                try {
+                    val bigGray = preprocess { toHighContrastGrayscale(big) }
+                    try {
+                        val en = process(mlKitEn, InputImage.fromBitmap(bigGray, 0), IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
+                        LinePacking.assign(sheet, LinePacking.halved(LinePacking.linesOf(en)), enlarged)
+                    } finally {
+                        bigGray.recycle()
+                    }
+                } finally {
+                    big.recycle()
+                }
+            }
+        } finally {
+            sheets.forEach { it.bitmap.recycle() }
+        }
+        fun placed(lines: List<PackedLine>) = LookAlikeDigits.repaired(LinePacking.ordered(lines))
+        val inCrop = { l: PackedLine -> crops.any { LinePacking.inside(l.box, it) } }
+        val enRest = enLines.filterNot(inCrop)
+        val hiRest = hiLines.filterNot(inCrop)
+        fun bandOf(l: PackedLine): Int = crops.indexOfLast { it.top <= l.box.centerY() }
+        fun rest(band: Int) = mergeTexts(
+            placed(enRest.filter { bandOf(it) == band }),
+            placed(hiRest.filter { bandOf(it) == band }),
+        )
+        val pieces = mutableListOf(rest(-1))
+        for ((index, crop) in crops.withIndex()) {
+            val own = mergeTexts(
+                placed(enLines.filter { LinePacking.inside(it.box, crop) }),
+                placed(hiLines.filter { LinePacking.inside(it.box, crop) }),
+            )
+            val grey = mergeTexts(placed(grayEn[index]), placed(grayHi[index]))
+            pieces += ReadingMerge.text(listOf(own, grey, placed(inverted[index]), placed(enlarged[index])))
+            pieces += rest(index)
+        }
+        return pieces.filter { it.isNotBlank() }.joinToString("\n")
     }
 
     /**
