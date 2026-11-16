@@ -259,6 +259,7 @@ dependencies {
     // 1.31: photo search's text model needs opset 21 and the newer quantised ops
     // (GatherBlockQuantized, MatMulNBits); the API the embedding engine uses is unchanged.
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.0")
+    implementation("com.google.ai.edge.litert:litert:2.2.0")
 
     // =========================================================================
     // DOCUMENTS

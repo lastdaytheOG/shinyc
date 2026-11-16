@@ -7,12 +7,15 @@ import java.io.File
 
 class ReaderFiles(val model: String, val letters: String)
 
+class GpuFinderFiles(val model: String, val width: Int, val height: Int)
+
 class LineModelManifest(
     val id: String,
     val version: Int,
     val finderModel: String,
     val finder: FinderSettings,
     val readers: Map<String, ReaderFiles>,
+    val gpuFinder: GpuFinderFiles? = null,
 ) {
     val files: List<String> get() = listOf(finderModel) + readers.values.flatMap { listOf(it.model, it.letters) }
 }
@@ -47,6 +50,8 @@ class LineModelFiles(val dir: File) {
 
     fun finder(): File = File(dir, manifest()!!.finderModel)
 
+    fun gpuFinder(): File? = manifest()?.gpuFinder?.let { File(dir, it.model) }?.takeIf { it.exists() }
+
     fun reader(role: String): File = File(dir, manifest()!!.readers.getValue(role).model)
 
     fun letters(role: String): List<String> = lettersIn(File(dir, manifest()!!.readers.getValue(role).letters).readText())
@@ -76,6 +81,9 @@ class LineModelFiles(val dir: File) {
                 readers = readers.keys().asSequence().associateWith { role ->
                     val reader = readers.getJSONObject(role)
                     ReaderFiles(reader.getString("model"), reader.getString("letters"))
+                },
+                gpuFinder = finder.optJSONObject("gpu")?.let {
+                    GpuFinderFiles(it.getString("model"), it.getInt("width"), it.getInt("height"))
                 },
             )
         }

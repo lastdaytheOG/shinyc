@@ -38,6 +38,29 @@ class LineFindingTest {
     }
 
     @Test
+    fun theSamePictureCanBeGivenWithItsColoursSideBySide() {
+        val screen = PpOcrCases.picture("screen.bin.gz")
+
+        val planar = LineFinding.input(screen.argb, screen.width, screen.height, settings.longSide)
+        val interleaved = LineFinding.input(screen.argb, screen.width, screen.height, settings.longSide, interleaved = true)
+
+        val plane = planar.width * planar.height
+        assertEquals(planar.width to planar.height, interleaved.width to interleaved.height)
+        for (i in 0 until plane step 97) {
+            for (channel in 0 until 3) {
+                assertEquals(planar.pixels[channel * plane + i], interleaved.pixels[3 * i + channel], 0f)
+            }
+        }
+    }
+
+    @Test
+    fun aTallPhoneScreenIsShrunkToTheSizeTheFixedFinderTakes() {
+        assertEquals(576 to 1280, LineFinding.size(1080, 2400, 1280))
+        assertEquals(576 to 1280, LineFinding.size(1080, 2340, 1280))
+        assertEquals(704 to 1280, LineFinding.size(1080, 1920, 1280))
+    }
+
+    @Test
     fun aPictureNoLargerThanTheLimitKeepsItsSizeRoundedToThirtyTwo() {
         val input = LineFinding.input(IntArray(700 * 500), 700, 500, 1280)
 

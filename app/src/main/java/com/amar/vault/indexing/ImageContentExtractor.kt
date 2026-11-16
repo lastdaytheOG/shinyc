@@ -37,7 +37,7 @@ class ImageContentExtractor(
     private val mlKitEn: PictureReader = MlKitReader.english(),
     private val mlKitHi: PictureReader = MlKitReader.hindi(),
     private val byLines: suspend () -> PictureReader? =
-        com.amar.vault.indexing.ppocr.LineReaders(com.amar.vault.indexing.ppocr.LineModelFiles(context), mlKitHi)::pipeline,
+        com.amar.vault.indexing.ppocr.LineReaders(context, mlKitHi)::pipeline,
 ) {
 
     companion object {
