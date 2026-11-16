@@ -24,12 +24,15 @@ object LineFinding {
     private val MEAN = floatArrayOf(0.485f, 0.456f, 0.406f)
     private val STD = floatArrayOf(0.229f, 0.224f, 0.225f)
 
-    fun input(argb: IntArray, width: Int, height: Int, longSide: Int): FinderInput {
-        require(argb.size == width * height)
+    fun size(width: Int, height: Int, longSide: Int): Pair<Int, Int> {
         val longest = max(width, height)
         val ratio = if (longest > longSide) longSide.toDouble() / longest else 1.0
-        val w = side((width * ratio).toInt())
-        val h = side((height * ratio).toInt())
+        return side((width * ratio).toInt()) to side((height * ratio).toInt())
+    }
+
+    fun input(argb: IntArray, width: Int, height: Int, longSide: Int, interleaved: Boolean = false): FinderInput {
+        require(argb.size == width * height)
+        val (w, h) = size(width, height, longSide)
         val xs = Taps(width, w)
         val ys = Taps(height, h)
         val plane = w * h
@@ -47,9 +50,18 @@ object LineFinding {
                 val b = argb[upper + x1]
                 val c = argb[lower + x0]
                 val d = argb[lower + x1]
-                out[i] = (mixed(a, b, c, d, 0, fx, fy) / 255f - MEAN[0]) / STD[0]
-                out[plane + i] = (mixed(a, b, c, d, 8, fx, fy) / 255f - MEAN[1]) / STD[1]
-                out[2 * plane + i] = (mixed(a, b, c, d, 16, fx, fy) / 255f - MEAN[2]) / STD[2]
+                val blue = (mixed(a, b, c, d, 0, fx, fy) / 255f - MEAN[0]) / STD[0]
+                val green = (mixed(a, b, c, d, 8, fx, fy) / 255f - MEAN[1]) / STD[1]
+                val red = (mixed(a, b, c, d, 16, fx, fy) / 255f - MEAN[2]) / STD[2]
+                if (interleaved) {
+                    out[3 * i] = blue
+                    out[3 * i + 1] = green
+                    out[3 * i + 2] = red
+                } else {
+                    out[i] = blue
+                    out[plane + i] = green
+                    out[2 * plane + i] = red
+                }
                 i++
             }
         }

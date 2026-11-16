@@ -65,6 +65,29 @@ class LineModelFilesTest {
     }
 
     @Test
+    fun aFinderForTheGraphicsChipIsNamedByTheManifestAndIsOnlyThereWhenItsFileIs() {
+        putEverything()
+        put("manifest.json", manifest.replace("\"unclip\": 1.6}", "\"unclip\": 1.6, \"gpu\": {\"model\": \"finder.tflite\", \"width\": 576, \"height\": 1280}}"))
+        val files = LineModelFiles(folder.root)
+
+        assertEquals(576, files.manifest()!!.gpuFinder!!.width)
+        assertEquals(1280, files.manifest()!!.gpuFinder!!.height)
+        assertTrue(files.present())
+        assertNull(files.gpuFinder())
+
+        put("finder.tflite")
+        assertEquals(File(folder.root, "finder.tflite"), files.gpuFinder())
+    }
+
+    @Test
+    fun aManifestWithoutSuchAFinderHasNone() {
+        putEverything()
+
+        assertNull(LineModelFiles(folder.root).manifest()!!.gpuFinder)
+        assertNull(LineModelFiles(folder.root).gpuFinder())
+    }
+
+    @Test
     fun oneMissingFileMeansTheReadersAreNotThere() {
         putEverything()
         File(folder.root, "hindi.txt").delete()

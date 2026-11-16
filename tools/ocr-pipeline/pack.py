@@ -18,6 +18,7 @@ SOURCES = {
 }
 READERS = {"all": "v6-tiny-rec", "numbers": "v5-en-rec", "hindi": "v5-devanagari-rec"}
 FINDER = "v6-tiny-det"
+GPU_FINDER = ("v6-tiny-det-576x1280.tflite", 576, 1280)
 LONG_SIDE = 1280
 VERSION = 1
 
@@ -49,6 +50,10 @@ def main():
         (PACK / (name + ".txt")).write_text("\n".join(letters) + "\n", encoding="utf-8", newline="\n")
         readers[role] = {"model": name + ".onnx", "letters": name + ".txt"}
     post = settings(FINDER)["PostProcess"]
+    gpu = {}
+    if (MODELS / GPU_FINDER[0]).exists():
+        shutil.copyfile(MODELS / GPU_FINDER[0], PACK / GPU_FINDER[0])
+        gpu = {"gpu": {"model": GPU_FINDER[0], "width": GPU_FINDER[1], "height": GPU_FINDER[2]}}
     manifest = {
         "id": "ppocr-v6-tiny-finder-v5-readers",
         "version": VERSION,
@@ -58,6 +63,7 @@ def main():
             "thresh": post["thresh"],
             "boxThresh": post["box_thresh"],
             "unclip": post["unclip_ratio"],
+            **gpu,
         },
         "readers": readers,
         "sources": SOURCES,
