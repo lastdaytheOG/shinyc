@@ -4,7 +4,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
-import com.google.mlkit.vision.text.Text
 
 internal class PackedLine(val text: String, val confidence: Float, val box: Rect)
 
@@ -17,10 +16,10 @@ internal object LinePacking {
     const val SHEET_HEIGHT = 2400
     private const val MIN_CHARS = 4
 
-    fun linesOf(found: Text): List<PackedLine> =
-        found.textBlocks.flatMap { block ->
+    fun linesOf(found: FoundText): List<PackedLine> =
+        found.blocks.flatMap { block ->
             block.lines.mapNotNull { line ->
-                line.boundingBox?.let { PackedLine(line.text, line.confidence, Rect(it)) }
+                line.box?.let { PackedLine(line.text, line.confidence, Rect(it)) }
             }
         }
 

@@ -8,9 +8,6 @@ import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import com.amar.vault.IndexMetrics
 import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
-import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -35,7 +32,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  * The orchestrator keeps only the coordination it always had — it calls [extract], which runs OCR
  * and QR concurrently exactly as `indexBitmap` did, and returns both results.
  */
-class ImageContentExtractor(private val context: Context) {
+class ImageContentExtractor(
+    private val context: Context,
+    private val mlKitEn: PictureReader = MlKitReader.english(),
+    private val mlKitHi: PictureReader = MlKitReader.hindi(),
+) {
 
     companion object {
         // Sprint P4 — tier-1 acceptance floor for the PDF escalation ladder. Pages
@@ -88,10 +89,6 @@ class ImageContentExtractor(private val context: Context) {
         private fun nsToMs(ns: Long): Long = (ns + 500_000) / 1_000_000
     }
 
-    private val mlKitEn = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-    private val mlKitHi = TextRecognition.getClient(
-        DevanagariTextRecognizerOptions.Builder().build()
-    )
     // Sprint P1 — one client for the extractor's lifetime instead of a
     // construct/close per scanned bitmap. The client is stateless per process.
     private val barcodeScanner by lazy {
@@ -234,7 +231,7 @@ class ImageContentExtractor(private val context: Context) {
         }
 
         // Tier 1 — same inputs, merge and RAW-strategy semantics as ensemble strategy 1.
-        // The EN and HI passes are independent models reading the SAME immutable InputImage, so
+        // The EN and HI passes are independent models reading the SAME bitmap, so
         // they run CONCURRENTLY instead of EN-then-HI. Every accepted bilingual page pays for both
         // (routing to one would drop Devanagari on mixed eng+hin pages), so overlapping them turns
         // the hot-path cost from EN+HI into max(EN, HI). Output is byte-identical: mergeTexts is a
@@ -242,10 +239,9 @@ class ImageContentExtractor(private val context: Context) {
         // thread-safety surface — runEnsemble already calls `recognize` from parallel strategies,
         // so IndexMetrics + recorder are already exercised concurrently.
         val tierStart = System.nanoTime()
-        val image = InputImage.fromBitmap(bitmap, 0)
         val (en, hi) = coroutineScope {
-            val enDeferred = async { recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder) }
-            val hiDeferred = async { recognize(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder) }
+            val enDeferred = async { recognize(mlKitEn, bitmap, IndexMetrics.Timing.OCR_MLKIT_EN, recorder) }
+            val hiDeferred = async { recognize(mlKitHi, bitmap, IndexMetrics.Timing.OCR_MLKIT_HI, recorder) }
             enDeferred.await() to hiDeferred.await()
         }
         val tier1 = mergeTexts(en, hi)
@@ -320,22 +316,22 @@ class ImageContentExtractor(private val context: Context) {
 
     /** Times one ML Kit inference; call order and inputs are exactly the prior inline calls. */
     private suspend fun recognize(
-        client: com.google.mlkit.vision.text.TextRecognizer,
-        image: InputImage,
+        reader: PictureReader,
+        picture: Bitmap,
         metric: String,
         recorder: OcrStrategyRecorder? = null,
         inReadingOrder: Boolean = false,
-    ): String = textOf(process(client, image, metric, recorder), inReadingOrder)
+    ): String = textOf(process(reader, picture, metric, recorder), inReadingOrder)
 
     private suspend fun process(
-        client: com.google.mlkit.vision.text.TextRecognizer,
-        image: InputImage,
+        reader: PictureReader,
+        picture: Bitmap,
         metric: String,
         recorder: OcrStrategyRecorder?,
-    ): com.google.mlkit.vision.text.Text {
+    ): FoundText {
         val t0 = System.currentTimeMillis()
         try {
-            return client.process(image).await()
+            return reader.read(picture)
         } finally {
             val elapsed = System.currentTimeMillis() - t0
             com.amar.vault.IndexMetrics.recordDuration(metric, elapsed)
@@ -343,21 +339,21 @@ class ImageContentExtractor(private val context: Context) {
         }
     }
 
-    private fun textOf(found: com.google.mlkit.vision.text.Text, inReadingOrder: Boolean): String =
+    private fun textOf(found: FoundText, inReadingOrder: Boolean): String =
         LookAlikeDigits.repaired((if (inReadingOrder) readingOrder(found) else found.text).trim())
 
-    private fun hasUnsureLine(found: com.google.mlkit.vision.text.Text): Boolean =
-        found.textBlocks.any { block -> block.lines.any { unsureLine(it.text, it.confidence) } }
+    private fun hasUnsureLine(found: FoundText): Boolean =
+        found.blocks.any { block -> block.lines.any { unsureLine(it.text, it.confidence) } }
 
     /**
      * What was found, top to bottom and left to right ([ReadingOrder]) rather than in the
      * order the reader hands its blocks back. Without a place for every block it is left as
      * it came.
      */
-    private fun readingOrder(found: com.google.mlkit.vision.text.Text): String {
-        val blocks = found.textBlocks.map { block ->
-            val box = block.boundingBox ?: return found.text
-            val lineHeight = block.lines.firstOrNull()?.boundingBox?.height() ?: (box.height() / block.lines.size.coerceAtLeast(1))
+    private fun readingOrder(found: FoundText): String {
+        val blocks = found.blocks.map { block ->
+            val box = block.box ?: return found.text
+            val lineHeight = block.lines.firstOrNull()?.box?.height() ?: (box.height() / block.lines.size.coerceAtLeast(1))
             PlacedText(block.text, box.left, box.top, lineHeight.coerceAtLeast(1))
         }
         return ReadingOrder.text(blocks)
@@ -397,12 +393,11 @@ class ImageContentExtractor(private val context: Context) {
     private suspend fun readScreen(bitmap: Bitmap, recorder: OcrStrategyRecorder? = null): String {
         var hiAsIs = ""
         var unsure = false
-        var enFound: com.google.mlkit.vision.text.Text? = null
-        var hiFound: com.google.mlkit.vision.text.Text? = null
+        var enFound: FoundText? = null
+        var hiFound: FoundText? = null
         val asIs = timedStrategy(recorder, OcrStrategy.RAW) {
-            val image = InputImage.fromBitmap(bitmap, 0)
-            val en = process(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
-            val hi = process(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
+            val en = process(mlKitEn, bitmap, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
+            val hi = process(mlKitHi, bitmap, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
             enFound = en
             hiFound = hi
             unsure = hasUnsureLine(en) || hasUnsureLine(hi)
@@ -435,16 +430,15 @@ class ImageContentExtractor(private val context: Context) {
         val gray = timedPre(recorder, "grayscale") { preprocess { toHighContrastGrayscale(bitmap) } }
         try {
             val inGray = timedStrategy(recorder, OcrStrategy.GRAYSCALE) {
-                val image = InputImage.fromBitmap(gray, 0)
-                val hi = recognize(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder, true)
+                val hi = recognize(mlKitHi, gray, IndexMetrics.Timing.OCR_MLKIT_HI, recorder, true)
                 if (saysHindi(hiAsIs) || saysHindi(hi)) {
-                    mergeTexts(recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, true), hi)
+                    mergeTexts(recognize(mlKitEn, gray, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, true), hi)
                 } else hi
             }
             val inverted = timedStrategy(recorder, OcrStrategy.INVERT) {
                 val inv = timedPre(recorder, "invert") { preprocess { invertBitmap(bitmap) } }
                 try {
-                    recognize(mlKitEn, InputImage.fromBitmap(inv, 0), IndexMetrics.Timing.OCR_MLKIT_EN, recorder, true)
+                    recognize(mlKitEn, inv, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, true)
                 } finally {
                     inv.recycle()
                 }
@@ -453,7 +447,7 @@ class ImageContentExtractor(private val context: Context) {
                 // A picture already large has nothing to gain from being enlarged (OcrPerfGuards).
                 if (OcrPerfGuards.shouldBypassUpscale(bitmap.width, bitmap.height)) {
                     IndexMetrics.increment(IndexMetrics.Event.OCR_UPSCALE_BYPASSED)
-                    recognize(mlKitEn, InputImage.fromBitmap(gray, 0), IndexMetrics.Timing.OCR_MLKIT_EN, recorder, true)
+                    recognize(mlKitEn, gray, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, true)
                 } else {
                     val big = timedPre(recorder, "upscale") {
                         preprocess { Bitmap.createScaledBitmap(bitmap, bitmap.width * 2, bitmap.height * 2, true) }
@@ -461,7 +455,7 @@ class ImageContentExtractor(private val context: Context) {
                     try {
                         val bigGray = timedPre(recorder, "grayscale") { preprocess { toHighContrastGrayscale(big) } }
                         try {
-                            recognize(mlKitEn, InputImage.fromBitmap(bigGray, 0), IndexMetrics.Timing.OCR_MLKIT_EN, recorder, true)
+                            recognize(mlKitEn, bigGray, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, true)
                         } finally {
                             bigGray.recycle()
                         }
@@ -483,8 +477,8 @@ class ImageContentExtractor(private val context: Context) {
 
     private suspend fun packedReread(
         bitmap: Bitmap,
-        enFound: com.google.mlkit.vision.text.Text,
-        hiFound: com.google.mlkit.vision.text.Text,
+        enFound: FoundText,
+        hiFound: FoundText,
         hindi: Boolean,
         recorder: OcrStrategyRecorder?,
     ): String? {
@@ -503,12 +497,11 @@ class ImageContentExtractor(private val context: Context) {
             for (sheet in sheets) {
                 val gray = preprocess { toHighContrastGrayscale(sheet.bitmap) }
                 try {
-                    val image = InputImage.fromBitmap(gray, 0)
-                    val hi = process(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
+                    val hi = process(mlKitHi, gray, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
                     LinePacking.assign(sheet, LinePacking.linesOf(hi), grayHi)
                     if (hindiSeen || saysHindi(hi.text)) {
                         hindiSeen = true
-                        val en = process(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
+                        val en = process(mlKitEn, gray, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
                         LinePacking.assign(sheet, LinePacking.linesOf(en), grayEn)
                     }
                 } finally {
@@ -516,7 +509,7 @@ class ImageContentExtractor(private val context: Context) {
                 }
                 val inv = preprocess { invertBitmap(sheet.bitmap) }
                 try {
-                    val en = process(mlKitEn, InputImage.fromBitmap(inv, 0), IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
+                    val en = process(mlKitEn, inv, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
                     LinePacking.assign(sheet, LinePacking.linesOf(en), inverted)
                 } finally {
                     inv.recycle()
@@ -525,7 +518,7 @@ class ImageContentExtractor(private val context: Context) {
                 try {
                     val bigGray = preprocess { toHighContrastGrayscale(big) }
                     try {
-                        val en = process(mlKitEn, InputImage.fromBitmap(bigGray, 0), IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
+                        val en = process(mlKitEn, bigGray, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
                         LinePacking.assign(sheet, LinePacking.halved(LinePacking.linesOf(en)), enlarged)
                     } finally {
                         bigGray.recycle()
@@ -568,9 +561,8 @@ class ImageContentExtractor(private val context: Context) {
      */
     private suspend fun readPhoto(bitmap: Bitmap, recorder: OcrStrategyRecorder? = null): String =
         timedStrategy(recorder, OcrStrategy.RAW) {
-            val image = InputImage.fromBitmap(bitmap, 0)
-            val en = recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, true)
-            val hi = recognize(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder, true)
+            val en = recognize(mlKitEn, bitmap, IndexMetrics.Timing.OCR_MLKIT_EN, recorder, true)
+            val hi = recognize(mlKitHi, bitmap, IndexMetrics.Timing.OCR_MLKIT_HI, recorder, true)
             mergeTexts(en, hi)
         }
 
@@ -608,9 +600,8 @@ class ImageContentExtractor(private val context: Context) {
                         precomputedRaw
                     } else {
                         timedStrategy(recorder, OcrStrategy.RAW) {
-                            val image = InputImage.fromBitmap(bitmap, 0)
-                            val en = recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
-                            val hi = recognize(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
+                            val en = recognize(mlKitEn, bitmap, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
+                            val hi = recognize(mlKitHi, bitmap, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
                             mergeTexts(en, hi)
                         }
                     }
@@ -620,9 +611,8 @@ class ImageContentExtractor(private val context: Context) {
                 //    Strips color → reveals text hidden by colorful backgrounds
                 val grayDeferred = async(Dispatchers.IO) {
                     timedStrategy(recorder, OcrStrategy.GRAYSCALE) {
-                        val image = InputImage.fromBitmap(sharedGray, 0)
-                        val en = recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
-                        val hi = recognize(mlKitHi, image, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
+                        val en = recognize(mlKitEn, sharedGray, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
+                        val hi = recognize(mlKitHi, sharedGray, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
                         mergeTexts(en, hi)
                     }
                 }
@@ -632,8 +622,7 @@ class ImageContentExtractor(private val context: Context) {
                     timedStrategy(recorder, OcrStrategy.INVERT) {
                         val inv = timedPre(recorder, "invert") { preprocess { invertBitmap(bitmap) } }
                         try {
-                            val image = InputImage.fromBitmap(inv, 0)
-                            recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
+                            recognize(mlKitEn, inv, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
                         } finally {
                             inv.recycle()
                         }
@@ -658,8 +647,7 @@ class ImageContentExtractor(private val context: Context) {
                         // byte-identical. Counted → optimization hit rate.
                         if (hiRes == null && OcrPerfGuards.shouldBypassUpscale(bitmap.width, bitmap.height)) {
                             IndexMetrics.increment(IndexMetrics.Event.OCR_UPSCALE_BYPASSED)
-                            val image = InputImage.fromBitmap(sharedGray, 0)
-                            recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
+                            recognize(mlKitEn, sharedGray, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
                         } else {
                             val src = hiRes
                                 ?: timedPre(recorder, "upscale") {
@@ -675,8 +663,7 @@ class ImageContentExtractor(private val context: Context) {
                             try {
                                 val gray = timedPre(recorder, "grayscale") { preprocess { toHighContrastGrayscale(src) } }
                                 try {
-                                    val image = InputImage.fromBitmap(gray, 0)
-                                    recognize(mlKitEn, image, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
+                                    recognize(mlKitEn, gray, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
                                 } finally {
                                     gray.recycle()
                                 }
