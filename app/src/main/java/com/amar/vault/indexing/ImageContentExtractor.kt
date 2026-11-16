@@ -36,6 +36,8 @@ class ImageContentExtractor(
     private val context: Context,
     private val mlKitEn: PictureReader = MlKitReader.english(),
     private val mlKitHi: PictureReader = MlKitReader.hindi(),
+    private val byLines: suspend () -> PictureReader? =
+        com.amar.vault.indexing.ppocr.LineReaders(com.amar.vault.indexing.ppocr.LineModelFiles(context), mlKitHi)::pipeline,
 ) {
 
     companion object {
@@ -391,6 +393,9 @@ class ImageContentExtractor(
      * is made, and what is stored is what it always was.
      */
     private suspend fun readScreen(bitmap: Bitmap, recorder: OcrStrategyRecorder? = null): String {
+        if (LineReadingControl.enabled) {
+            readByLines(bitmap, recorder)?.let { return it }
+        }
         var hiAsIs = ""
         var unsure = false
         var enFound: FoundText? = null
@@ -472,6 +477,22 @@ class ImageContentExtractor(
             return merged
         } finally {
             gray.recycle()
+        }
+    }
+
+    private suspend fun readByLines(bitmap: Bitmap, recorder: OcrStrategyRecorder?): String? {
+        try {
+            val reader = byLines() ?: return null
+            val text = timedStrategy(recorder, OcrStrategy.RAW) { textOf(reader.read(bitmap), inReadingOrder = true) }
+            if (text.isBlank()) return null
+            IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_BY_LINES)
+            return text
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_LINES_FAILED)
+            com.amar.vault.VaultLog.w("OCR", "reading by lines failed, the picture is read whole: ${e.message}")
+            return null
         }
     }
 

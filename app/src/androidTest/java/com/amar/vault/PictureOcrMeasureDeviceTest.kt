@@ -321,6 +321,50 @@ class PictureOcrMeasureDeviceTest {
     }
 
     @Test
+    fun lines() = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("run with -e ocr lines", args.getString("ocr") == "lines")
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        val folder = outputFolder(app)
+        val pictures = picturesFor(args, folder)
+        assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
+        val reader = ImageContentExtractor(app)
+        val name = args.getString("out") ?: "lines"
+        fun byLines() = com.amar.vault.IndexMetrics.snapshot()[com.amar.vault.IndexMetrics.Event.IMAGE_OCR_BY_LINES] ?: 0L
+        try {
+            for (on in listOf(true, false)) {
+                com.amar.vault.indexing.LineReadingControl.enabled = on
+                BitmapFactory.decodeFile(pictures.first().path)?.let { reader.extract(it); it.recycle() }
+            }
+            File(folder, "$name-lines.jsonl").bufferedWriter().use { lines ->
+                File(folder, "$name-whole.jsonl").bufferedWriter().use { whole ->
+                    for ((n, picture) in pictures.withIndex()) {
+                        val bitmap = BitmapFactory.decodeFile(picture.path) ?: continue
+                        val order = if (n % 2 == 0) listOf(true, false) else listOf(false, true)
+                        for (on in order) {
+                            com.amar.vault.indexing.LineReadingControl.enabled = on
+                            val before = byLines()
+                            val started = System.nanoTime()
+                            val text = reader.extract(bitmap).ocrText
+                            val ms = (System.nanoTime() - started) / 1e6
+                            val row = JSONObject().put("name", picture.name).put("width", bitmap.width)
+                                .put("height", bitmap.height).put("text", text).put("ms", ms)
+                            if (on) row.put("byLines", byLines() > before)
+                            val out = if (on) lines else whole
+                            out.write(row.toString())
+                            out.newLine()
+                            out.flush()
+                        }
+                        bitmap.recycle()
+                    }
+                }
+            }
+        } finally {
+            com.amar.vault.indexing.LineReadingControl.enabled = false
+        }
+    }
+
+    @Test
     fun overlap() = runBlocking {
         val args = InstrumentationRegistry.getArguments()
         assumeTrue("run with -e ocr overlap", args.getString("ocr") == "overlap")
