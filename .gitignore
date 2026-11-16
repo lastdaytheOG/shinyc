@@ -142,6 +142,9 @@ tools/phone-screenshots/
 # Photo search models for local tests (a junction to the benchmark kit; hundreds of MB)
 # ==============================
 tools/visual-search/models/
+# Line finder and line readers (PP-OCR) for local tests, and the pack made from them (22 MB)
+tools/ocr-pipeline/models/
+tools/ocr-pipeline/pack/
 # Results of the indexing speed bench (tools/index-bench).
 tools/index-bench/results/
 
