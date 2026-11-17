@@ -330,11 +330,14 @@ class PictureOcrMeasureDeviceTest {
         assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
         val reader = ImageContentExtractor(app)
         val name = args.getString("out") ?: "lines"
+        val page = args.getString("page") == "1"
+        suspend fun read(bitmap: android.graphics.Bitmap, picture: File): String =
+            if (page) reader.extractPdfPageText(bitmap, sourceId = picture.name) else reader.extract(bitmap).ocrText
         fun byLines() = com.amar.vault.IndexMetrics.snapshot()[com.amar.vault.IndexMetrics.Event.IMAGE_OCR_BY_LINES] ?: 0L
         try {
             for (on in listOf(true, false)) {
                 com.amar.vault.indexing.LineReadingControl.route = route(on)
-                BitmapFactory.decodeFile(pictures.first().path)?.let { reader.extract(it); it.recycle() }
+                BitmapFactory.decodeFile(pictures.first().path)?.let { read(it, pictures.first()); it.recycle() }
             }
             File(folder, "$name-lines.jsonl").bufferedWriter().use { lines ->
                 File(folder, "$name-whole.jsonl").bufferedWriter().use { whole ->
@@ -345,7 +348,7 @@ class PictureOcrMeasureDeviceTest {
                             com.amar.vault.indexing.LineReadingControl.route = route(on)
                             val before = byLines()
                             val started = System.nanoTime()
-                            val text = reader.extract(bitmap).ocrText
+                            val text = read(bitmap, picture)
                             val ms = (System.nanoTime() - started) / 1e6
                             val row = JSONObject().put("name", picture.name).put("width", bitmap.width)
                                 .put("height", bitmap.height).put("text", text).put("ms", ms)

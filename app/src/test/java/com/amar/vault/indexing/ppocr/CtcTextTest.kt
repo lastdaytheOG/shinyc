@@ -37,6 +37,23 @@ class CtcTextTest {
 
         assertEquals("", read.text)
         assertEquals(0f, read.confidence, 0f)
+        assertEquals(0f, read.weakest, 0f)
+    }
+
+    @Test
+    fun theWeakestWordIsTheWordWithTheLowestAverageLetter() {
+        val read = CtcText.read(scores(1 to 0.9f, 2 to 0.9f, 4 to 0.95f, 3 to 0.3f, 1 to 0.5f), 0, 5, letters.size, letters)
+
+        assertEquals("ab ca", read.text)
+        assertEquals(0.4f, read.weakest, 1e-6f)
+        assertEquals((0.9f + 0.9f + 0.95f + 0.3f + 0.5f) / 5, read.confidence, 1e-6f)
+    }
+
+    @Test
+    fun aLineOfOneWordIsAsWeakAsItsAverage() {
+        val read = CtcText.read(scores(1 to 0.9f, 2 to 0.7f), 0, 2, letters.size, letters)
+
+        assertEquals(0.8f, read.weakest, 1e-6f)
     }
 
     @Test

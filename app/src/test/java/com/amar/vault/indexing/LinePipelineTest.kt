@@ -115,6 +115,131 @@ class LinePipelineTest {
     }
 
     @Test
+    fun aSureLineWithOneWeakWordGoesToTheHindiReaderToo() = runBlocking {
+        val places = listOf(place(100), place(200))
+        val all = object : LineReader {
+            override suspend fun read(picture: Bitmap, places: List<LinePlace>): List<FoundLine> = listOf(
+                FoundLine("Garden notice", 0.97f, places[0].box(), 0.95f),
+                FoundLine("FG 22/09/2031", 0.93f, places[1].box(), 0.41f),
+            )
+        }
+        val hindi = Reader { (if (it === places[1]) "तारीख 22/09/2031" else "Garden notice") to 0.95f }
+
+        val found = LinePipeline(Finder(places), all, nobody, hindi, weakWordBelow = 0.80f).read(picture())
+
+        assertEquals("Garden notice\nतारीख 22/09/2031", found.text)
+        assertEquals(listOf(listOf(places[1])), hindi.asked)
+    }
+
+    @Test
+    fun whenMostOfTheTextIsUnsureTheHindiReaderReadsTheWholePictureOnce() = runBlocking {
+        val places = listOf(place(100), place(200), place(300))
+        val all = Reader { (if (it === places[0]) "Garden notice" else "TR") to (if (it === places[0]) 0.97f else 0.33f) }
+        val sheets = Reader { "" to 0f }
+        val whole = Reader {
+            when (it) {
+                places[0] -> "Garden notice"
+                places[1] -> "कुल राशि चार सौ"
+                else -> "पानी सबका है"
+            } to 0.9f
+        }
+
+        val found = LinePipeline(Finder(places), all, nobody, sheets, whole).read(picture())
+
+        assertEquals("Garden notice\nकुल राशि चार सौ\nपानी सबका है", found.text)
+        assertTrue(sheets.asked.isEmpty())
+        assertEquals(listOf(places), whole.asked)
+    }
+
+    @Test
+    fun whenFewLinesAreUnsureTheyStillGoOnSheets() = runBlocking {
+        val places = listOf(place(100), place(200), place(300))
+        val all = Reader { (if (it === places[1]) "TR" else "Garden notice") to (if (it === places[1]) 0.33f else 0.97f) }
+        val sheets = Reader { "कुल राशि चार सौ" to 0.9f }
+        val whole = Reader { "" to 0f }
+
+        LinePipeline(Finder(places), all, nobody, sheets, whole).read(picture())
+
+        assertEquals(listOf(listOf(places[1])), sheets.asked)
+        assertTrue(whole.asked.isEmpty())
+    }
+
+    @Test
+    fun aWholePictureReadingGoesBackToTheLinesItSitsOn() = runBlocking {
+        val places = listOf(place(100), place(200), place(300))
+        fun at(text: String, left: Int, top: Int, width: Int) = FoundLine(text, 0.9f, Rect(left, top, left + width, top + 44))
+        val read = FoundText(
+            "",
+            listOf(
+                FoundBlock("", null, listOf(at("राशि", 340, 196, 200), at("कुल", 40, 198, 200))),
+                FoundBlock("", null, listOf(at("सौ", 40, 296, 100), at("stray", 40, 600, 100))),
+            ),
+        )
+
+        val lines = PictureLineReader(Whole { read }).read(picture(), places)
+
+        assertEquals(listOf("", "कुल राशि", "सौ"), lines.map { it.text })
+        assertEquals(places[1].box(), lines[1].box)
+        assertEquals(0f, lines[0].confidence, 0f)
+    }
+
+    @Test
+    fun linesOfTwoColumnsAreKeptAsTwoBlocksSoEachColumnIsReadToItsEnd() {
+        fun at(text: String, left: Int, top: Int) = FoundLine(text, 0.95f, Rect(left, top, left + 400, top + 40))
+        val lines = listOf(
+            at("left one", 40, 100), at("right one", 540, 102), at("left two", 40, 150),
+            at("right two", 540, 152), at("after a gap", 40, 300),
+        )
+
+        val blocks = LineBlocks.of(lines)
+
+        assertEquals(listOf("left one\nleft two", "right one\nright two", "after a gap"), blocks.map { it.text })
+        assertEquals(Rect(40, 100, 440, 190), blocks[0].box)
+    }
+
+    @Test
+    fun aHindiReadingIsKeptHoweverLowTheHindiReaderRatesIt() = runBlocking {
+        val places = listOf(place(100), place(200))
+        val all = Reader { (if (it === places[0]) "Garden notice" else "T Rs 400") to (if (it === places[0]) 0.97f else 0.6f) }
+        val hindi = Reader { "कुल राशि Rs 400" to 0.3f }
+
+        val onPage = LinePipeline(Finder(places), all, nobody, hindi, keepHindi = true).read(picture())
+        val onScreen = LinePipeline(Finder(places), all, nobody, hindi).read(picture())
+
+        assertEquals("Garden notice\nकुल राशि Rs 400", onPage.text)
+        assertEquals("Garden notice", onScreen.text)
+    }
+
+    @Test
+    fun withoutTheWeakWordRuleOnlyAnUnsureLineGoesToTheHindiReader() = runBlocking {
+        val places = listOf(place(100), place(200))
+        val all = object : LineReader {
+            override suspend fun read(picture: Bitmap, places: List<LinePlace>): List<FoundLine> = listOf(
+                FoundLine("Garden notice", 0.97f, places[0].box(), 0.95f),
+                FoundLine("FG 22/09/2031", 0.93f, places[1].box(), 0.41f),
+            )
+        }
+        val hindi = Reader { "तारीख 22/09/2031" to 0.95f }
+
+        val found = LinePipeline(Finder(places), all, nobody, hindi).read(picture())
+
+        assertEquals("Garden notice\nFG 22/09/2031", found.text)
+        assertTrue(hindi.asked.isEmpty())
+    }
+
+    @Test
+    fun linesUnderEachOtherAreOneBlockOnlyWhenGrouped() = runBlocking {
+        val places = listOf(place(100), place(150))
+        val all = Reader { (if (it === places[0]) "Garden notice" else "opens at seven") to 0.97f }
+
+        val grouped = LinePipeline(Finder(places), all, nobody, nobody, grouped = true).read(picture())
+        val apart = LinePipeline(Finder(places), all, nobody, nobody).read(picture())
+
+        assertEquals(listOf("Garden notice\nopens at seven"), grouped.blocks.map { it.text })
+        assertEquals(listOf("Garden notice", "opens at seven"), apart.blocks.map { it.text })
+    }
+
+    @Test
     fun aLineNoReaderIsSureOfIsLeftOut() = runBlocking {
         val places = listOf(place(100), place(200))
         val all = Reader { (if (it === places[0]) "Garden notice" else "lIl") to (if (it === places[0]) 0.97f else 0.3f) }
@@ -181,14 +306,14 @@ class LinePipelineTest {
     private val mlKitSays = screen("Monthly statement for the whole of the year", "Paid within seven working days of the notice")
     private val linesSay = screen("Garden notice for the whole of the village", "The gate opens at seven each morning")
 
-    private class Lines(private val reader: PictureReader?) : ScreenLines {
+    private class Lines(private val reader: PictureReader?) : ReadingLines {
         var asked = 0
-        override suspend fun pipeline(): PictureReader? {
+        override suspend fun pipeline(kind: String): PictureReader? {
             asked++
             return reader
         }
 
-        override fun remembered(): RememberedChoice = HeldChoice()
+        override fun remembered(kind: String): RememberedChoice = HeldChoice()
         override fun release() = Unit
     }
 

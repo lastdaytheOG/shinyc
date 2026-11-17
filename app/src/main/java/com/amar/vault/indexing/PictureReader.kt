@@ -5,7 +5,7 @@ import android.graphics.Rect
 import kotlin.math.ceil
 import kotlin.math.floor
 
-class FoundLine(val text: String, val confidence: Float, val box: Rect?)
+class FoundLine(val text: String, val confidence: Float, val box: Rect?, val weakest: Float = confidence)
 
 class FoundBlock(val text: String, val box: Rect?, val lines: List<FoundLine>)
 

@@ -1,6 +1,6 @@
 package com.amar.vault.indexing.ppocr
 
-class ReadText(val text: String, val confidence: Float)
+class ReadText(val text: String, val confidence: Float, val weakest: Float = confidence)
 
 object CtcText {
 
@@ -15,6 +15,9 @@ object CtcText {
         var sum = 0f
         var kept = 0
         var last = 0
+        var wordSum = 0f
+        var wordKept = 0
+        var weakest = Float.MAX_VALUE
         for (t in 0 until steps) {
             val base = from + t * classes
             var best = 0
@@ -30,9 +33,19 @@ object CtcText {
                 text.append(letters[best])
                 sum += bestScore
                 kept++
+                if (letters[best] == " ") {
+                    if (wordKept > 0) weakest = minOf(weakest, wordSum / wordKept)
+                    wordSum = 0f
+                    wordKept = 0
+                } else {
+                    wordSum += bestScore
+                    wordKept++
+                }
             }
             last = best
         }
-        return ReadText(text.toString(), if (kept == 0) 0f else sum / kept)
+        if (wordKept > 0) weakest = minOf(weakest, wordSum / wordKept)
+        if (kept == 0 || weakest == Float.MAX_VALUE) weakest = 0f
+        return ReadText(text.toString(), if (kept == 0) 0f else sum / kept, weakest)
     }
 }

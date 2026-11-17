@@ -75,7 +75,7 @@ class PpOcrLineReader(
     override suspend fun read(picture: Bitmap, places: List<LinePlace>): List<FoundLine> =
         withContext(Dispatchers.Default) {
             val texts = read(pixelsOf(picture), picture.width, picture.height, places)
-            List(places.size) { FoundLine(texts[it].text, texts[it].confidence, places[it].box()) }
+            List(places.size) { FoundLine(texts[it].text, texts[it].confidence, places[it].box(), texts[it].weakest) }
         }
 
     fun read(argb: IntArray, width: Int, height: Int, places: List<LinePlace>): List<ReadText> {

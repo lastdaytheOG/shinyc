@@ -16,7 +16,7 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [32])
-class ScreenRoutesTest {
+class ReadingRoutesTest {
 
     private var now = 0L
 
@@ -25,15 +25,19 @@ class ScreenRoutesTest {
         override suspend fun read(picture: Bitmap): FoundText = FoundText("", emptyList())
     }
 
-    private class Lines(val reader: PictureReader?, val memory: RememberedChoice?) : ScreenLines {
+    private class Lines(
+        val reader: PictureReader?,
+        val memory: RememberedChoice?,
+        val pages: RememberedChoice? = memory?.let { HeldChoice() },
+    ) : ReadingLines {
         var asked = 0
         var released = false
-        override suspend fun pipeline(): PictureReader? {
+        override suspend fun pipeline(kind: String): PictureReader? {
             asked++
             return reader
         }
 
-        override fun remembered(): RememberedChoice? = memory
+        override fun remembered(kind: String): RememberedChoice? = if (kind == ReadingRoutes.PAGES) pages else memory
         override fun release() {
             released = true
         }
@@ -55,10 +59,10 @@ class ScreenRoutesTest {
     private val sameWords = "garden notice for the whole village the gate opens at seven each morning"
     private val otherWords = "Monthly statement paid within working days"
 
-    private fun routes(lines: Lines) = ScreenRoutes(lines) { now }
+    private fun routes(lines: Lines) = ReadingRoutes(lines) { now }
 
-    private suspend fun ScreenRoutes.readWith(byLines: Reading, whole: Reading): String =
-        read({ byLines.read() }) { whole.read()!! }
+    private suspend fun ReadingRoutes.readWith(byLines: Reading, whole: Reading, kind: String = ReadingRoutes.SCREENS): String =
+        read(kind, { byLines.read() }) { whole.read()!! }
 
     @After
     fun backToChosen() {
@@ -77,12 +81,12 @@ class ScreenRoutesTest {
         assertEquals(0, lines.asked)
         assertEquals(0, byLines.reads)
         assertEquals(3, whole.reads)
-        assertNull(routes.chosen)
+        assertNull(routes.chosen(ReadingRoutes.SCREENS))
     }
 
     @Test
     fun aRememberedWholeRouteIsKeptWithoutOpeningTheLines() = runBlocking {
-        val lines = Lines(Pipeline(), HeldChoice(ScreenRoutes.WHOLE))
+        val lines = Lines(Pipeline(), HeldChoice(ReadingRoutes.WHOLE))
         val byLines = Reading(100, screen)
         val whole = Reading(300, sameWords)
 
@@ -94,7 +98,7 @@ class ScreenRoutesTest {
 
     @Test
     fun aRememberedLinesRouteReadsByLinesOnly() = runBlocking {
-        val lines = Lines(Pipeline(), HeldChoice(ScreenRoutes.LINES))
+        val lines = Lines(Pipeline(), HeldChoice(ReadingRoutes.LINES))
         val byLines = Reading(100, screen)
         val whole = Reading(300, sameWords)
         val routes = routes(lines)
@@ -127,11 +131,11 @@ class ScreenRoutesTest {
         val byLines = Reading(100, screen)
         val whole = Reading(300, sameWords)
 
-        repeat(ScreenRoutes.WARM_AT_MOST) { routes.readWith(byLines, whole) }
+        repeat(ReadingRoutes.WARM_AT_MOST) { routes.readWith(byLines, whole) }
         assertEquals(0, whole.reads)
-        repeat(ScreenRoutes.TRIALS) { routes.readWith(byLines, whole) }
+        repeat(ReadingRoutes.TRIALS) { routes.readWith(byLines, whole) }
 
-        assertEquals(ScreenRoutes.LINES, memory.read())
+        assertEquals(ReadingRoutes.LINES, memory.read())
     }
 
     @Test
@@ -142,17 +146,17 @@ class ScreenRoutesTest {
         val byLines = Reading(100, screen)
         val whole = Reading(300, sameWords)
 
-        repeat(ScreenRoutes.TRIALS) { assertEquals(screen, routes.readWith(byLines, whole)) }
+        repeat(ReadingRoutes.TRIALS) { assertEquals(screen, routes.readWith(byLines, whole)) }
 
-        assertEquals(ScreenRoutes.LINES, memory.read())
-        assertEquals(ScreenRoutes.LINES, routes.chosen)
-        assertEquals(ScreenRoutes.TRIALS, byLines.reads)
-        assertEquals(ScreenRoutes.TRIALS + 1, whole.reads)
+        assertEquals(ReadingRoutes.LINES, memory.read())
+        assertEquals(ReadingRoutes.LINES, routes.chosen(ReadingRoutes.SCREENS))
+        assertEquals(ReadingRoutes.TRIALS, byLines.reads)
+        assertEquals(ReadingRoutes.TRIALS + 1, whole.reads)
         assertFalse(lines.released)
 
         routes.readWith(byLines, whole)
-        assertEquals(ScreenRoutes.TRIALS + 1, byLines.reads)
-        assertEquals(ScreenRoutes.TRIALS + 1, whole.reads)
+        assertEquals(ReadingRoutes.TRIALS + 1, byLines.reads)
+        assertEquals(ReadingRoutes.TRIALS + 1, whole.reads)
     }
 
     @Test
@@ -160,26 +164,26 @@ class ScreenRoutesTest {
         val memory = HeldChoice()
         val routes = routes(Lines(Pipeline(), memory))
 
-        repeat(ScreenRoutes.TRIALS) { routes.readWith(Reading(240, screen), Reading(200, sameWords)) }
+        repeat(ReadingRoutes.TRIALS) { routes.readWith(Reading(240, screen), Reading(200, sameWords)) }
 
-        assertEquals(ScreenRoutes.LINES, memory.read())
+        assertEquals(ReadingRoutes.LINES, memory.read())
     }
 
     @Test
-    fun linesMuchSlowerGiveWayToTheWholeRouteAndAreClosed() = runBlocking {
+    fun linesMuchSlowerGiveWayToTheWholeRouteAndAreClosedWhenPagesGaveWayToo() = runBlocking {
         val memory = HeldChoice()
-        val lines = Lines(Pipeline(), memory)
+        val lines = Lines(Pipeline(), memory, pages = HeldChoice(ReadingRoutes.WHOLE))
         val routes = routes(lines)
         val byLines = Reading(400, screen)
         val whole = Reading(200, sameWords)
 
-        repeat(ScreenRoutes.TRIALS) { assertEquals(screen, routes.readWith(byLines, whole)) }
+        repeat(ReadingRoutes.TRIALS) { assertEquals(screen, routes.readWith(byLines, whole)) }
 
-        assertEquals(ScreenRoutes.WHOLE, memory.read())
+        assertEquals(ReadingRoutes.WHOLE, memory.read())
         assertTrue(lines.released)
         val asked = lines.asked
         assertEquals(sameWords, routes.readWith(byLines, whole))
-        assertEquals(ScreenRoutes.TRIALS, byLines.reads)
+        assertEquals(ReadingRoutes.TRIALS, byLines.reads)
         assertEquals(asked, lines.asked)
     }
 
@@ -188,9 +192,9 @@ class ScreenRoutesTest {
         val memory = HeldChoice()
         val routes = routes(Lines(Pipeline(), memory))
 
-        repeat(ScreenRoutes.TRIALS) { routes.readWith(Reading(50, otherWords), Reading(300, sameWords)) }
+        repeat(ReadingRoutes.TRIALS) { routes.readWith(Reading(50, otherWords), Reading(300, sameWords)) }
 
-        assertEquals(ScreenRoutes.WHOLE, memory.read())
+        assertEquals(ReadingRoutes.WHOLE, memory.read())
     }
 
     @Test
@@ -208,9 +212,9 @@ class ScreenRoutesTest {
         val memory = HeldChoice()
         val routes = routes(Lines(Pipeline(), memory))
 
-        repeat(ScreenRoutes.TRIALS) { routes.readWith(Reading(100, null), Reading(300, "")) }
+        repeat(ReadingRoutes.TRIALS) { routes.readWith(Reading(100, null), Reading(300, "")) }
 
-        assertEquals(ScreenRoutes.LINES, memory.read())
+        assertEquals(ReadingRoutes.LINES, memory.read())
     }
 
     @Test
@@ -219,7 +223,7 @@ class ScreenRoutesTest {
         val log = ArrayList<String>()
 
         repeat(3) {
-            routes.read({ log += "lines"; screen }) { log += "whole"; sameWords }
+            routes.read(ReadingRoutes.SCREENS, { log += "lines"; screen }) { log += "whole"; sameWords }
         }
 
         assertEquals(listOf("whole", "lines", "whole", "whole", "lines", "lines", "whole"), log)
@@ -227,10 +231,51 @@ class ScreenRoutesTest {
 
     @Test
     fun aForcedRouteOverridesTheChoice() = runBlocking {
-        val memory = HeldChoice(ScreenRoutes.WHOLE)
+        val memory = HeldChoice(ReadingRoutes.WHOLE)
         val routes = routes(Lines(Pipeline(), memory))
         LineReadingControl.route = LineReadingControl.Route.LINES
 
         assertEquals(screen, routes.readWith(Reading(100, screen), Reading(300, sameWords)))
+    }
+
+    @Test
+    fun pagesAndScreensAreChosenApart() = runBlocking {
+        val screens = HeldChoice()
+        val pages = HeldChoice()
+        val routes = routes(Lines(Pipeline(), screens, pages))
+
+        repeat(ReadingRoutes.TRIALS) { routes.readWith(Reading(100, screen), Reading(300, sameWords)) }
+        repeat(ReadingRoutes.TRIALS) { routes.readWith(Reading(900, screen), Reading(300, sameWords), ReadingRoutes.PAGES) }
+
+        assertEquals(ReadingRoutes.LINES, screens.read())
+        assertEquals(ReadingRoutes.WHOLE, pages.read())
+        assertEquals(ReadingRoutes.LINES, routes.chosen(ReadingRoutes.SCREENS))
+        assertEquals(ReadingRoutes.WHOLE, routes.chosen(ReadingRoutes.PAGES))
+    }
+
+    @Test
+    fun theLinesStayOpenWhileTheOtherKindMayStillUseThem() = runBlocking {
+        val lines = Lines(Pipeline(), HeldChoice(), HeldChoice())
+        val routes = routes(lines)
+
+        repeat(ReadingRoutes.TRIALS) { routes.readWith(Reading(900, screen), Reading(300, sameWords)) }
+        assertFalse(lines.released)
+
+        repeat(ReadingRoutes.TRIALS) { routes.readWith(Reading(900, screen), Reading(300, sameWords), ReadingRoutes.PAGES) }
+        assertTrue(lines.released)
+    }
+
+    @Test
+    fun aRememberedPageChoiceDoesNotDecideForScreens() = runBlocking {
+        val screens = HeldChoice()
+        val routes = routes(Lines(Pipeline(), screens, HeldChoice(ReadingRoutes.WHOLE)))
+        val byLines = Reading(100, screen)
+        val whole = Reading(300, sameWords)
+
+        assertEquals(sameWords, routes.readWith(byLines, whole, ReadingRoutes.PAGES))
+        assertEquals(0, byLines.reads)
+        assertEquals(screen, routes.readWith(byLines, whole))
+        assertEquals(1, byLines.reads)
+        assertNull(screens.read())
     }
 }

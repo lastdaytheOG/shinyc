@@ -157,7 +157,7 @@ class LiteRtLineReader(
                     val pixels = FloatArray(3 * LineStrips.HEIGHT * width)
                     LineStrips.fill(argb, picture.width, picture.height, strips[i], pixels, 0, width, interleaved = true)
                     val read = decode(run(byWidth.getValue(width).path, pixels))
-                    out[i] = FoundLine(read.text, read.confidence, places[i].box())
+                    out[i] = FoundLine(read.text, read.confidence, places[i].box(), read.weakest)
                 }
             }
         }

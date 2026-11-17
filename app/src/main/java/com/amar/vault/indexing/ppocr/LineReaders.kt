@@ -7,8 +7,10 @@ import com.amar.vault.VaultLog
 import com.amar.vault.indexing.LineFinder
 import com.amar.vault.indexing.LinePipeline
 import com.amar.vault.indexing.LineReader
+import com.amar.vault.indexing.PictureLineReader
 import com.amar.vault.indexing.PictureReader
-import com.amar.vault.indexing.ScreenLines
+import com.amar.vault.indexing.ReadingLines
+import com.amar.vault.indexing.ReadingRoutes
 import com.amar.vault.indexing.SheetLineReader
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -41,15 +43,16 @@ class LineReaders(
     private val hindi: PictureReader,
     private val choice: ((String) -> RememberedChoice)? = null,
     private val threads: Int = 4,
-) : ScreenLines, AutoCloseable {
+) : ReadingLines, AutoCloseable {
 
     constructor(context: Context, hindi: PictureReader) :
         this(LineModelFiles(context), hindi, { key -> PrefsChoice(context, key) })
 
-    private class Opened(val pipeline: LinePipeline, val sessions: List<AutoCloseable>)
+    private class Opened(val screens: LinePipeline, val pages: LinePipeline, val sessions: List<AutoCloseable>) {
+        fun pipeline(kind: String): LinePipeline = if (kind == ReadingRoutes.PAGES) pages else screens
+    }
 
     private val gate = Mutex()
-    private val held = HeldChoice()
 
     @Volatile
     private var opened: Opened? = null
@@ -57,26 +60,28 @@ class LineReaders(
     @Volatile
     private var broken: String? = null
 
-    override fun remembered(): RememberedChoice? {
+    private val held = HashMap<String, HeldChoice>()
+
+    override fun remembered(kind: String): RememberedChoice? {
         if (!BuildConfig.PHOTO_ENGINE || !files.present()) return null
         val manifest = files.manifest() ?: return null
         if (broken == manifest.id) return null
-        val chooser = choice ?: return held
-        return chooser("screens|${manifest.id}|${manifest.version}")
+        val chooser = choice ?: return synchronized(held) { held.getOrPut(kind) { HeldChoice() } }
+        return chooser("$kind|${manifest.id}|${manifest.version}")
     }
 
     override fun release() = close()
 
-    override suspend fun pipeline(): PictureReader? {
-        opened?.let { return it.pipeline }
+    override suspend fun pipeline(kind: String): PictureReader? {
+        opened?.let { return it.pipeline(kind) }
         if (!BuildConfig.PHOTO_ENGINE) return null
         return gate.withLock {
-            opened?.let { return@withLock it.pipeline }
+            opened?.let { return@withLock it.pipeline(kind) }
             if (!files.present()) return@withLock null
             val manifest = files.manifest() ?: return@withLock null
             if (broken == manifest.id) return@withLock null
             try {
-                withContext(Dispatchers.IO) { open(manifest) }.also { opened = it }.pipeline
+                withContext(Dispatchers.IO) { open(manifest) }.also { opened = it }.pipeline(kind)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -129,7 +134,13 @@ class LineReaders(
 
             val all = reader(LineModelFiles.ALL)
             val numbers = reader(LineModelFiles.NUMBERS)
-            return Opened(LinePipeline(finder, all, numbers, SheetLineReader(hindi)), sessions)
+            val sheets = SheetLineReader(hindi)
+            val screens = LinePipeline(finder, all, numbers, sheets)
+            val pages = LinePipeline(
+                finder, all, numbers, sheets, PictureLineReader(hindi),
+                weakWordBelow = 0.80f, keepHindi = true, grouped = true,
+            )
+            return Opened(screens, pages, sessions)
         } catch (e: Throwable) {
             sessions.asReversed().forEach { runCatching { it.close() } }
             throw e

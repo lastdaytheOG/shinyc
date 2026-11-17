@@ -36,10 +36,10 @@ class ImageContentExtractor(
     private val context: Context,
     private val mlKitEn: PictureReader = MlKitReader.english(),
     private val mlKitHi: PictureReader = MlKitReader.hindi(),
-    lines: ScreenLines = com.amar.vault.indexing.ppocr.LineReaders(context, mlKitHi),
+    lines: ReadingLines = com.amar.vault.indexing.ppocr.LineReaders(context, mlKitHi),
 ) {
 
-    private val routes = ScreenRoutes(lines)
+    private val routes = ReadingRoutes(lines)
 
     companion object {
         // Sprint P4 — tier-1 acceptance floor for the PDF escalation ladder. Pages
@@ -222,6 +222,24 @@ class ImageContentExtractor(
 
         val tLadder = System.currentTimeMillis()
 
+        return routes.read(ReadingRoutes.PAGES, { reader ->
+            readByLines(reader, bitmap, recorder)?.let { text ->
+                recorder?.let {
+                    it.setTotalMs((System.currentTimeMillis() - tLadder).toDouble())
+                    OcrInstrumentation.publish(it.buildReport(sourceId ?: "pdfpage@${System.identityHashCode(bitmap)}", text))
+                }
+                normalize(text)
+            }
+        }) { readPageWhole(bitmap, renderHiRes, sourceId, recorder, tLadder) }
+    }
+
+    private suspend fun readPageWhole(
+        bitmap: Bitmap,
+        renderHiRes: (suspend () -> Bitmap?)?,
+        sourceId: String?,
+        recorder: OcrStrategyRecorder?,
+        tLadder: Long,
+    ): String {
         if (AdaptivePdfOcrControl.mode == AdaptivePdfOcrControl.Mode.LEGACY_ENSEMBLE) {
             val merged = runEnsemble(bitmap, precomputedRaw = null, renderHiRes = renderHiRes, recorder = recorder)
             recorder?.let {
@@ -379,7 +397,7 @@ class ImageContentExtractor(
     // ════════════════════════════════════════════════════════════════════════
 
     private suspend fun readScreen(bitmap: Bitmap, recorder: OcrStrategyRecorder? = null): String =
-        routes.read({ readByLines(it, bitmap, recorder) }) { readWhole(bitmap, recorder) }
+        routes.read(ReadingRoutes.SCREENS, { readByLines(it, bitmap, recorder) }) { readWhole(bitmap, recorder) }
 
     /**
      * A screenshot, read several ways and the readings put together ([ReadingMerge]): one read
