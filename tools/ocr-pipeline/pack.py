@@ -22,7 +22,7 @@ FINDER_SIZES = [(544, 1280), (576, 1280), (608, 1280), (640, 1280), (704, 1280)]
 READER_WIDTHS = [320, 640, 960]
 FIXED_READERS = {"all", "numbers"}
 LONG_SIDE = 1280
-VERSION = 1
+VERSION = 2
 
 
 def settings(name):
