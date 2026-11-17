@@ -25,7 +25,9 @@ enum class LiteRtChip(val label: String) {
 
 class LiteRtRunner(val chip: LiteRtChip, private val threads: Int = 4) : AutoCloseable {
 
-    private class Opened(val model: CompiledModel, val inputs: List<TensorBuffer>, val outputs: List<TensorBuffer>)
+    private class Buffers(val inputs: List<TensorBuffer>, val outputs: List<TensorBuffer>)
+
+    private class Opened(val model: CompiledModel, val buffers: HashMap<String?, Buffers> = HashMap())
 
     @Volatile
     private var owner: Thread? = null
@@ -38,21 +40,26 @@ class LiteRtRunner(val chip: LiteRtChip, private val threads: Int = 4) : AutoClo
 
     suspend fun <T> on(work: LiteRtRunner.() -> T): T = withContext(thread) { work() }
 
-    fun run(path: String, input: FloatArray): FloatArray {
+    fun run(path: String, signature: String?, input: FloatArray): FloatArray {
         check(Thread.currentThread() === owner) { "a LiteRT model ran off its own thread" }
         val model = opened[path] ?: open(path).also { opened[path] = it }
-        model.inputs.single().writeFloat(input)
-        model.model.run(model.inputs, model.outputs)
-        return model.outputs.single().readFloat()
+        val buffers = model.buffers[signature] ?: buffersOf(model.model, signature).also { model.buffers[signature] = it }
+        buffers.inputs.single().writeFloat(input)
+        if (signature == null) model.model.run(buffers.inputs, buffers.outputs) else model.model.run(buffers.inputs, buffers.outputs, signature)
+        return buffers.outputs.single().readFloat()
     }
 
     private fun open(path: String): Opened {
         val env = environment ?: Environment.create().also { environment = it }
-        val model = CompiledModel.create(path, options(), env)
+        return Opened(CompiledModel.create(path, options(), env))
+    }
+
+    private fun buffersOf(model: CompiledModel, signature: String?): Buffers {
+        val inputs = if (signature == null) model.createInputBuffers() else model.createInputBuffers(signature)
         try {
-            return Opened(model, model.createInputBuffers(), model.createOutputBuffers())
+            return Buffers(inputs, if (signature == null) model.createOutputBuffers() else model.createOutputBuffers(signature))
         } catch (e: Throwable) {
-            runCatching { model.close() }
+            inputs.forEach { runCatching { it.close() } }
             throw e
         }
     }
@@ -70,7 +77,8 @@ class LiteRtRunner(val chip: LiteRtChip, private val threads: Int = 4) : AutoClo
     }
 
     private fun release(model: Opened) {
-        (model.inputs + model.outputs).forEach { runCatching { it.close() } }
+        model.buffers.values.flatMap { it.inputs + it.outputs }.forEach { runCatching { it.close() } }
+        model.buffers.clear()
         runCatching { model.model.close() }
     }
 
@@ -94,7 +102,7 @@ class LiteRtRunner(val chip: LiteRtChip, private val threads: Int = 4) : AutoClo
     }
 }
 
-class FinderModel(val path: String, val width: Int, val height: Int)
+class FinderModel(val path: String, val width: Int, val height: Int, val signature: String? = null)
 
 class LiteRtLineFinder(
     private val runner: LiteRtRunner,
@@ -117,7 +125,7 @@ class LiteRtLineFinder(
             val prepared = LineFinding.input(
                 pixelsOf(picture), picture.width, picture.height, settings.longSide, interleaved = true,
             )
-            val prob = run(model.path, prepared.pixels)
+            val prob = run(model.path, model.signature, prepared.pixels)
             check(prob.size == model.width * model.height) {
                 "the finder gave ${prob.size} values for ${model.width} x ${model.height}"
             }
@@ -128,7 +136,7 @@ class LiteRtLineFinder(
     override fun close() = runner.forget(models.map { it.path })
 }
 
-class ReaderModel(val path: String, val width: Int)
+class ReaderModel(val path: String, val width: Int, val signature: String? = null)
 
 class LiteRtLineReader(
     private val runner: LiteRtRunner,
@@ -156,7 +164,8 @@ class LiteRtLineReader(
                     val width = sizes[i]
                     val pixels = FloatArray(3 * LineStrips.HEIGHT * width)
                     LineStrips.fill(argb, picture.width, picture.height, strips[i], pixels, 0, width, interleaved = true)
-                    val read = decode(run(byWidth.getValue(width).path, pixels))
+                    val model = byWidth.getValue(width)
+                    val read = decode(run(model.path, model.signature, pixels))
                     out[i] = FoundLine(read.text, read.confidence, places[i].box(), read.weakest)
                 }
             }
