@@ -3,6 +3,8 @@ package com.amar.vault.indexing
 import android.graphics.Bitmap
 import android.graphics.Rect
 import androidx.test.core.app.ApplicationProvider
+import com.amar.vault.indexing.ppocr.HeldChoice
+import com.amar.vault.indexing.ppocr.RememberedChoice
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -51,8 +53,8 @@ class LinePipelineTest {
     private val nobody = Reader { "" to 0f }
 
     @After
-    fun switchOff() {
-        LineReadingControl.enabled = false
+    fun backToChosen() {
+        LineReadingControl.route = LineReadingControl.Route.CHOSEN
     }
 
     @Test
@@ -110,6 +112,131 @@ class LinePipelineTest {
 
         assertEquals("Garden notice\nकुल राशि चार सौ\nWater is shared", found.text)
         assertEquals(listOf(listOf(places[1], places[2])), hindi.asked)
+    }
+
+    @Test
+    fun aSureLineWithOneWeakWordGoesToTheHindiReaderToo() = runBlocking {
+        val places = listOf(place(100), place(200))
+        val all = object : LineReader {
+            override suspend fun read(picture: Bitmap, places: List<LinePlace>): List<FoundLine> = listOf(
+                FoundLine("Garden notice", 0.97f, places[0].box(), 0.95f),
+                FoundLine("FG 22/09/2031", 0.93f, places[1].box(), 0.41f),
+            )
+        }
+        val hindi = Reader { (if (it === places[1]) "तारीख 22/09/2031" else "Garden notice") to 0.95f }
+
+        val found = LinePipeline(Finder(places), all, nobody, hindi, weakWordBelow = 0.80f).read(picture())
+
+        assertEquals("Garden notice\nतारीख 22/09/2031", found.text)
+        assertEquals(listOf(listOf(places[1])), hindi.asked)
+    }
+
+    @Test
+    fun whenMostOfTheTextIsUnsureTheHindiReaderReadsTheWholePictureOnce() = runBlocking {
+        val places = listOf(place(100), place(200), place(300))
+        val all = Reader { (if (it === places[0]) "Garden notice" else "TR") to (if (it === places[0]) 0.97f else 0.33f) }
+        val sheets = Reader { "" to 0f }
+        val whole = Reader {
+            when (it) {
+                places[0] -> "Garden notice"
+                places[1] -> "कुल राशि चार सौ"
+                else -> "पानी सबका है"
+            } to 0.9f
+        }
+
+        val found = LinePipeline(Finder(places), all, nobody, sheets, whole).read(picture())
+
+        assertEquals("Garden notice\nकुल राशि चार सौ\nपानी सबका है", found.text)
+        assertTrue(sheets.asked.isEmpty())
+        assertEquals(listOf(places), whole.asked)
+    }
+
+    @Test
+    fun whenFewLinesAreUnsureTheyStillGoOnSheets() = runBlocking {
+        val places = listOf(place(100), place(200), place(300))
+        val all = Reader { (if (it === places[1]) "TR" else "Garden notice") to (if (it === places[1]) 0.33f else 0.97f) }
+        val sheets = Reader { "कुल राशि चार सौ" to 0.9f }
+        val whole = Reader { "" to 0f }
+
+        LinePipeline(Finder(places), all, nobody, sheets, whole).read(picture())
+
+        assertEquals(listOf(listOf(places[1])), sheets.asked)
+        assertTrue(whole.asked.isEmpty())
+    }
+
+    @Test
+    fun aWholePictureReadingGoesBackToTheLinesItSitsOn() = runBlocking {
+        val places = listOf(place(100), place(200), place(300))
+        fun at(text: String, left: Int, top: Int, width: Int) = FoundLine(text, 0.9f, Rect(left, top, left + width, top + 44))
+        val read = FoundText(
+            "",
+            listOf(
+                FoundBlock("", null, listOf(at("राशि", 340, 196, 200), at("कुल", 40, 198, 200))),
+                FoundBlock("", null, listOf(at("सौ", 40, 296, 100), at("stray", 40, 600, 100))),
+            ),
+        )
+
+        val lines = PictureLineReader(Whole { read }).read(picture(), places)
+
+        assertEquals(listOf("", "कुल राशि", "सौ"), lines.map { it.text })
+        assertEquals(places[1].box(), lines[1].box)
+        assertEquals(0f, lines[0].confidence, 0f)
+    }
+
+    @Test
+    fun linesOfTwoColumnsAreKeptAsTwoBlocksSoEachColumnIsReadToItsEnd() {
+        fun at(text: String, left: Int, top: Int) = FoundLine(text, 0.95f, Rect(left, top, left + 400, top + 40))
+        val lines = listOf(
+            at("left one", 40, 100), at("right one", 540, 102), at("left two", 40, 150),
+            at("right two", 540, 152), at("after a gap", 40, 300),
+        )
+
+        val blocks = LineBlocks.of(lines)
+
+        assertEquals(listOf("left one\nleft two", "right one\nright two", "after a gap"), blocks.map { it.text })
+        assertEquals(Rect(40, 100, 440, 190), blocks[0].box)
+    }
+
+    @Test
+    fun aHindiReadingIsKeptHoweverLowTheHindiReaderRatesIt() = runBlocking {
+        val places = listOf(place(100), place(200))
+        val all = Reader { (if (it === places[0]) "Garden notice" else "T Rs 400") to (if (it === places[0]) 0.97f else 0.6f) }
+        val hindi = Reader { "कुल राशि Rs 400" to 0.3f }
+
+        val onPage = LinePipeline(Finder(places), all, nobody, hindi, keepHindi = true).read(picture())
+        val onScreen = LinePipeline(Finder(places), all, nobody, hindi).read(picture())
+
+        assertEquals("Garden notice\nकुल राशि Rs 400", onPage.text)
+        assertEquals("Garden notice", onScreen.text)
+    }
+
+    @Test
+    fun withoutTheWeakWordRuleOnlyAnUnsureLineGoesToTheHindiReader() = runBlocking {
+        val places = listOf(place(100), place(200))
+        val all = object : LineReader {
+            override suspend fun read(picture: Bitmap, places: List<LinePlace>): List<FoundLine> = listOf(
+                FoundLine("Garden notice", 0.97f, places[0].box(), 0.95f),
+                FoundLine("FG 22/09/2031", 0.93f, places[1].box(), 0.41f),
+            )
+        }
+        val hindi = Reader { "तारीख 22/09/2031" to 0.95f }
+
+        val found = LinePipeline(Finder(places), all, nobody, hindi).read(picture())
+
+        assertEquals("Garden notice\nFG 22/09/2031", found.text)
+        assertTrue(hindi.asked.isEmpty())
+    }
+
+    @Test
+    fun linesUnderEachOtherAreOneBlockOnlyWhenGrouped() = runBlocking {
+        val places = listOf(place(100), place(150))
+        val all = Reader { (if (it === places[0]) "Garden notice" else "opens at seven") to 0.97f }
+
+        val grouped = LinePipeline(Finder(places), all, nobody, nobody, grouped = true).read(picture())
+        val apart = LinePipeline(Finder(places), all, nobody, nobody).read(picture())
+
+        assertEquals(listOf("Garden notice\nopens at seven"), grouped.blocks.map { it.text })
+        assertEquals(listOf("Garden notice", "opens at seven"), apart.blocks.map { it.text })
     }
 
     @Test
@@ -179,28 +306,42 @@ class LinePipelineTest {
     private val mlKitSays = screen("Monthly statement for the whole of the year", "Paid within seven working days of the notice")
     private val linesSay = screen("Garden notice for the whole of the village", "The gate opens at seven each morning")
 
-    private fun extractor(english: PictureReader, byLines: suspend () -> PictureReader?) = ImageContentExtractor(
-        ApplicationProvider.getApplicationContext(), english, Whole { FoundText("", emptyList()) }, byLines,
+    private class Lines(private val reader: PictureReader?) : ReadingLines {
+        var asked = 0
+        override suspend fun pipeline(kind: String): PictureReader? {
+            asked++
+            return reader
+        }
+
+        override fun remembered(kind: String): RememberedChoice = HeldChoice()
+        override fun release() = Unit
+    }
+
+    private fun extractor(english: PictureReader, lines: PictureReader?) = ImageContentExtractor(
+        ApplicationProvider.getApplicationContext(), english, Whole { FoundText("", emptyList()) }, Lines(lines),
     )
 
     @Test
-    fun withTheSwitchOffTheLineReadersAreNotEvenAskedFor() = runBlocking {
-        var asked = 0
+    fun withTheWholeRouteForcedTheLineReadersAreNotEvenAskedFor() = runBlocking {
+        LineReadingControl.route = LineReadingControl.Route.WHOLE
         val english = Whole { mlKitSays }
+        val lines = Lines(Whole { linesSay })
 
-        val stored = extractor(english) { asked++; Whole { linesSay } }.extract(picture()).ocrText
+        val stored = ImageContentExtractor(
+            ApplicationProvider.getApplicationContext(), english, Whole { FoundText("", emptyList()) }, lines,
+        ).extract(picture()).ocrText
 
         assertEquals(mlKitSays.text, stored)
-        assertEquals(0, asked)
+        assertEquals(0, lines.asked)
     }
 
     @Test
-    fun withTheSwitchOnAScreenIsReadByLinesAndTheWholePictureReadersAreLeftAlone() = runBlocking {
-        LineReadingControl.enabled = true
+    fun withLinesForcedAScreenIsReadByLinesAndTheWholePictureReadersAreLeftAlone() = runBlocking {
+        LineReadingControl.route = LineReadingControl.Route.LINES
         val english = Whole { mlKitSays }
         val lines = Whole { linesSay }
 
-        val stored = extractor(english) { lines }.extract(picture()).ocrText
+        val stored = extractor(english, lines).extract(picture()).ocrText
 
         assertEquals(linesSay.text, stored)
         assertEquals(1, lines.reads)
@@ -208,38 +349,38 @@ class LinePipelineTest {
     }
 
     @Test
-    fun withTheSwitchOnAndNoLineReadersTheWholePictureReadersReadIt() = runBlocking {
-        LineReadingControl.enabled = true
+    fun withLinesForcedAndNoLineReadersTheWholePictureReadersReadIt() = runBlocking {
+        LineReadingControl.route = LineReadingControl.Route.LINES
 
-        val stored = extractor(Whole { mlKitSays }) { null }.extract(picture()).ocrText
+        val stored = extractor(Whole { mlKitSays }, null).extract(picture()).ocrText
 
         assertEquals(mlKitSays.text, stored)
     }
 
     @Test
     fun whenReadingByLinesFailsTheWholePictureReadersReadIt() = runBlocking {
-        LineReadingControl.enabled = true
+        LineReadingControl.route = LineReadingControl.Route.LINES
 
-        val stored = extractor(Whole { mlKitSays }) { Whole { throw IllegalStateException("no session") } }.extract(picture()).ocrText
+        val stored = extractor(Whole { mlKitSays }, Whole { throw IllegalStateException("no session") }).extract(picture()).ocrText
 
         assertEquals(mlKitSays.text, stored)
     }
 
     @Test
     fun whenReadingByLinesFindsNothingTheWholePictureReadersHaveALook() = runBlocking {
-        LineReadingControl.enabled = true
+        LineReadingControl.route = LineReadingControl.Route.LINES
 
-        val stored = extractor(Whole { mlKitSays }) { Whole { FoundText("", emptyList()) } }.extract(picture()).ocrText
+        val stored = extractor(Whole { mlKitSays }, Whole { FoundText("", emptyList()) }).extract(picture()).ocrText
 
         assertEquals(mlKitSays.text, stored)
     }
 
     @Test
     fun aPhotoIsNotReadByLines() = runBlocking {
-        LineReadingControl.enabled = true
+        LineReadingControl.route = LineReadingControl.Route.LINES
         val lines = Whole { linesSay }
 
-        val stored = extractor(Whole { mlKitSays }) { lines }.extract(picture(), photo = true).ocrText
+        val stored = extractor(Whole { mlKitSays }, lines).extract(picture(), photo = true).ocrText
 
         assertEquals(mlKitSays.text, stored)
         assertEquals(0, lines.reads)

@@ -36,9 +36,10 @@ class ImageContentExtractor(
     private val context: Context,
     private val mlKitEn: PictureReader = MlKitReader.english(),
     private val mlKitHi: PictureReader = MlKitReader.hindi(),
-    private val byLines: suspend () -> PictureReader? =
-        com.amar.vault.indexing.ppocr.LineReaders(context, mlKitHi)::pipeline,
+    lines: ReadingLines = com.amar.vault.indexing.ppocr.LineReaders(context, mlKitHi),
 ) {
+
+    private val routes = ReadingRoutes(lines)
 
     companion object {
         // Sprint P4 — tier-1 acceptance floor for the PDF escalation ladder. Pages
@@ -221,6 +222,24 @@ class ImageContentExtractor(
 
         val tLadder = System.currentTimeMillis()
 
+        return routes.read(ReadingRoutes.PAGES, { reader ->
+            readByLines(reader, bitmap, recorder)?.let { text ->
+                recorder?.let {
+                    it.setTotalMs((System.currentTimeMillis() - tLadder).toDouble())
+                    OcrInstrumentation.publish(it.buildReport(sourceId ?: "pdfpage@${System.identityHashCode(bitmap)}", text))
+                }
+                normalize(text)
+            }
+        }) { readPageWhole(bitmap, renderHiRes, sourceId, recorder, tLadder) }
+    }
+
+    private suspend fun readPageWhole(
+        bitmap: Bitmap,
+        renderHiRes: (suspend () -> Bitmap?)?,
+        sourceId: String?,
+        recorder: OcrStrategyRecorder?,
+        tLadder: Long,
+    ): String {
         if (AdaptivePdfOcrControl.mode == AdaptivePdfOcrControl.Mode.LEGACY_ENSEMBLE) {
             val merged = runEnsemble(bitmap, precomputedRaw = null, renderHiRes = renderHiRes, recorder = recorder)
             recorder?.let {
@@ -377,6 +396,9 @@ class ImageContentExtractor(
     // Aggressive multi-pass OCR
     // ════════════════════════════════════════════════════════════════════════
 
+    private suspend fun readScreen(bitmap: Bitmap, recorder: OcrStrategyRecorder? = null): String =
+        routes.read(ReadingRoutes.SCREENS, { readByLines(it, bitmap, recorder) }) { readWhole(bitmap, recorder) }
+
     /**
      * A screenshot, read several ways and the readings put together ([ReadingMerge]): one read
      * misses faint text, coloured text on coloured backgrounds, light text on dark and small print.
@@ -392,10 +414,7 @@ class ImageContentExtractor(
      * and a lone letter was not: the Hindi reader takes icons for letters. With Hindi seen every read
      * is made, and what is stored is what it always was.
      */
-    private suspend fun readScreen(bitmap: Bitmap, recorder: OcrStrategyRecorder? = null): String {
-        if (LineReadingControl.enabled) {
-            readByLines(bitmap, recorder)?.let { return it }
-        }
+    private suspend fun readWhole(bitmap: Bitmap, recorder: OcrStrategyRecorder?): String {
         var hiAsIs = ""
         var unsure = false
         var enFound: FoundText? = null
@@ -480,9 +499,8 @@ class ImageContentExtractor(
         }
     }
 
-    private suspend fun readByLines(bitmap: Bitmap, recorder: OcrStrategyRecorder?): String? {
+    private suspend fun readByLines(reader: PictureReader, bitmap: Bitmap, recorder: OcrStrategyRecorder?): String? {
         try {
-            val reader = byLines() ?: return null
             val text = timedStrategy(recorder, OcrStrategy.RAW) { textOf(reader.read(bitmap), inReadingOrder = true) }
             if (text.isBlank()) return null
             IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_BY_LINES)

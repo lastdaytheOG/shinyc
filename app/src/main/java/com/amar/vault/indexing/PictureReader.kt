@@ -5,7 +5,7 @@ import android.graphics.Rect
 import kotlin.math.ceil
 import kotlin.math.floor
 
-class FoundLine(val text: String, val confidence: Float, val box: Rect?)
+class FoundLine(val text: String, val confidence: Float, val box: Rect?, val weakest: Float = confidence)
 
 class FoundBlock(val text: String, val box: Rect?, val lines: List<FoundLine>)
 
@@ -13,6 +13,8 @@ class FoundText(val text: String, val blocks: List<FoundBlock>)
 
 interface PictureReader {
     suspend fun read(picture: Bitmap): FoundText
+
+    val trying: Boolean get() = false
 }
 
 class LinePlace(val corners: FloatArray, val score: Float) {
@@ -31,8 +33,12 @@ class LinePlace(val corners: FloatArray, val score: Float) {
 
 interface LineFinder {
     suspend fun find(picture: Bitmap): List<LinePlace>
+
+    val trying: Boolean get() = false
 }
 
 interface LineReader {
     suspend fun read(picture: Bitmap, places: List<LinePlace>): List<FoundLine>
+
+    val trying: Boolean get() = false
 }

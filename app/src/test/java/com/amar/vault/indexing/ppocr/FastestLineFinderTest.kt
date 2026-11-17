@@ -41,7 +41,7 @@ class FastestLineFinderTest {
         }
     }
 
-    private class Memory(var value: String? = null) : FinderChoice {
+    private class Memory(var value: String? = null) : RememberedChoice {
         override fun read(): String? = value
         override fun write(choice: String) {
             value = choice
