@@ -128,6 +128,8 @@ class FastestLineFinder(
 
     val chosen: String? get() = fastest.chosen
 
+    override val trying: Boolean get() = fastest.chosen == null
+
     override suspend fun find(picture: Bitmap): List<LinePlace> =
         fastest.use({ it.fits(picture.width, picture.height) }, ::same) { it.find(picture) }
 
@@ -164,6 +166,8 @@ class FastestLineReader(
     private val fastest = Fastest<LineReader, LineReader>(what, steady, quick, remembered, clock)
 
     val chosen: String? get() = fastest.chosen
+
+    override val trying: Boolean get() = fastest.chosen == null
 
     override suspend fun read(picture: Bitmap, places: List<LinePlace>): List<FoundLine> =
         fastest.use({ places.isNotEmpty() }, ::same) { it.read(picture, places) }

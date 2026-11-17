@@ -8,6 +8,7 @@ import com.amar.vault.indexing.LineFinder
 import com.amar.vault.indexing.LinePipeline
 import com.amar.vault.indexing.LineReader
 import com.amar.vault.indexing.PictureReader
+import com.amar.vault.indexing.ScreenLines
 import com.amar.vault.indexing.SheetLineReader
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -27,12 +28,20 @@ class PrefsChoice(context: Context, key: String) : RememberedChoice {
     }
 }
 
+class HeldChoice(private var value: String? = null) : RememberedChoice {
+    override fun read(): String? = value
+
+    override fun write(choice: String) {
+        value = choice
+    }
+}
+
 class LineReaders(
     private val files: LineModelFiles,
     private val hindi: PictureReader,
     private val choice: ((String) -> RememberedChoice)? = null,
     private val threads: Int = 4,
-) : AutoCloseable {
+) : ScreenLines, AutoCloseable {
 
     constructor(context: Context, hindi: PictureReader) :
         this(LineModelFiles(context), hindi, { key -> PrefsChoice(context, key) })
@@ -40,6 +49,7 @@ class LineReaders(
     private class Opened(val pipeline: LinePipeline, val sessions: List<AutoCloseable>)
 
     private val gate = Mutex()
+    private val held = HeldChoice()
 
     @Volatile
     private var opened: Opened? = null
@@ -47,7 +57,17 @@ class LineReaders(
     @Volatile
     private var broken: String? = null
 
-    suspend fun pipeline(): PictureReader? {
+    override fun remembered(): RememberedChoice? {
+        if (!BuildConfig.PHOTO_ENGINE || !files.present()) return null
+        val manifest = files.manifest() ?: return null
+        if (broken == manifest.id) return null
+        val chooser = choice ?: return held
+        return chooser("screens|${manifest.id}|${manifest.version}")
+    }
+
+    override fun release() = close()
+
+    override suspend fun pipeline(): PictureReader? {
         opened?.let { return it.pipeline }
         if (!BuildConfig.PHOTO_ENGINE) return null
         return gate.withLock {

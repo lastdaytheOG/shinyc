@@ -3,11 +3,6 @@ package com.amar.vault.indexing
 import android.graphics.Bitmap
 import android.graphics.Rect
 
-object LineReadingControl {
-    @Volatile
-    var enabled: Boolean = false
-}
-
 class LinePipeline(
     private val finder: LineFinder,
     private val all: LineReader,
@@ -16,6 +11,8 @@ class LinePipeline(
     private val unsureBelow: Float = 0.90f,
     private val dropBelow: Float = 0.5f,
 ) : PictureReader {
+
+    override val trying: Boolean get() = finder.trying || all.trying || numbers.trying
 
     override suspend fun read(picture: Bitmap): FoundText {
         val places = finder.find(picture)

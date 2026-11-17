@@ -333,7 +333,7 @@ class PictureOcrMeasureDeviceTest {
         fun byLines() = com.amar.vault.IndexMetrics.snapshot()[com.amar.vault.IndexMetrics.Event.IMAGE_OCR_BY_LINES] ?: 0L
         try {
             for (on in listOf(true, false)) {
-                com.amar.vault.indexing.LineReadingControl.enabled = on
+                com.amar.vault.indexing.LineReadingControl.route = route(on)
                 BitmapFactory.decodeFile(pictures.first().path)?.let { reader.extract(it); it.recycle() }
             }
             File(folder, "$name-lines.jsonl").bufferedWriter().use { lines ->
@@ -342,7 +342,7 @@ class PictureOcrMeasureDeviceTest {
                         val bitmap = BitmapFactory.decodeFile(picture.path) ?: continue
                         val order = if (n % 2 == 0) listOf(true, false) else listOf(false, true)
                         for (on in order) {
-                            com.amar.vault.indexing.LineReadingControl.enabled = on
+                            com.amar.vault.indexing.LineReadingControl.route = route(on)
                             val before = byLines()
                             val started = System.nanoTime()
                             val text = reader.extract(bitmap).ocrText
@@ -360,9 +360,12 @@ class PictureOcrMeasureDeviceTest {
                 }
             }
         } finally {
-            com.amar.vault.indexing.LineReadingControl.enabled = false
+            com.amar.vault.indexing.LineReadingControl.route = com.amar.vault.indexing.LineReadingControl.Route.CHOSEN
         }
     }
+
+    private fun route(byLines: Boolean) =
+        if (byLines) com.amar.vault.indexing.LineReadingControl.Route.LINES else com.amar.vault.indexing.LineReadingControl.Route.WHOLE
 
     @Test
     fun overlap() = runBlocking {
