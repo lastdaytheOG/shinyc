@@ -367,6 +367,108 @@ class PictureOcrMeasureDeviceTest {
         }
     }
 
+    @Test
+    fun paint() = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("run with -e ocr paint", args.getString("ocr") == "paint")
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        val folder = outputFolder(app)
+        val pictures = picturesFor(args, folder)
+        assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
+        val reader = ImageContentExtractor(app)
+        val name = args.getString("out") ?: "paint"
+        val keep = args.getString("keep")?.toInt() ?: 0
+        val english = com.amar.vault.indexing.MlKitReader.english()
+        fun metric(key: String) = com.amar.vault.IndexMetrics.snapshot()[key] ?: 0L
+        val hiTotal = "${com.amar.vault.IndexMetrics.Timing.OCR_MLKIT_HI}.total"
+        val accepted = com.amar.vault.IndexMetrics.Event.IMAGE_OCR_TIER1_ACCEPTED
+        val again = com.amar.vault.IndexMetrics.Event.IMAGE_OCR_PAINTED_HINDI
+        val painted = com.amar.vault.indexing.AdaptiveImageOcrControl
+        try {
+            com.amar.vault.indexing.LineReadingControl.route = com.amar.vault.indexing.LineReadingControl.Route.WHOLE
+            for (on in listOf(true, false)) {
+                painted.paintSettledLines = on
+                BitmapFactory.decodeFile(pictures.first().path)?.let { reader.extract(it); it.recycle() }
+            }
+            File(folder, "$name-paint.jsonl").bufferedWriter().use { paint ->
+                File(folder, "$name-plain.jsonl").bufferedWriter().use { plain ->
+                    for ((n, picture) in pictures.withIndex()) {
+                        val bitmap = BitmapFactory.decodeFile(picture.path) ?: continue
+                        if (n < keep) {
+                            com.amar.vault.indexing.PaintOver.painted(bitmap, english.read(bitmap))?.let { shown ->
+                                File(folder, "painted-${picture.nameWithoutExtension}.png").outputStream().use {
+                                    shown.compress(Bitmap.CompressFormat.PNG, 100, it)
+                                }
+                                shown.recycle()
+                            }
+                        }
+                        val order = when (args.getString("only")) {
+                            "paint" -> listOf(true)
+                            "plain" -> listOf(false)
+                            else -> if (n % 2 == 0) listOf(true, false) else listOf(false, true)
+                        }
+                        for (on in order) {
+                            painted.paintSettledLines = on
+                            val hiBefore = metric(hiTotal)
+                            val acceptedBefore = metric(accepted)
+                            val againBefore = metric(again)
+                            val started = System.nanoTime()
+                            val text = reader.extract(bitmap).ocrText
+                            val ms = (System.nanoTime() - started) / 1e6
+                            val row = JSONObject().put("name", picture.name).put("width", bitmap.width)
+                                .put("height", bitmap.height).put("text", text).put("ms", ms)
+                                .put("hiMs", metric(hiTotal) - hiBefore).put("accepted", metric(accepted) > acceptedBefore)
+                                .put("hindiAgain", metric(again) > againBefore)
+                            val out = if (on) paint else plain
+                            out.write(row.toString())
+                            out.newLine()
+                            out.flush()
+                        }
+                        bitmap.recycle()
+                    }
+                }
+            }
+        } finally {
+            painted.paintSettledLines = true
+            com.amar.vault.indexing.LineReadingControl.route = com.amar.vault.indexing.LineReadingControl.Route.CHOSEN
+        }
+    }
+
+    @Test
+    fun paintReads() = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("run with -e ocr paintreads", args.getString("ocr") == "paintreads")
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        val folder = outputFolder(app)
+        val pictures = picturesFor(args, folder)
+        assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
+        val english = com.amar.vault.indexing.MlKitReader.english()
+        val hindi = com.amar.vault.indexing.MlKitReader.hindi()
+        fun lines(found: com.amar.vault.indexing.FoundText) = JSONArray().also { all ->
+            for ((b, block) in found.blocks.withIndex()) for (line in block.lines) {
+                val box = line.box
+                all.put(JSONObject().put("block", b).put("text", line.text).put("confidence", line.confidence.toDouble())
+                    .put("box", if (box == null) JSONObject.NULL else JSONArray(listOf(box.left, box.top, box.right, box.bottom))))
+            }
+        }
+        File(folder, (args.getString("out") ?: "paintreads") + ".jsonl").bufferedWriter().use { out ->
+            for (picture in pictures) {
+                val bitmap = BitmapFactory.decodeFile(picture.path) ?: continue
+                val en = english.read(bitmap)
+                val hi = hindi.read(bitmap)
+                val painted = com.amar.vault.indexing.PaintOver.painted(bitmap, en)
+                val hiPainted = painted?.let { hindi.read(it) }
+                painted?.recycle()
+                val row = JSONObject().put("name", picture.name).put("en", lines(en)).put("hi", lines(hi))
+                    .put("hiPainted", if (hiPainted == null) JSONObject.NULL else lines(hiPainted))
+                out.write(row.toString())
+                out.newLine()
+                out.flush()
+                bitmap.recycle()
+            }
+        }
+    }
+
     private fun route(byLines: Boolean) =
         if (byLines) com.amar.vault.indexing.LineReadingControl.Route.LINES else com.amar.vault.indexing.LineReadingControl.Route.WHOLE
 

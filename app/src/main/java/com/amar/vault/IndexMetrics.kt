@@ -55,6 +55,8 @@ object IndexMetrics {
         const val IMAGE_OCR_PACKED = "image.ocr_packed"
         const val IMAGE_OCR_BY_LINES = "image.ocr_by_lines"
         const val IMAGE_OCR_LINES_FAILED = "image.ocr_lines_failed"
+        const val IMAGE_OCR_PAINTED = "image.ocr_painted"
+        const val IMAGE_OCR_PAINTED_HINDI = "image.ocr_painted_hindi"
         // Sprint E4 — pathological-OCR guard hit counters (the "optimization hit rate"
         // signal: each counts one pipeline unit where a guard actually fired).
         const val OCR_TESS_TIMEOUT = "ocr.tess_timeout"

@@ -421,7 +421,7 @@ class ImageContentExtractor(
         var hiFound: FoundText? = null
         val asIs = timedStrategy(recorder, OcrStrategy.RAW) {
             val en = process(mlKitEn, bitmap, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
-            val hi = process(mlKitHi, bitmap, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
+            val hi = hindiBeside(bitmap, en, recorder)
             enFound = en
             hiFound = hi
             unsure = hasUnsureLine(en) || hasUnsureLine(hi)
@@ -497,6 +497,23 @@ class ImageContentExtractor(
         } finally {
             gray.recycle()
         }
+    }
+
+    private suspend fun hindiBeside(bitmap: Bitmap, en: FoundText, recorder: OcrStrategyRecorder?): FoundText {
+        val settled = if (AdaptiveImageOcrControl.paintSettledLines) PaintOver.toPaint(en) else emptyList()
+        val painted = if (settled.isEmpty()) null else preprocess { PaintOver.painted(bitmap, en, settled) }
+        if (painted == null) return process(mlKitHi, bitmap, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
+        val leftovers = try {
+            PaintOver.withoutSpecks(process(mlKitHi, painted, IndexMetrics.Timing.OCR_MLKIT_HI, recorder))
+        } finally {
+            painted.recycle()
+        }
+        if (saysHindi(leftovers.text)) {
+            IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_PAINTED_HINDI)
+            return process(mlKitHi, bitmap, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
+        }
+        IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_PAINTED)
+        return PaintOver.withSettled(leftovers, settled)
     }
 
     private suspend fun readByLines(reader: PictureReader, bitmap: Bitmap, recorder: OcrStrategyRecorder?): String? {
