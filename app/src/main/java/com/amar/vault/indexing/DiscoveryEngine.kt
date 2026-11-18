@@ -162,6 +162,7 @@ class DiscoveryEngine(context: Context) {
         isActive: () -> Boolean,
         indexOne: suspend (index: Int, total: Int, uri: Uri) -> Unit,
         onBatchCommitted: suspend (processed: Int, total: Int) -> Unit = { _, _ -> },
+        pacer: HeatPacer? = null,
     ): DiscoveryOutcome {
         val total = candidates.size
         var index = 0
@@ -172,6 +173,8 @@ class DiscoveryEngine(context: Context) {
             val end = minOf(index + policy.nextBatchSize(total - index), total)
             var j = index
             while (j < end) {
+                if (!isActive()) { cancelled = true; break }
+                pacer?.awaitCool(isActive)
                 if (!isActive()) { cancelled = true; break }
                 indexOne(j, total, candidates[j])
                 processed++

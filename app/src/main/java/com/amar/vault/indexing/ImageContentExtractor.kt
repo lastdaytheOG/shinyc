@@ -99,7 +99,7 @@ class ImageContentExtractor(
     }
 
     /** OCR text + QR payloads extracted from a single bitmap. */
-    data class ImageContent(val ocrText: String, val qrPayloads: List<String>)
+    data class ImageContent(val ocrText: String, val qrPayloads: List<String>, val deeper: Boolean = false)
 
     /**
      * Run OCR and QR/barcode scanning concurrently and return both — the same parallel
@@ -110,10 +110,10 @@ class ImageContentExtractor(
      * instrumentation is disabled (production default) [recorder] is null and every timing
      * wrapper below is a pure pass-through — output is byte-identical to the uninstrumented path.
      */
-    suspend fun extract(bitmap: Bitmap, sourceId: String? = null, photo: Boolean = false): ImageContent {
+    suspend fun extract(bitmap: Bitmap, sourceId: String? = null, photo: Boolean = false, quick: Boolean = false): ImageContent {
         // Production Evaluation Mode: a real indexing pass is captured only when the dev
         // toggle is on (recorderOrNull() → non-null). Off = null recorder = pure pass-through.
-        val (content, report) = extractInternal(bitmap, sourceId, OcrInstrumentation.recorderOrNull(), photo)
+        val (content, report) = extractInternal(bitmap, sourceId, OcrInstrumentation.recorderOrNull(), photo, quick)
         report?.let { OcrInstrumentation.publish(it) }
         return content
     }
@@ -139,13 +139,14 @@ class ImageContentExtractor(
         sourceId: String?,
         recorder: OcrStrategyRecorder?,
         photo: Boolean = false,
+        quick: Boolean = false,
     ): Pair<ImageContent, OcrImageReport?> = coroutineScope {
         // Sprint E4 — record input geometry + whole-OCR wall time (observation only).
         recorder?.setInput(bitmap.width, bitmap.height)
         val tOcr = System.currentTimeMillis()
-        val ocrDeferred = async { if (photo) readPhoto(bitmap, recorder) else readScreen(bitmap, recorder) }
+        val ocrDeferred = async { if (photo) readPhoto(bitmap, recorder) to false else readScreen(bitmap, recorder, quick) }
         val qrDeferred = async(Dispatchers.IO) { scanBarcode(bitmap) }
-        val mergedOcr = ocrDeferred.await()
+        val (mergedOcr, deeper) = ocrDeferred.await()
         recorder?.setTotalMs((System.currentTimeMillis() - tOcr).toDouble())
         val qr = qrDeferred.await()
         // Observation only: attribute the (already-final) merged text to its source strategies.
@@ -153,7 +154,7 @@ class ImageContentExtractor(
         // Sprint 4A: NFC at the OCR ingestion boundary — one site covers screenshots,
         // images AND the PDF trust-gate fallback. ML Kit output is NFC in practice, so
         // this is a no-op for existing behaviour; it guarantees canonical bytes in Room.
-        ImageContent(normalize(mergedOcr), qr) to report
+        ImageContent(normalize(mergedOcr), qr, deeper) to report
     }
 
     /** Sprint E1 — time one strategy's work into [recorder]; pure pass-through when null. */
@@ -396,8 +397,13 @@ class ImageContentExtractor(
     // Aggressive multi-pass OCR
     // ════════════════════════════════════════════════════════════════════════
 
-    private suspend fun readScreen(bitmap: Bitmap, recorder: OcrStrategyRecorder? = null): String =
-        routes.read(ReadingRoutes.SCREENS, { readByLines(it, bitmap, recorder) }) { readWhole(bitmap, recorder) }
+    private suspend fun readScreen(bitmap: Bitmap, recorder: OcrStrategyRecorder?, quick: Boolean): Pair<String, Boolean> {
+        var deeper = false
+        val text = routes.read(ReadingRoutes.SCREENS, { readByLines(it, bitmap, recorder) }) {
+            readWhole(bitmap, recorder, if (quick) { { deeper = true } } else null)
+        }
+        return text to deeper
+    }
 
     /**
      * A screenshot, read several ways and the readings put together ([ReadingMerge]): one read
@@ -414,7 +420,7 @@ class ImageContentExtractor(
      * and a lone letter was not: the Hindi reader takes icons for letters. With Hindi seen every read
      * is made, and what is stored is what it always was.
      */
-    private suspend fun readWhole(bitmap: Bitmap, recorder: OcrStrategyRecorder?): String {
+    private suspend fun readWhole(bitmap: Bitmap, recorder: OcrStrategyRecorder?, putOff: (() -> Unit)? = null): String {
         var hiAsIs = ""
         var unsure = false
         var enFound: FoundText? = null
@@ -432,6 +438,11 @@ class ImageContentExtractor(
             val tier1Final = normalize(ReadingMerge.text(listOf(asIs)))
             if (!unsure && tier1Healthy(tier1Final, IMAGE_TIER1_MIN_WORDS)) {
                 IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_TIER1_ACCEPTED)
+                return tier1Final
+            }
+            if (putOff != null) {
+                IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_PUT_OFF)
+                putOff()
                 return tier1Final
             }
             IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_ESCALATED)

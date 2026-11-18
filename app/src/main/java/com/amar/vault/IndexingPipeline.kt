@@ -40,7 +40,7 @@ class IndexingPipeline private constructor(private val context: Context) {
      * date is now, and it is embedded again. It stays one row.
      */
     suspend fun indexChanged(bitmap: Bitmap, uri: String, id: String) {
-        beingRead.once(id) { readAndStore(bitmap, uri, id, reread = true, changed = true) }
+        beingRead.once(id) { readAndStore(bitmap, uri, id, reread = true, changed = true, quick = true) }
     }
 
     private val db         = VaultDatabase.get(context)
@@ -50,6 +50,7 @@ class IndexingPipeline private constructor(private val context: Context) {
     private val imageContentExtractor = com.amar.vault.indexing.ImageContentExtractor(context)
     private val pictureLocator = com.amar.vault.indexing.PictureLocator(context)
     private val beingRead = com.amar.vault.indexing.BeingRead()
+    private val deeperReads = com.amar.vault.indexing.DeeperReads.get(context)
     private val duplicateDetector = com.amar.vault.indexing.DuplicateDetector(dao) { stored ->
         try {
             val file = if (stored.startsWith("/")) java.io.File(stored) else null
@@ -85,7 +86,7 @@ class IndexingPipeline private constructor(private val context: Context) {
         baseId: String? = null
     ) {
         // Two watchers report a new picture at the same moment: it is read once (BeingRead).
-        val read = beingRead.once(baseId ?: uri) { readAndStore(bitmap, uri, baseId) }
+        val read = beingRead.once(baseId ?: uri) { readAndStore(bitmap, uri, baseId, quick = true) }
         if (!read) IndexMetrics.increment(IndexMetrics.Event.INDEX_SKIPPED_DUP)
     }
 
@@ -104,6 +105,7 @@ class IndexingPipeline private constructor(private val context: Context) {
         baseId: String?,
         reread: Boolean = false,
         changed: Boolean = false,
+        quick: Boolean = false,
     ): Unit = withContext(Dispatchers.Default) {
 
         val t0 = System.currentTimeMillis()
@@ -185,7 +187,8 @@ class IndexingPipeline private constructor(private val context: Context) {
 
         // Sprint E3 — observation-only profiler (null unless the developer capture toggle is on).
         // OCR + QR/barcode scanning (run in parallel inside the image content-extraction stage).
-        val (ocrText, qrPayloads) = imageContentExtractor.extract(bitmap, sourceId = targetId, photo = itemType == ItemType.PHOTO)
+        val (ocrText, qrPayloads, deeper) = imageContentExtractor.extract(bitmap, sourceId = targetId, photo = itemType == ItemType.PHOTO, quick = quick)
+        if (deeperReads.mark(targetId, deeper)) com.amar.vault.indexing.DeeperReadUpkeep.enqueue(context)
 
         val ocrMs = System.currentTimeMillis() - t1
         IndexMetrics.recordDuration(IndexMetrics.Timing.OCR, ocrMs)

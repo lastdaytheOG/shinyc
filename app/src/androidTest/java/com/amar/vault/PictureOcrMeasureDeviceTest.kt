@@ -378,6 +378,7 @@ class PictureOcrMeasureDeviceTest {
         val reader = ImageContentExtractor(app)
         val name = args.getString("out") ?: "paint"
         val keep = args.getString("keep")?.toInt() ?: 0
+        val quick = args.getString("quick") == "1"
         val english = com.amar.vault.indexing.MlKitReader.english()
         fun metric(key: String) = com.amar.vault.IndexMetrics.snapshot()[key] ?: 0L
         val hiTotal = "${com.amar.vault.IndexMetrics.Timing.OCR_MLKIT_HI}.total"
@@ -413,12 +414,13 @@ class PictureOcrMeasureDeviceTest {
                             val acceptedBefore = metric(accepted)
                             val againBefore = metric(again)
                             val started = System.nanoTime()
-                            val text = reader.extract(bitmap).ocrText
+                            val content = reader.extract(bitmap, quick = quick)
+                            val text = content.ocrText
                             val ms = (System.nanoTime() - started) / 1e6
                             val row = JSONObject().put("name", picture.name).put("width", bitmap.width)
                                 .put("height", bitmap.height).put("text", text).put("ms", ms)
                                 .put("hiMs", metric(hiTotal) - hiBefore).put("accepted", metric(accepted) > acceptedBefore)
-                                .put("hindiAgain", metric(again) > againBefore)
+                                .put("hindiAgain", metric(again) > againBefore).put("deeper", content.deeper)
                             val out = if (on) paint else plain
                             out.write(row.toString())
                             out.newLine()

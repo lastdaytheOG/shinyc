@@ -13,7 +13,6 @@ import androidx.core.app.NotificationCompat
 import com.amar.vault.indexing.BitmapDecoding
 import com.amar.vault.indexing.DiscoveryEngine
 import com.amar.vault.indexing.DiscoverySpec
-import com.amar.vault.indexing.ThermalAdaptiveBatchPolicy
 import kotlinx.coroutines.*
 
 class IndexingForegroundService : Service() {
@@ -73,12 +72,13 @@ class IndexingForegroundService : Service() {
                 updateNotification("Found $total photos to index...", 0, total)
 
                 val pipeline = IndexingPipeline.getInstance(applicationContext)
-                val policy = ThermalAdaptiveBatchPolicy(applicationContext)
+                val policy = com.amar.vault.indexing.MemoryAwareBatchPolicy(applicationContext)
 
                 engine.process(
                     candidates = candidates,
                     policy = policy,
                     isActive = { isRunning },
+                    pacer = com.amar.vault.indexing.HeatPacer.of(applicationContext, com.amar.vault.indexing.HeatPacer.WHILE_SCANNING_MS),
                     indexOne = { _, _, uri ->
                         var bmp: Bitmap? = null
                         try {

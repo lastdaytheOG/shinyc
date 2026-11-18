@@ -43,6 +43,7 @@ class PictureTextUpkeep(context: Context, params: WorkerParameters) : CoroutineW
         val last = prefs.getLong(KEY_LAST, 0L).takeIf { it > 0 }
             ?: db.vaultDao().lastRowId().also { prefs.edit().putLong(KEY_LAST, it).apply() }
         val started = System.currentTimeMillis()
+        val pacer = HeatPacer.of(app, HeatPacer.IN_THE_BACKGROUND_MS)
         var done = false
         while (!isStopped && !done) {
             val batch = db.vaultDao().wholeItemsForTyping(after, BATCH)
@@ -51,6 +52,8 @@ class PictureTextUpkeep(context: Context, params: WorkerParameters) : CoroutineW
                 if (isStopped) break
                 if (row.rowId > last) { done = true; break }
                 if (row.itemType.isImage) {
+                    pacer.awaitCool { !isStopped }
+                    if (isStopped) break
                     val bitmap = BitmapDecoding.loadSoftware(app, Uri.parse(row.uri))
                     if (bitmap == null) {
                         unreadable++
