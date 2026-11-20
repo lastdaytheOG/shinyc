@@ -326,8 +326,12 @@ class PictureOcrMeasureDeviceTest {
         assumeTrue("run with -e ocr lines", args.getString("ocr") == "lines")
         val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
         val folder = outputFolder(app)
-        val pictures = picturesFor(args, folder)
+        val every = args.getString("every")?.toInt() ?: 1
+        val pictures = picturesFor(args, folder).filterIndexed { i, _ -> i % every == 0 }
         assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
+        val restMs = args.getString("rest")?.toLong() ?: 0L
+        val stopAt = args.getString("stopAt")?.toInt() ?: Int.MAX_VALUE
+        val power = app.getSystemService(android.os.PowerManager::class.java)
         val reader = ImageContentExtractor(app)
         val name = args.getString("out") ?: "lines"
         val page = args.getString("page") == "1"
@@ -342,6 +346,12 @@ class PictureOcrMeasureDeviceTest {
             File(folder, "$name-lines.jsonl").bufferedWriter().use { lines ->
                 File(folder, "$name-whole.jsonl").bufferedWriter().use { whole ->
                     for ((n, picture) in pictures.withIndex()) {
+                        if (n > 0 && restMs > 0) kotlinx.coroutines.delay(restMs)
+                        val heat = power.currentThermalStatus
+                        if (heat >= stopAt) {
+                            android.util.Log.w("Lines", "stopped at ${picture.name}: thermal status $heat")
+                            break
+                        }
                         val bitmap = BitmapFactory.decodeFile(picture.path) ?: continue
                         val order = if (n % 2 == 0) listOf(true, false) else listOf(false, true)
                         for (on in order) {
@@ -351,7 +361,7 @@ class PictureOcrMeasureDeviceTest {
                             val text = read(bitmap, picture)
                             val ms = (System.nanoTime() - started) / 1e6
                             val row = JSONObject().put("name", picture.name).put("width", bitmap.width)
-                                .put("height", bitmap.height).put("text", text).put("ms", ms)
+                                .put("height", bitmap.height).put("text", text).put("ms", ms).put("status", heat)
                             if (on) row.put("byLines", byLines() > before)
                             val out = if (on) lines else whole
                             out.write(row.toString())
@@ -489,6 +499,57 @@ class PictureOcrMeasureDeviceTest {
                 out.flush()
                 bitmap.recycle()
             }
+        }
+    }
+
+    @Test
+    fun hindiLater() = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("run with -e ocr hindilater", args.getString("ocr") == "hindilater")
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        val folder = outputFolder(app)
+        val every = args.getString("every")?.toInt() ?: 1
+        val pictures = picturesFor(args, folder).filterIndexed { i, _ -> i % every == 0 }
+        assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
+        val restMs = args.getString("rest")?.toLong() ?: 0L
+        val stopAt = args.getString("stopAt")?.toInt() ?: Int.MAX_VALUE
+        val power = app.getSystemService(android.os.PowerManager::class.java)
+        val reader = ImageContentExtractor(app)
+        val route = com.amar.vault.indexing.LineReadingControl.route
+        try {
+            com.amar.vault.indexing.LineReadingControl.route = com.amar.vault.indexing.LineReadingControl.Route.WHOLE
+            BitmapFactory.decodeFile(pictures.first().path)?.let { b ->
+                reader.extract(b, quick = true, hindi = true)
+                reader.extract(b, quick = true, hindi = false)
+                b.recycle()
+            }
+            File(folder, (args.getString("out") ?: "hindilater") + ".jsonl").bufferedWriter().use { out ->
+                for ((n, picture) in pictures.withIndex()) {
+                    if (n > 0 && restMs > 0) kotlinx.coroutines.delay(restMs)
+                    val heat = power.currentThermalStatus
+                    if (heat >= stopAt) {
+                        android.util.Log.w("HindiLater", "stopped at ${picture.name}: thermal status $heat")
+                        break
+                    }
+                    val bitmap = BitmapFactory.decodeFile(picture.path) ?: continue
+                    val row = JSONObject().put("name", picture.name).put("status", heat)
+                    for (hindi in if (n % 2 == 0) listOf(true, false) else listOf(false, true)) {
+                        val key = if (hindi) "with" else "without"
+                        val started = System.nanoTime()
+                        val content = reader.extract(bitmap, quick = true, hindi = hindi)
+                        row.put("${key}Ms", (System.nanoTime() - started) / 1e6).put("${key}Text", content.ocrText)
+                            .put("${key}Deeper", content.deeper).put("${key}Later", content.hindiPutOff)
+                        if (hindi) row.put("hindiSeen", content.hindiSeen == true)
+                    }
+                    row.put("headroom", power.getThermalHeadroom(0).toDouble().takeIf { !it.isNaN() } ?: -1.0)
+                    out.write(row.toString())
+                    out.newLine()
+                    out.flush()
+                    bitmap.recycle()
+                }
+            }
+        } finally {
+            com.amar.vault.indexing.LineReadingControl.route = route
         }
     }
 
