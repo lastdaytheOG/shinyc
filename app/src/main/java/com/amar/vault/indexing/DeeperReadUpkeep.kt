@@ -19,6 +19,7 @@ class DeeperReadUpkeep(context: Context, params: WorkerParameters) : CoroutineWo
     override suspend fun doWork(): Result {
         val app = applicationContext
         val waiting = DeeperReads.get(app)
+        val checks = DeeperReads.hindiChecks(app)
         val dao = VaultDatabase.get(app).vaultDao()
         val pipeline = IndexingPipeline.getInstance(app)
         val pacer = HeatPacer.of(app, HeatPacer.IN_THE_BACKGROUND_MS)
@@ -26,38 +27,48 @@ class DeeperReadUpkeep(context: Context, params: WorkerParameters) : CoroutineWo
         val tried = HashSet<String>()
         var read = 0
         var gone = 0
-        while (!isStopped) {
-            val next = waiting.waiting().filterNot { it in tried }
-            if (next.isEmpty()) break
-            for (id in next) {
-                if (isStopped) break
-                if (BulkScanWorker.isRunning(app)) return Result.retry()
-                pacer.awaitCool { !isStopped }
-                if (isStopped) break
-                tried += id
-                val row = dao.getByIds(listOf(id)).firstOrNull()
-                val bitmap = row?.takeIf { it.itemType.isImage }?.let { BitmapDecoding.loadSoftware(app, Uri.parse(it.uri)) }
-                if (row == null || bitmap == null) {
-                    waiting.mark(id, false)
-                    gone++
-                    continue
-                }
-                try {
-                    pipeline.rereadBitmap(bitmap, row.uri, id)
-                    read++
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    VaultLog.w(TAG, "reading $id in full failed: ${e.message}")
-                    waiting.mark(id, false)
-                } finally {
-                    bitmap.recycle()
+        var checked = 0
+        var hindi = 0
+        for ((list, full) in listOf(waiting to true, checks to false)) {
+            while (!isStopped) {
+                val next = list.waiting().filterNot { it in tried }
+                if (next.isEmpty()) break
+                for (id in next) {
+                    if (isStopped) break
+                    if (BulkScanWorker.isRunning(app)) return Result.retry()
+                    pacer.awaitCool { !isStopped }
+                    if (isStopped) break
+                    tried += id
+                    val row = dao.getByIds(listOf(id)).firstOrNull()
+                    val bitmap = row?.takeIf { it.itemType.isImage }?.let { BitmapDecoding.loadSoftware(app, Uri.parse(it.uri)) }
+                    if (row == null || bitmap == null) {
+                        list.mark(id, false)
+                        gone++
+                        continue
+                    }
+                    try {
+                        if (full) {
+                            pipeline.rereadBitmap(bitmap, row.uri, id)
+                            read++
+                        } else {
+                            if (pipeline.checkHindi(bitmap, row.uri, id, row.sourceFile)) hindi++
+                            checked++
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        VaultLog.w(TAG, "reading $id again failed: ${e.message}")
+                        list.mark(id, false)
+                    } finally {
+                        bitmap.recycle()
+                    }
                 }
             }
         }
         if (isStopped) return Result.retry()
-        val left = waiting.size()
+        val left = waiting.size() + checks.size()
         val summary = "$read screens read in full in ${(System.currentTimeMillis() - started) / 1000} s" +
+            (if (checked > 0) "; $checked checked for Hindi, $hindi had it" else "") +
             (if (gone > 0) "; $gone no longer in the vault or on the phone" else "") +
             (if (left > 0) "; $left still waiting" else "")
         app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
@@ -80,7 +91,7 @@ class DeeperReadUpkeep(context: Context, params: WorkerParameters) : CoroutineWo
         }
 
         fun enqueueIfNeeded(context: Context) {
-            if (DeeperReads.get(context).size() > 0) enqueue(context)
+            if (DeeperReads.get(context).size() > 0 || DeeperReads.hindiChecks(context).size() > 0) enqueue(context)
         }
 
         fun lastReport(context: Context): Pair<Long, String>? {

@@ -50,8 +50,15 @@ class DeeperReads(private val file: File) {
         @Volatile
         private var instance: DeeperReads? = null
 
+        @Volatile
+        private var checks: DeeperReads? = null
+
         fun get(context: Context): DeeperReads = instance ?: synchronized(this) {
             instance ?: DeeperReads(File(context.applicationContext.filesDir, "deeper-reads.txt")).also { instance = it }
+        }
+
+        fun hindiChecks(context: Context): DeeperReads = checks ?: synchronized(this) {
+            checks ?: DeeperReads(File(context.applicationContext.filesDir, "hindi-checks.txt")).also { checks = it }
         }
     }
 }

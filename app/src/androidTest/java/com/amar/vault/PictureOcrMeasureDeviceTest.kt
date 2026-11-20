@@ -492,6 +492,71 @@ class PictureOcrMeasureDeviceTest {
         }
     }
 
+    @Test
+    fun sideBySide() = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("run with -e ocr sidebyside", args.getString("ocr") == "sidebyside")
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        val folder = outputFolder(app)
+        val every = args.getString("every")?.toInt() ?: 1
+        val pictures = picturesFor(args, folder).filterIndexed { i, _ -> i % every == 0 }
+        assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
+        val restMs = args.getString("rest")?.toLong() ?: 0L
+        val stopAt = args.getString("stopAt")?.toInt() ?: Int.MAX_VALUE
+        val power = app.getSystemService(android.os.PowerManager::class.java)
+        val enPool = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val hiPool = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val shared = com.amar.vault.indexing.MlKitReader.english() to com.amar.vault.indexing.MlKitReader.hindi()
+        val own = com.amar.vault.indexing.MlKitReader(
+            TextRecognition.getClient(TextRecognizerOptions.Builder().setExecutor(enPool).build()),
+        ) to com.amar.vault.indexing.MlKitReader(
+            TextRecognition.getClient(DevanagariTextRecognizerOptions.Builder().setExecutor(hiPool).build()),
+        )
+        val ways = listOf("inTurn", "together", "ownThreads")
+        suspend fun read(way: String, bitmap: Bitmap): Pair<String, String> = when (way) {
+            "inTurn" -> shared.first.read(bitmap).text to shared.second.read(bitmap).text
+            "together" -> {
+                val en = async { shared.first.read(bitmap) }
+                val hi = async { shared.second.read(bitmap) }
+                en.await().text to hi.await().text
+            }
+            else -> {
+                val en = async { own.first.read(bitmap) }
+                val hi = async { own.second.read(bitmap) }
+                en.await().text to hi.await().text
+            }
+        }
+        try {
+            BitmapFactory.decodeFile(pictures.first().path)?.let { b -> ways.forEach { read(it, b) }; b.recycle() }
+            File(folder, (args.getString("out") ?: "sidebyside") + ".jsonl").bufferedWriter().use { out ->
+                for ((n, picture) in pictures.withIndex()) {
+                    if (n > 0 && restMs > 0) kotlinx.coroutines.delay(restMs)
+                    val heat = power.currentThermalStatus
+                    if (heat >= stopAt) {
+                        android.util.Log.w("SideBySide", "stopped at ${picture.name}: thermal status $heat")
+                        break
+                    }
+                    val bitmap = BitmapFactory.decodeFile(picture.path) ?: continue
+                    val order = (0 until ways.size).map { ways[(it + n) % ways.size] }
+                    val row = JSONObject().put("name", picture.name).put("status", heat)
+                    for (way in order) {
+                        val started = System.nanoTime()
+                        val (en, hi) = read(way, bitmap)
+                        row.put("${way}Ms", (System.nanoTime() - started) / 1e6)
+                            .put("${way}En", en).put("${way}Hi", hi)
+                    }
+                    out.write(row.toString())
+                    out.newLine()
+                    out.flush()
+                    bitmap.recycle()
+                }
+            }
+        } finally {
+            enPool.shutdown()
+            hiPool.shutdown()
+        }
+    }
+
     private fun route(byLines: Boolean) =
         if (byLines) com.amar.vault.indexing.LineReadingControl.Route.LINES else com.amar.vault.indexing.LineReadingControl.Route.WHOLE
 

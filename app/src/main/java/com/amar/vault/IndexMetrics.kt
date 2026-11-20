@@ -58,6 +58,9 @@ object IndexMetrics {
         const val IMAGE_OCR_PAINTED = "image.ocr_painted"
         const val IMAGE_OCR_PAINTED_HINDI = "image.ocr_painted_hindi"
         const val IMAGE_OCR_PUT_OFF = "image.ocr_put_off"
+        const val IMAGE_OCR_HINDI_PUT_OFF = "image.ocr_hindi_put_off"
+        const val IMAGE_OCR_HINDI_CHECKED = "image.ocr_hindi_checked"
+        const val IMAGE_OCR_HINDI_FOUND_LATER = "image.ocr_hindi_found_later"
         const val INDEX_HEAT_PAUSE = "index.heat_pause"
         // Sprint E4 — pathological-OCR guard hit counters (the "optimization hit rate"
         // signal: each counts one pipeline unit where a guard actually fired).

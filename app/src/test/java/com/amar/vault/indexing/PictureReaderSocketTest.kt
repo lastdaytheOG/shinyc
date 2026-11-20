@@ -151,6 +151,80 @@ class PictureReaderSocketTest {
     }
 
     @Test
+    fun aQuickReadWithoutHindiLeavesTheHindiReaderForLater() = runBlocking {
+        val english = ScriptedReader(
+            found(
+                block(line("Monthly statement for the whole of the year", 100)),
+                block(line("Paid within seven working days of the notice", 700)),
+            )
+        )
+        val hindi = ScriptedReader(found(block(line("आज का मौसम साफ है", 900))))
+
+        val content = extractor(english, hindi).extract(picture(), quick = true, hindi = false)
+
+        assertEquals(0, hindi.reads)
+        assertEquals(1, english.reads)
+        assertTrue(content.hindiPutOff)
+        assertFalse(content.deeper)
+        assertEquals(null, content.hindiSeen)
+        assertEquals(listOf("Monthly statement for the whole of the year", "Paid within seven working days of the notice"), content.ocrText.lines())
+    }
+
+    @Test
+    fun anUnsureScreenReadWithoutHindiWaitsForTheFullReadInstead() = runBlocking {
+        val english = ScriptedReader(
+            found(
+                block(line("Monthly statement for the whole of the year", 100)),
+                block(line("Balance carried forward", 400, confidence = 0.42f)),
+            )
+        )
+        val hindi = ScriptedReader(nothing)
+
+        val content = extractor(english, hindi).extract(picture(), quick = true, hindi = false)
+
+        assertEquals(0, hindi.reads)
+        assertTrue(content.deeper)
+        assertFalse(content.hindiPutOff)
+    }
+
+    @Test
+    fun aQuickReadWithHindiSaysWhetherItSawSomeSurely() = runBlocking {
+        val english = ScriptedReader(found(block(line("Monthly statement for the whole of the year", 100))))
+
+        val seen = extractor(
+            english,
+            ScriptedReader(found(block(line("Monthly statement for the whole of the year", 100)), block(line("आज का मौसम साफ है", 900)))),
+        ).extract(picture(), quick = true)
+        val unsure = extractor(english, ScriptedReader(found(block(line("आज का मौसम", 900, confidence = 0.5f))))).extract(picture(), quick = true)
+        val none = extractor(english, ScriptedReader(nothing)).extract(picture(), quick = true)
+
+        assertEquals(true, seen.hindiSeen)
+        assertEquals(false, unsure.hindiSeen)
+        assertEquals(false, none.hindiSeen)
+        assertTrue(seen.ocrText, "आज का मौसम साफ है" in seen.ocrText.lines())
+        assertFalse(seen.hindiPutOff || unsure.hindiPutOff || none.hindiPutOff)
+    }
+
+    @Test
+    fun aFullReadAlwaysReadsHindi() = runBlocking {
+        val english = ScriptedReader(found(block(line("Monthly statement for the whole of the year", 100))))
+        val hindi = ScriptedReader(nothing)
+
+        val content = extractor(english, hindi).extract(picture(), hindi = false)
+
+        assertTrue(hindi.reads > 0)
+        assertFalse(content.hindiPutOff)
+    }
+
+    @Test
+    fun sureHindiIsThreeLettersInARowOnALineReadSurely() {
+        assertTrue(ImageContentExtractor.showsHindi(found(block(line("खाता", 100)))))
+        assertFalse(ImageContentExtractor.showsHindi(found(block(line("खाता", 100, confidence = 0.6f)))))
+        assertFalse(ImageContentExtractor.showsHindi(found(block(line("मं Settings", 100)))))
+        assertFalse(ImageContentExtractor.showsHindi(nothing))
+    }
+
+    @Test
     fun aFullReadNeverPutsAnythingOff() = runBlocking {
         val english = ScriptedReader(
             found(
