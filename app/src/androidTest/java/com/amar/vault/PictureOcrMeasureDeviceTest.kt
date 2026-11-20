@@ -373,12 +373,20 @@ class PictureOcrMeasureDeviceTest {
         assumeTrue("run with -e ocr paint", args.getString("ocr") == "paint")
         val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
         val folder = outputFolder(app)
-        val pictures = picturesFor(args, folder)
+        val every = args.getString("every")?.toInt() ?: 1
+        val pictures = picturesFor(args, folder).filterIndexed { i, _ -> i % every == 0 }
         assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
         val reader = ImageContentExtractor(app)
         val name = args.getString("out") ?: "paint"
         val keep = args.getString("keep")?.toInt() ?: 0
         val quick = args.getString("quick") == "1"
+        val plainQuick = args.getString("plainQuick")?.let { it == "1" } ?: quick
+        val restMs = args.getString("rest")?.toLong() ?: 0L
+        val stopAt = args.getString("stopAt")?.toInt() ?: Int.MAX_VALUE
+        val power = app.getSystemService(android.os.PowerManager::class.java)
+        val pacer = if (args.getString("cool") == "1") com.amar.vault.indexing.HeatPacer.of(app, 60_000L) else null
+        fun status() = power.currentThermalStatus
+        fun headroom() = power.getThermalHeadroom(0).toDouble().takeIf { !it.isNaN() } ?: -1.0
         val english = com.amar.vault.indexing.MlKitReader.english()
         fun metric(key: String) = com.amar.vault.IndexMetrics.snapshot()[key] ?: 0L
         val hiTotal = "${com.amar.vault.IndexMetrics.Timing.OCR_MLKIT_HI}.total"
@@ -394,6 +402,13 @@ class PictureOcrMeasureDeviceTest {
             File(folder, "$name-paint.jsonl").bufferedWriter().use { paint ->
                 File(folder, "$name-plain.jsonl").bufferedWriter().use { plain ->
                     for ((n, picture) in pictures.withIndex()) {
+                        if (n > 0 && restMs > 0) kotlinx.coroutines.delay(restMs)
+                        val paused = pacer?.awaitCool() ?: 0L
+                        val heatStatus = status()
+                        if (heatStatus >= stopAt) {
+                            android.util.Log.w("PaintBench", "stopped at ${picture.name}: thermal status $heatStatus")
+                            break
+                        }
                         val bitmap = BitmapFactory.decodeFile(picture.path) ?: continue
                         if (n < keep) {
                             com.amar.vault.indexing.PaintOver.painted(bitmap, english.read(bitmap))?.let { shown ->
@@ -408,21 +423,26 @@ class PictureOcrMeasureDeviceTest {
                             "plain" -> listOf(false)
                             else -> if (n % 2 == 0) listOf(true, false) else listOf(false, true)
                         }
-                        for (on in order) {
+                        val rows = order.map { on ->
                             painted.paintSettledLines = on
                             val hiBefore = metric(hiTotal)
                             val acceptedBefore = metric(accepted)
                             val againBefore = metric(again)
                             val started = System.nanoTime()
-                            val content = reader.extract(bitmap, quick = quick)
+                            val content = reader.extract(bitmap, quick = if (on) quick else plainQuick)
                             val text = content.ocrText
                             val ms = (System.nanoTime() - started) / 1e6
-                            val row = JSONObject().put("name", picture.name).put("width", bitmap.width)
+                            on to JSONObject().put("name", picture.name).put("width", bitmap.width)
                                 .put("height", bitmap.height).put("text", text).put("ms", ms)
                                 .put("hiMs", metric(hiTotal) - hiBefore).put("accepted", metric(accepted) > acceptedBefore)
                                 .put("hindiAgain", metric(again) > againBefore).put("deeper", content.deeper)
+                                .put("pausedMs", paused).put("status", heatStatus)
+                                .put("first", on == order.first())
+                        }
+                        val heatHeadroom = headroom()
+                        for ((on, row) in rows) {
                             val out = if (on) paint else plain
-                            out.write(row.toString())
+                            out.write(row.put("headroom", heatHeadroom).toString())
                             out.newLine()
                             out.flush()
                         }
