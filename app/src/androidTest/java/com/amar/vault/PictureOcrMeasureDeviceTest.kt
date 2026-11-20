@@ -393,6 +393,7 @@ class PictureOcrMeasureDeviceTest {
         val accepted = com.amar.vault.IndexMetrics.Event.IMAGE_OCR_TIER1_ACCEPTED
         val again = com.amar.vault.IndexMetrics.Event.IMAGE_OCR_PAINTED_HINDI
         val painted = com.amar.vault.indexing.AdaptiveImageOcrControl
+        val paintedBefore = painted.paintSettledLines
         try {
             com.amar.vault.indexing.LineReadingControl.route = com.amar.vault.indexing.LineReadingControl.Route.WHOLE
             for (on in listOf(true, false)) {
@@ -451,7 +452,7 @@ class PictureOcrMeasureDeviceTest {
                 }
             }
         } finally {
-            painted.paintSettledLines = true
+            painted.paintSettledLines = paintedBefore
             com.amar.vault.indexing.LineReadingControl.route = com.amar.vault.indexing.LineReadingControl.Route.CHOSEN
         }
     }

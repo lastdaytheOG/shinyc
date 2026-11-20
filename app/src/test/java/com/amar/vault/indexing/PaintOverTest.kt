@@ -11,6 +11,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -32,9 +33,14 @@ class PaintOverTest {
         }
     }
 
+    @Before
+    fun paintingOn() {
+        AdaptiveImageOcrControl.paintSettledLines = true
+    }
+
     @After
     fun back() {
-        AdaptiveImageOcrControl.paintSettledLines = true
+        AdaptiveImageOcrControl.paintSettledLines = false
     }
 
     private fun line(text: String, top: Int, confidence: Float = 0.96f, left: Int = 40): FoundLine =

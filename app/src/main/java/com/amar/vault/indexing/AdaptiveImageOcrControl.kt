@@ -5,5 +5,5 @@ object AdaptiveImageOcrControl {
     var tier1Enabled: Boolean = true
 
     @Volatile
-    var paintSettledLines: Boolean = true
+    var paintSettledLines: Boolean = false
 }
