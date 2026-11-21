@@ -13,6 +13,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -20,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -33,7 +37,7 @@ fun PreviewHero(
     previewUri: Any?, // String URL or Uri
     title: String?,
     domain: String?,
-    fallbackIcon: String = "📁",
+    fallbackIcon: ImageVector = Icons.Outlined.Folder,
     fallbackColor: Color = Color.DarkGray,
     modifier: Modifier = Modifier
 ) {
@@ -62,7 +66,12 @@ fun PreviewHero(
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                Text(text = fallbackIcon, fontSize = 64.sp)
+                Icon(
+                    imageVector = fallbackIcon,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(64.dp)
+                )
             }
         }
 

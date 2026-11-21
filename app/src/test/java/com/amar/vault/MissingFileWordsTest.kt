@@ -1,5 +1,7 @@
 package com.amar.vault
 
+import com.amar.vault.ui.AppLanguage
+import com.amar.vault.ui.VaultStrings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -31,13 +33,15 @@ class MissingFileWordsTest {
 
     @Test
     fun theViewerSaysTheFileIsGoneAndThatItsTextIsNot() {
-        assertTrue("moved, renamed or deleted" in FileGoneWords.GONE)
-        assertTrue("can still be searched" in FileGoneWords.GONE)
+        val english = AppLanguage.ENGLISH
+        val gone = VaultStrings.viewerFileGone(english)
+        assertTrue("moved, renamed or deleted" in gone)
+        assertTrue("can still be searched" in gone)
         assertEquals(
             "That is a different file: its contents are not the ones stored for \"Act.pdf\". Choose the file you added.",
-            FileGoneWords.anotherFile("Act.pdf"),
+            VaultStrings.viewerAnotherFile(english, "Act.pdf"),
         )
-        // Before, the viewer could only say to add the file again, which stored it a second time.
-        assertTrue("Add it again" in FileGoneWords.GONE_ADD_AGAIN && "Add it again" !in FileGoneWords.GONE)
+        assertTrue("Add it again" in VaultStrings.viewerFileGoneAddAgain(english) && "Add it again" !in gone)
+        assertTrue(VaultStrings.viewerFileGone(AppLanguage.HINDI).any { it in 'ऀ'..'ॿ' })
     }
 }

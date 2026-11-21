@@ -7,30 +7,66 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.FolderOff
+import androidx.compose.material.icons.outlined.LinkOff
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.amar.vault.DocumentIndexer
 import com.amar.vault.PdfViewerActivity
 import com.amar.vault.VaultDatabase
-import com.amar.vault.indexing.*
-import com.amar.vault.share.open.ShareContentUri
+import com.amar.vault.indexing.DocumentImport
+import com.amar.vault.indexing.DocumentImportQueue
+import com.amar.vault.indexing.DocumentRelink
+import com.amar.vault.indexing.FileToRead
+import com.amar.vault.indexing.ImportFailure
+import com.amar.vault.indexing.ImportState
+import com.amar.vault.indexing.ImportWords
 import com.amar.vault.ui.LocalAppLanguage
 import com.amar.vault.ui.VaultStrings
 import kotlinx.coroutines.Dispatchers
@@ -62,7 +98,8 @@ fun DocumentsScreen(
     val imports by remember { db.documentImportDao().observeAll() }.collectAsState(initial = emptyList())
     val reading = imports.filter { !it.isFinished && !it.waitsForCharger }
     val locked = imports.filter { it.state == ImportState.FAILED && it.failure == ImportFailure.LOCKED }
-    val completed = imports.filter { it.isFinished }
+    val failed = imports.filter { it.state == ImportState.FAILED && it.failure != ImportFailure.LOCKED }
+    val completed = imports.filter { it.isFinished && it.state != ImportState.FAILED }
 
     var missing by remember { mutableStateOf<List<com.amar.vault.VaultDocument>>(emptyList()) }
     LaunchedEffect(completed.size) {
@@ -85,61 +122,68 @@ fun DocumentsScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // Top Header with Title and Add Button
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 16.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = VaultStrings.docsNav(lang),
                 style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.Bold
+                color = MaterialTheme.colorScheme.onBackground
             )
 
             Button(
                 onClick = { picker.launch(PICKER_MIME_TYPES) },
-                shape = RoundedCornerShape(20.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                shape = RoundedCornerShape(24.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
             ) {
-                Icon(Icons.Default.Add, contentDescription = "Add", modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text(
-                    text = VaultStrings.addDocuments(lang),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Text(text = VaultStrings.addDocuments(lang), style = MaterialTheme.typography.labelLarge)
             }
         }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 1.dp)
-
         if (imports.isEmpty()) {
-            // Empty State
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(24.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(text = "📄", fontSize = 48.sp)
-                    Spacer(Modifier.height(16.dp))
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(88.dp)
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Description,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(40.dp)
+                        )
+                    }
+                    Spacer(Modifier.height(20.dp))
                     Text(
                         text = VaultStrings.emptyVaultTitle(lang),
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        fontWeight = FontWeight.Bold
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
                         text = VaultStrings.emptyVaultHint(lang),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
                         modifier = Modifier.padding(horizontal = 16.dp)
                     )
                     Spacer(Modifier.height(24.dp))
@@ -153,59 +197,61 @@ fun DocumentsScreen(
             }
         } else {
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp),
-                contentPadding = PaddingValues(vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Section: Currently Reading
                 if (reading.isNotEmpty()) {
-                    item {
-                        Text(
-                            text = VaultStrings.currentlyReading(lang).uppercase(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp
-                        )
+                    item(key = "reading_header") {
+                        SectionLabel(text = VaultStrings.currentlyReading(lang))
                     }
 
-                    items(reading) { item ->
-                        ReadingProgressCard(item = item)
+                    items(reading, key = { it.id }) { item ->
+                        ReadingProgressCard(item = item, lang = lang)
                     }
                 }
 
-                // Section: Attention Needed (Locked PDFs)
                 if (locked.isNotEmpty()) {
-                    item {
-                        Text(
-                            text = VaultStrings.attentionNeeded(lang).uppercase(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp
+                    item(key = "locked_header") {
+                        SectionLabel(
+                            text = VaultStrings.attentionNeeded(lang),
+                            color = MaterialTheme.colorScheme.onTertiaryContainer
                         )
                     }
 
-                    items(locked) { item ->
-                        LockedPdfCard(
+                    items(locked, key = { it.id }) { item ->
+                        LockedPdfCard(item = item, lang = lang) { password ->
+                            scope.launch(Dispatchers.IO) {
+                                queue.unlock(item.id, password)
+                            }
+                        }
+                    }
+                }
+
+                if (failed.isNotEmpty()) {
+                    item(key = "failed_header") {
+                        SectionLabel(
+                            text = VaultStrings.failedToRead(lang),
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+
+                    items(failed, key = { it.id }) { item ->
+                        FailedImportCard(
                             item = item,
-                            onUnlock = { password ->
-                                scope.launch(Dispatchers.IO) {
-                                    queue.unlock(item.id, password)
-                                }
+                            lang = lang,
+                            onRetry = {
+                                scope.launch(Dispatchers.IO) { queue.retry(item.id) }
                             }
                         )
                     }
                 }
 
-                // Section: Missing files
                 if (missing.isNotEmpty()) {
-                    item {
+                    item(key = "missing_banner") {
                         Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.tertiaryContainer,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -213,22 +259,21 @@ fun DocumentsScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
-                                    Icons.Default.Warning,
+                                    Icons.Outlined.LinkOff,
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onErrorContainer
+                                    tint = MaterialTheme.colorScheme.onTertiaryContainer
                                 )
                                 Spacer(Modifier.width(12.dp))
                                 Column {
                                     Text(
-                                        text = "${missing.size} file${if (missing.size == 1) "" else "s"} moved or deleted",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                        text = VaultStrings.missingFiles(lang, missing.size),
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer
                                     )
                                     Text(
-                                        text = "Text previously read remains searchable in your vault",
+                                        text = VaultStrings.missingFilesHint(lang),
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer
                                     )
                                 }
                             }
@@ -236,24 +281,19 @@ fun DocumentsScreen(
                     }
                 }
 
-                // Section: Completed Documents
                 if (completed.isNotEmpty()) {
-                    item {
-                        Text(
-                            text = VaultStrings.indexedDocs(lang, completed.size).uppercase(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp
+                    item(key = "done_header") {
+                        SectionLabel(
+                            text = VaultStrings.indexedDocs(lang, completed.size),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
 
-                    items(completed) { item ->
+                    items(completed, key = { it.id }) { item ->
                         CompletedDocumentCard(
                             item = item,
-                            onClick = {
-                                openCompletedDocument(context, item, onOpenDocument)
-                            }
+                            lang = lang,
+                            onClick = { openCompletedDocument(context, item, onOpenDocument) }
                         )
                     }
                 }
@@ -263,30 +303,46 @@ fun DocumentsScreen(
 }
 
 @Composable
-private fun ReadingProgressCard(item: DocumentImport) {
+private fun SectionLabel(text: String, color: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.primary) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelLarge,
+        color = color,
+        modifier = Modifier.padding(top = 8.dp, start = 4.dp)
+    )
+}
+
+@Composable
+private fun ReadingProgressCard(item: DocumentImport, lang: com.amar.vault.ui.AppLanguage) {
     Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = item.name,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(Modifier.height(4.dp))
-            val progressText = ImportWords.progress(item)
-            Text(
-                text = progressText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = item.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+            }
             Spacer(Modifier.height(8.dp))
+            Text(
+                text = VaultStrings.importProgress(lang, item),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(10.dp))
             LinearProgressIndicator(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -302,59 +358,115 @@ private fun ReadingProgressCard(item: DocumentImport) {
 @Composable
 private fun LockedPdfCard(
     item: DocumentImport,
+    lang: com.amar.vault.ui.AppLanguage,
     onUnlock: (String) -> Unit
 ) {
     var password by remember { mutableStateOf("") }
 
     Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.tertiaryContainer,
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     Icons.Default.Lock,
-                    contentDescription = "Locked",
-                    tint = MaterialTheme.colorScheme.error,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
                     modifier = Modifier.size(20.dp)
                 )
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(10.dp))
                 Text(
                     text = item.name,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "Password protected PDF — type password to read and index",
+                text = VaultStrings.lockedPdfDesc(lang),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onTertiaryContainer
             )
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
-                    placeholder = { Text("Password", style = MaterialTheme.typography.bodySmall) },
+                    placeholder = {
+                        Text(VaultStrings.passwordLabel(lang), style = MaterialTheme.typography.bodyMedium)
+                    },
                     singleLine = true,
                     modifier = Modifier
                         .weight(1f)
-                        .height(48.dp),
-                    shape = RoundedCornerShape(8.dp)
+                        .height(56.dp),
+                    shape = RoundedCornerShape(12.dp)
                 )
                 Spacer(Modifier.width(8.dp))
                 Button(
                     onClick = { onUnlock(password) },
                     enabled = password.isNotBlank(),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text("Unlock")
+                    Text(VaultStrings.unlock(lang))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FailedImportCard(
+    item: DocumentImport,
+    lang: com.amar.vault.ui.AppLanguage,
+    onRetry: () -> Unit
+) {
+    val failure = item.failure ?: ImportFailure.OTHER
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Outlined.FolderOff,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = item.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = VaultStrings.importWhatHappened(lang, failure, item.failureDetail),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = VaultStrings.importWhatToDo(lang, failure, item.origin),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (ImportWords.canTryAgain(failure)) {
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = onRetry,
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(VaultStrings.tryAgain(lang))
                 }
             }
         }
@@ -364,42 +476,62 @@ private fun LockedPdfCard(
 @Composable
 private fun CompletedDocumentCard(
     item: DocumentImport,
+    lang: com.amar.vault.ui.AppLanguage,
     onClick: () -> Unit
 ) {
     Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
     ) {
         Row(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(text = "📄", fontSize = 20.sp)
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Outlined.Description,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     text = item.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = ImportWords.progress(item),
+                    text = VaultStrings.importProgress(lang, item),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             Icon(
                 Icons.Default.CheckCircle,
-                contentDescription = "Indexed",
+                contentDescription = VaultStrings.ready(lang),
                 tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowForward,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(18.dp)
             )
         }

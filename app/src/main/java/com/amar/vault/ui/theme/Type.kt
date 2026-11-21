@@ -12,14 +12,14 @@ val Typography = Typography(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Bold,
         fontSize = 32.sp,
-        lineHeight = 44.sp,
+        lineHeight = 45.sp,
         letterSpacing = (-0.25).sp
     ),
     displayMedium = TextStyle(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.SemiBold,
         fontSize = 28.sp,
-        lineHeight = 38.sp,
+        lineHeight = 40.sp,
     ),
     headlineMedium = TextStyle(
         fontFamily = FontFamily.Default,
@@ -96,13 +96,13 @@ val LargerTypography = Typography(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Bold,
         fontSize = 36.sp,
-        lineHeight = 50.sp,
+        lineHeight = 52.sp,
     ),
     displayMedium = TextStyle(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.SemiBold,
         fontSize = 32.sp,
-        lineHeight = 44.sp,
+        lineHeight = 46.sp,
     ),
     headlineMedium = TextStyle(
         fontFamily = FontFamily.Default,
@@ -169,6 +169,6 @@ val LargerTypography = Typography(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Medium,
         fontSize = 13.sp,
-        lineHeight = 18.sp,
+        lineHeight = 19.sp,
     )
 )
