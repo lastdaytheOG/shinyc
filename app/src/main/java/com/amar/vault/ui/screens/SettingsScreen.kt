@@ -19,6 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.DocumentScanner
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.Translate
@@ -48,6 +49,8 @@ import androidx.compose.ui.unit.dp
 import com.amar.vault.BuildConfig
 import com.amar.vault.ScanPreferences
 import com.amar.vault.VaultDatabase
+import com.amar.vault.indexing.ppocr.LineModelDownloader
+import com.amar.vault.indexing.ppocr.LineModelFiles
 import com.amar.vault.photos.PhotoModelDownloader
 import com.amar.vault.photos.PhotoModelFiles
 import com.amar.vault.ui.AppLanguage
@@ -235,39 +238,7 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(12.dp))
 
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = VaultStrings.meaningModelTitle(lang),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = VaultStrings.meaningModelDesc(lang),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedButton(
-                        onClick = {
-                            val intent = android.content.Intent(
-                                android.content.Intent.ACTION_VIEW,
-                                android.net.Uri.parse("https://huggingface.co/lastabhi/amar-bge-m3")
-                            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                            runCatching { context.startActivity(intent) }
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(VaultStrings.openModelPage(lang))
-                    }
-                }
-            }
+            LineReaderPackCard(lang)
         }
 
         Spacer(Modifier.height(20.dp))
@@ -514,5 +485,117 @@ private fun LanguageChoiceChip(
             color = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
         )
+    }
+}
+
+@Composable
+private fun LineReaderPackCard(lang: AppLanguage) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val files = remember { LineModelFiles(context) }
+    var ready by remember { mutableStateOf(files.present()) }
+    var percent by remember { mutableStateOf<Int?>(null) }
+    var failed by remember { mutableStateOf(false) }
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Icon(
+                        Icons.Outlined.DocumentScanner,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = VaultStrings.linePackTitle(lang),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = VaultStrings.linePackDesc(lang),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                if (ready) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = VaultStrings.ready(lang),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+
+            val shown = percent
+            if (!ready && shown != null) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = VaultStrings.downloadingPercent(lang, shown),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    progress = { shown / 100f },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp)),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.outlineVariant
+                )
+            } else if (!ready) {
+                if (failed) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = VaultStrings.downloadNotFinished(lang),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = {
+                        failed = false
+                        percent = 0
+                        scope.launch {
+                            val ok = LineModelDownloader(files, LineModelDownloader.DEFAULT_BASE_URL).download { done, total ->
+                                if (total > 0) percent = (done * 100 / total).toInt()
+                            }
+                            ready = ok && files.present()
+                            failed = !ready
+                            percent = null
+                        }
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (failed) VaultStrings.retryDownload(lang) else VaultStrings.downloadLinePack(lang))
+                }
+            }
+        }
     }
 }

@@ -412,8 +412,8 @@ object VaultStrings {
     }
 
     fun photoSearchDesc(lang: AppLanguage) = when (lang) {
-        AppLanguage.HINDI -> "फ़ोटो में क्या है, उसी से खोजें (~207 MB डाउनलोड)"
-        else -> "Search photos by what is in them (~207 MB download)"
+        AppLanguage.HINDI -> "फ़ोटो को उनमें क्या है उससे, और पन्नों को उनके अर्थ से खोजें (~207 MB डाउनलोड)"
+        else -> "Find photos by what is in them, and pages by their meaning (~207 MB download)"
     }
 
     fun ready(lang: AppLanguage) = when (lang) {
@@ -446,19 +446,29 @@ object VaultStrings {
         else -> "Retry download"
     }
 
-    fun meaningModelTitle(lang: AppLanguage) = when (lang) {
-        AppLanguage.HINDI -> "अर्थ से खोज मॉडल (~585 MB)"
-        else -> "Meaning search model (~585 MB)"
+    fun linePackTitle(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "दूसरा टेक्स्ट रीडर"
+        else -> "Second text reader"
     }
 
-    fun meaningModelDesc(lang: AppLanguage) = when (lang) {
-        AppLanguage.HINDI -> "पन्नों को उनके अर्थ से ढूँढता है, अंग्रेज़ी और हिन्दी में।"
-        else -> "Finds pages by their meaning, in English and Hindi."
+    fun linePackDesc(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "स्क्रीनशॉट और स्कैन किए पन्नों को पंक्ति-दर-पंक्ति पढ़ता है। ऐप इसे इस फ़ोन पर आज़माकर वही तरीका रखता है जो बिना शब्द खोए तेज़ पढ़े।"
+        else -> "Reads screenshots and scanned pages line by line. The app tries it on this phone and keeps whichever way reads faster without losing words."
     }
 
-    fun openModelPage(lang: AppLanguage) = when (lang) {
-        AppLanguage.HINDI -> "मॉडल डाउनलोड पेज खोलें"
-        else -> "Open the model download page"
+    fun downloadLinePack(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "टेक्स्ट रीडर डाउनलोड करें (~36 MB)"
+        else -> "Download text reader (~36 MB)"
+    }
+
+    fun downloadingPercent(lang: AppLanguage, percent: Int) = when (lang) {
+        AppLanguage.HINDI -> "डाउनलोड हो रहा है · $percent%"
+        else -> "Downloading · $percent%"
+    }
+
+    fun downloadNotFinished(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "डाउनलोड पूरा नहीं हुआ। इंटरनेट कनेक्शन देखें और फिर से कोशिश करें।"
+        else -> "The download did not finish. Check the connection and try again."
     }
 
     fun largerTextTitle(lang: AppLanguage) = when (lang) {

@@ -149,11 +149,12 @@ class LineModelDownloader(private val files: LineModelFiles, baseUrl: String) {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private companion object {
-        const val TAG = "LineReaders"
-        const val FILES = "files.json"
-        const val PART = ".part"
-        const val CONNECT_MS = 15_000
-        const val READ_MS = 30_000
+    companion object {
+        const val DEFAULT_BASE_URL = "https://huggingface.co/lastabhi/amar-line-readers/resolve/main/ppocr-v6-tiny-finder-v5-readers/"
+        private const val TAG = "LineReaders"
+        private const val FILES = "files.json"
+        private const val PART = ".part"
+        private const val CONNECT_MS = 15_000
+        private const val READ_MS = 30_000
     }
 }

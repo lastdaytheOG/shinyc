@@ -185,4 +185,10 @@ class LineModelDownloaderTest {
 
         assertFalse(LineModelDownloader(LineModelFiles(folder.root), "http://127.0.0.1:$port/pack").download())
     }
+
+    @Test
+    fun thePackComesOverHttpsFromHuggingFaceLikeThePhotoModels() {
+        assertTrue(com.amar.vault.photos.PhotoModelDownloader.trusted(LineModelDownloader.DEFAULT_BASE_URL))
+        assertTrue(LineModelDownloader.DEFAULT_BASE_URL.endsWith("/"))
+    }
 }
