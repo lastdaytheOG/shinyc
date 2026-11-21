@@ -19,7 +19,8 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.amar.vault.indexing.DiscoveryEngine
 import com.amar.vault.indexing.DiscoverySpec
-import com.amar.vault.indexing.CoolWhenWarmBatchPolicy
+import com.amar.vault.indexing.FixedBatchPolicy
+import com.amar.vault.indexing.HeatPacer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -107,8 +108,9 @@ class BulkScanWorker @dagger.assisted.AssistedInject constructor(
             var lastProgress = 0L
             val outcome = engine.process(
                 candidates = uris,
-                policy = CoolWhenWarmBatchPolicy(applicationContext, VaultConfig.Indexing.BATCH_SIZE, VaultConfig.Indexing.COOL_DOWN_MS),
+                policy = FixedBatchPolicy(VaultConfig.Indexing.BATCH_SIZE),
                 isActive = { !isStopped },
+                pacer = HeatPacer.of(applicationContext, HeatPacer.WHILE_SCANNING_MS),
                 indexOne = { i, total, photoUri ->
                     val now = SystemClock.elapsedRealtime()
                     val report = i == 0 || now - lastProgress >= PROGRESS_EVERY_MS

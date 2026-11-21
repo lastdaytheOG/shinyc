@@ -152,7 +152,7 @@ object DeveloperIndexController {
     private suspend fun processImages(app: Context, uris: List<Uri>) {
         val pipeline = IndexingPipeline.getInstance(app)
         setTotal(uris.size)
-        runLoop(uris.size) { i ->
+        runLoop(uris.size, com.amar.vault.indexing.HeatPacer.of(app, com.amar.vault.indexing.HeatPacer.WHILE_SCANNING_MS)) { i ->
             val uri = uris[i]
             try {
                 val bmp = com.amar.vault.indexing.BitmapDecoding.decodeStreamBounded {
@@ -173,7 +173,7 @@ object DeveloperIndexController {
         val pipeline = IndexingPipeline.getInstance(app)
         val docIndexer = DocumentIndexer.getInstance(app)
         setTotal(uris.size)
-        runLoop(uris.size) { i ->
+        runLoop(uris.size, com.amar.vault.indexing.HeatPacer.of(app, com.amar.vault.indexing.HeatPacer.WHILE_SCANNING_MS)) { i ->
             val uri = uris[i]
             val mime = runCatching { app.contentResolver.getType(uri) }.getOrNull()
             try {
@@ -204,7 +204,7 @@ object DeveloperIndexController {
     }
 
     /** The single paced, pausable, cancellable loop shared by every run. */
-    private suspend inline fun runLoop(total: Int, crossinline indexOne: suspend (Int) -> Unit) {
+    private suspend inline fun runLoop(total: Int, pacer: com.amar.vault.indexing.HeatPacer, crossinline indexOne: suspend (Int) -> Unit) {
         var i = 0
         while (i < total) {
             // Cooperative pause: hold between item boundaries without spinning the CPU.
@@ -213,16 +213,14 @@ object DeveloperIndexController {
             if (_status.value.phase == Phase.PAUSED) {
                 _status.value = _status.value.copy(phase = Phase.RUNNING)
             }
+            pacer.awaitCool { !cancelled }
+            if (cancelled) break
             indexOne(i)
             i++
             _status.value = _status.value.copy(
                 processed = i,
                 durationMs = System.currentTimeMillis() - runStart,
             )
-            // Same burst pacing as production bulk indexing.
-            if (i % VaultConfig.Indexing.BATCH_SIZE == 0 && i < total) {
-                delay(VaultConfig.Indexing.COOL_DOWN_MS)
-            }
         }
     }
 

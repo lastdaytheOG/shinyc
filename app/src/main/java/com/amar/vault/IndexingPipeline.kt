@@ -40,7 +40,7 @@ class IndexingPipeline private constructor(private val context: Context) {
      * date is now, and it is embedded again. It stays one row.
      */
     suspend fun indexChanged(bitmap: Bitmap, uri: String, id: String) {
-        beingRead.once(id) { readAndStore(bitmap, uri, id, reread = true, changed = true) }
+        beingRead.once(id) { readAndStore(bitmap, uri, id, reread = true, changed = true, quick = true) }
     }
 
     private val db         = VaultDatabase.get(context)
@@ -50,6 +50,9 @@ class IndexingPipeline private constructor(private val context: Context) {
     private val imageContentExtractor = com.amar.vault.indexing.ImageContentExtractor(context)
     private val pictureLocator = com.amar.vault.indexing.PictureLocator(context)
     private val beingRead = com.amar.vault.indexing.BeingRead()
+    private val deeperReads = com.amar.vault.indexing.DeeperReads.get(context)
+    private val hindiChecks = com.amar.vault.indexing.DeeperReads.hindiChecks(context)
+    private val hindiByApp = com.amar.vault.indexing.HindiByApp.get(context)
     private val duplicateDetector = com.amar.vault.indexing.DuplicateDetector(dao) { stored ->
         try {
             val file = if (stored.startsWith("/")) java.io.File(stored) else null
@@ -84,7 +87,7 @@ class IndexingPipeline private constructor(private val context: Context) {
         baseId: String? = null
     ) {
         // Two watchers report a new picture at the same moment: it is read once (BeingRead).
-        val read = beingRead.once(baseId ?: uri) { readAndStore(bitmap, uri, baseId) }
+        val read = beingRead.once(baseId ?: uri) { readAndStore(bitmap, uri, baseId, quick = true) }
         if (!read) IndexMetrics.increment(IndexMetrics.Event.INDEX_SKIPPED_DUP)
     }
 
@@ -97,12 +100,29 @@ class IndexingPipeline private constructor(private val context: Context) {
         beingRead.once(id) { readAndStore(bitmap, uri, id, reread = true) }
     }
 
+    suspend fun checkHindi(bitmap: Bitmap, uri: String, id: String, knownName: String = ""): Boolean {
+        val found = imageContentExtractor.readHindiOnly(bitmap)
+        IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_HINDI_CHECKED)
+        hindiByApp.record(appOf(uri, knownName), com.amar.vault.indexing.ImageContentExtractor.showsHindi(found))
+        val hindi = com.amar.vault.indexing.ImageContentExtractor.saysHindi(found.text)
+        if (hindi) {
+            IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_HINDI_FOUND_LATER)
+            rereadBitmap(bitmap, uri, id)
+        }
+        hindiChecks.mark(id, false)
+        return hindi
+    }
+
+    private fun appOf(uri: String, knownName: String): String =
+        com.amar.vault.indexing.HindiByApp.appOf(pictureLocator.facts(uri, knownName).name)
+
     private suspend fun readAndStore(
         bitmap: Bitmap,
         uri: String,
         baseId: String?,
         reread: Boolean = false,
         changed: Boolean = false,
+        quick: Boolean = false,
     ): Unit = withContext(Dispatchers.Default) {
 
         val t0 = System.currentTimeMillis()
@@ -184,7 +204,20 @@ class IndexingPipeline private constructor(private val context: Context) {
 
         // Sprint E3 — observation-only profiler (null unless the developer capture toggle is on).
         // OCR + QR/barcode scanning (run in parallel inside the image content-extraction stage).
-        val (ocrText, qrPayloads) = imageContentExtractor.extract(bitmap, sourceId = targetId, photo = itemType == ItemType.PHOTO)
+        val app = if (quick && itemType != ItemType.PHOTO) appOf(uri, duplicateTarget?.sourceFile.orEmpty()) else null
+        val content = imageContentExtractor.extract(
+            bitmap,
+            sourceId = targetId,
+            photo = itemType == ItemType.PHOTO,
+            quick = quick,
+            hindi = app == null || hindiByApp.shouldRead(app),
+        )
+        val ocrText = content.ocrText
+        val qrPayloads = content.qrPayloads
+        content.hindiSeen?.let { seen -> app?.let { hindiByApp.record(it, seen) } }
+        val waitForCharger = deeperReads.mark(targetId, content.deeper)
+        val checkLater = hindiChecks.mark(targetId, content.hindiPutOff)
+        if (waitForCharger || checkLater) com.amar.vault.indexing.DeeperReadUpkeep.enqueue(context)
 
         val ocrMs = System.currentTimeMillis() - t1
         IndexMetrics.recordDuration(IndexMetrics.Timing.OCR, ocrMs)
