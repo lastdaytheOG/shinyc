@@ -45,7 +45,7 @@ fun AppLockScreen(
             ) {
                 Icon(
                     imageVector = Icons.Default.Lock,
-                    contentDescription = "Locked",
+                    contentDescription = VaultStrings.vaultLocked(lang),
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(36.dp)
                 )
@@ -77,13 +77,13 @@ fun AppLockScreen(
                 shape = RoundedCornerShape(24.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(50.dp),
+                    .height(52.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary
                 )
             ) {
                 Text(
-                    text = if (lang == com.amar.vault.ui.AppLanguage.HINDI) "अनलॉक करें" else "Unlock Vault",
+                    text = VaultStrings.unlockVault(lang),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )

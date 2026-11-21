@@ -1,32 +1,55 @@
 package com.amar.vault
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
-import com.amar.vault.ui.theme.*
+import com.amar.vault.ui.LocalAppLanguage
+import com.amar.vault.ui.VaultStrings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -37,11 +60,11 @@ fun DocumentViewerScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val lang = LocalAppLanguage.current
     var item by remember { mutableStateOf<VaultItem?>(null) }
     var metadataList by remember { mutableStateOf<List<VaultMetadata>>(emptyList()) }
     var showRawText by remember { mutableStateOf(false) }
 
-    // Load data from DB
     LaunchedEffect(itemId) {
         withContext(Dispatchers.IO) {
             val db = VaultDatabase.get(context)
@@ -57,16 +80,31 @@ fun DocumentViewerScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(item?.itemType?.stored?.uppercase() ?: "DOCUMENT", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CharcoalSoft) },
+                title = {
+                    Text(
+                        text = item?.title ?: item?.sourceFile?.substringAfterLast('/')
+                            ?: VaultStrings.documentLabel(lang),
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Back", tint = WarmBrownDark)
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = VaultStrings.back(lang)
+                        )
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Cream)
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onBackground
+                )
             )
         },
-        containerColor = Cream
+        containerColor = MaterialTheme.colorScheme.background
     ) { paddingValues ->
         if (item == null) {
             Box(
@@ -75,7 +113,7 @@ fun DocumentViewerScreen(
                     .padding(paddingValues),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator(color = WarmBrown)
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
         } else {
             Column(
@@ -84,12 +122,11 @@ fun DocumentViewerScreen(
                     .padding(paddingValues)
                     .verticalScroll(rememberScrollState())
             ) {
-                // Zoomable Image Container
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(340.dp)
-                        .background(Color(0xFFE5DCD0))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
                 ) {
                     var scale by remember { mutableStateOf(1f) }
                     var offsetX by remember { mutableStateOf(0f) }
@@ -99,7 +136,7 @@ fun DocumentViewerScreen(
 
                     Image(
                         painter = painter,
-                        contentDescription = "Document preview image",
+                        contentDescription = item!!.title ?: VaultStrings.documentContentDesc(lang),
                         contentScale = ContentScale.Fit,
                         modifier = Modifier
                             .fillMaxSize()
@@ -119,70 +156,66 @@ fun DocumentViewerScreen(
                     )
                 }
 
-                // Metadata Details Card
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp)
                         .clip(RoundedCornerShape(16.dp))
-                        .background(CreamLight)
-                        .border(1.dp, CreamDark, RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                         .padding(16.dp)
                 ) {
                     Text(
-                        text = "METADATA ATTRIBUTES",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = WarmBrown,
-                        letterSpacing = 0.5.sp
+                        text = VaultStrings.detailsSection(lang),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
                     )
 
                     Spacer(Modifier.height(12.dp))
 
                     if (metadataList.isEmpty()) {
                         Text(
-                            text = "No structured metadata extracted for this item.",
-                            fontSize = 14.sp,
-                            color = WarmBrownDark
+                            text = VaultStrings.noDetails(lang),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     } else {
                         metadataList.forEach { meta ->
                             MetadataRow(label = meta.type, value = meta.value)
-                            Divider(color = CreamDark, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 8.dp))
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                                thickness = 0.5.dp,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
                         }
                     }
 
                     Spacer(Modifier.height(8.dp))
 
-                    // OCR Expand Button
                     Button(
                         onClick = { showRawText = !showRawText },
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = WarmBrown),
-                        shape = RoundedCornerShape(8.dp)
+                        shape = RoundedCornerShape(12.dp)
                     ) {
+                        Icon(Icons.Outlined.Article, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
                         Text(
-                            text = if (showRawText) "Hide Raw Extracted Text" else "Show Raw Extracted Text",
-                            color = Color.White,
-                            fontWeight = FontWeight.Medium
+                            text = if (showRawText) VaultStrings.hideStoredText(lang)
+                            else VaultStrings.showStoredText(lang)
                         )
                     }
 
                     if (showRawText) {
                         Spacer(Modifier.height(12.dp))
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(CreamDark.copy(alpha = 0.3f))
-                                .border(1.dp, CreamDark, RoundedCornerShape(8.dp))
-                                .padding(12.dp)
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
                                 text = item!!.ocrText.trim(),
-                                fontSize = 13.sp,
-                                color = CharcoalSoft,
-                                lineHeight = 18.sp
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(12.dp)
                             )
                         }
                     }
@@ -201,15 +234,14 @@ private fun MetadataRow(label: String, value: String) {
     ) {
         Text(
             text = label,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            color = WarmBrownDark
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
             text = value,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            color = CharcoalSoft
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(start = 12.dp)
         )
     }
 }

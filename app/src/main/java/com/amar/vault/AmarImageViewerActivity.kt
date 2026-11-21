@@ -25,6 +25,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.amar.vault.ui.AppLanguage
+import com.amar.vault.ui.LocalAppLanguage
+import com.amar.vault.ui.VaultStrings
 import com.amar.vault.ui.theme.AmarTheme
 
 class AmarImageViewerActivity : ComponentActivity() {
@@ -64,8 +67,21 @@ class AmarImageViewerActivity : ComponentActivity() {
         )
 
         setContent {
-            AmarTheme(darkTheme = true) {
-                FullScreenPhotoViewer(item = item, onClose = { finish() })
+            val prefs by ScanPreferences.prefsFlow(applicationContext).collectAsState(initial = null)
+            val lang = remember(prefs?.language) {
+                when (prefs?.language) {
+                    "hi" -> AppLanguage.HINDI
+                    "en" -> AppLanguage.ENGLISH
+                    else -> {
+                        val locale = resources.configuration.locales[0]
+                        if (locale.language.startsWith("hi")) AppLanguage.HINDI else AppLanguage.ENGLISH
+                    }
+                }
+            }
+            CompositionLocalProvider(LocalAppLanguage provides lang) {
+                AmarTheme(darkTheme = true) {
+                    FullScreenPhotoViewer(item = item, onClose = { finish() })
+                }
             }
         }
     }
@@ -77,6 +93,7 @@ private fun FullScreenPhotoViewer(
     onClose: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val lang = LocalAppLanguage.current
     var showOcrText by remember { mutableStateOf(false) }
 
     Box(
@@ -84,15 +101,13 @@ private fun FullScreenPhotoViewer(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // Fullscreen Image
-        AsyncImage(
-            model = ImageRequest.Builder(context)
-                .data(item.uri)
-                .crossfade(true)
-                .build(),
+        com.amar.vault.ui.components.VaultPicture(
+            address = item.uri,
             contentDescription = item.title ?: item.sourceFile,
             contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize(),
+            failedIconSize = 56.dp,
+            failedMessage = VaultStrings.pictureCannotOpen(lang)
         )
 
         // Top Overlay Bar
@@ -112,7 +127,7 @@ private fun FullScreenPhotoViewer(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
+                    contentDescription = VaultStrings.back(lang),
                     tint = Color.White
                 )
             }
@@ -136,11 +151,11 @@ private fun FullScreenPhotoViewer(
                     modifier = Modifier.clickable { showOcrText = !showOcrText }
                 ) {
                     Text(
-                        text = if (showOcrText) "Hide Text" else "Show Text",
+                        text = if (showOcrText) VaultStrings.hideText(lang) else VaultStrings.showText(lang),
                         color = Color.White,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                     )
                 }
             }
@@ -159,7 +174,7 @@ private fun FullScreenPhotoViewer(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "READ FROM PICTURE",
+                        text = VaultStrings.readFromPicture(lang),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFFA8C7FA),
@@ -170,7 +185,7 @@ private fun FullScreenPhotoViewer(
                         text = item.ocrText,
                         color = Color.White,
                         fontSize = 13.sp,
-                        lineHeight = 18.sp,
+                        lineHeight = 20.sp,
                         maxLines = 8,
                         overflow = TextOverflow.Ellipsis
                     )

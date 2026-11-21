@@ -4,8 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.RectF
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Bundle
@@ -31,26 +29,22 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.amar.vault.indexing.DocumentRelink
+import com.amar.vault.ui.AppLanguage
+import com.amar.vault.ui.LocalAppLanguage
+import com.amar.vault.ui.VaultStrings
 import com.amar.vault.ui.components.search.withQueryWordsMarked
-import com.amar.vault.ui.theme.CharcoalSoft
-import com.amar.vault.ui.theme.Cream
-import com.amar.vault.ui.theme.CreamDark
-import com.amar.vault.ui.theme.CreamLight
-import com.amar.vault.ui.theme.PdfColor
-import com.amar.vault.ui.theme.PdfWash
-import com.amar.vault.ui.theme.WarmBrown
-import com.amar.vault.ui.theme.WarmBrownDark
+import com.amar.vault.ui.theme.AmarTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -66,31 +60,16 @@ import kotlinx.coroutines.withContext
  * - Search term display via [EXTRA_SEARCH_QUERY], with the words it was found in via [EXTRA_MATCH_TEXT]
  * - Pinch-to-zoom
  * - Lazy page-by-page rendering (only renders visible pages)
- *
- * No external PDF library needed — uses the platform API available since API 21.
- *
- * Usage from code:
- * ```
- * PdfViewerActivity.open(context, contentUri, page = 5, searchQuery = "invoice")
- * ```
- *
- * Add to AndroidManifest.xml:
- * ```xml
- * <activity
- *     android:name=".PdfViewerActivity"
- *     android:exported="false" />
- * ```
  */
 class PdfViewerActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_URI = "pdf_uri"
-        const val EXTRA_PAGE = "pdf_page"           // 1-indexed; 0 means restore saved page
+        const val EXTRA_PAGE = "pdf_page"
         const val EXTRA_SEARCH_QUERY = "pdf_search"
-        const val EXTRA_MATCH_TEXT = "pdf_match_text" // the words around the match on EXTRA_PAGE
+        const val EXTRA_MATCH_TEXT = "pdf_match_text"
         const val EXTRA_FILE_NAME = "pdf_file_name"
 
-        /** Convenience launcher. */
         fun open(
             context: Context,
             uri: Uri,
@@ -114,8 +93,6 @@ class PdfViewerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // A list of results that was on screen before the file was found again still holds
-        // the address it had then.
         val uriString = DocumentRelink.currentAddress(intent.getStringExtra(EXTRA_URI) ?: run { finish(); return })
         val uri = Uri.parse(uriString)
         val requestedPage = intent.getIntExtra(EXTRA_PAGE, 0)
@@ -130,15 +107,28 @@ class PdfViewerActivity : ComponentActivity() {
         }
 
         setContent {
-            MaterialTheme {
-                PdfViewerScreen(
-                    uri = uri,
-                    targetPage = targetPage,
-                    searchQuery = searchQuery,
-                    matchText = matchText,
-                    fileName = fileName,
-                    onBack = { finish() },
-                )
+            val prefs by ScanPreferences.prefsFlow(applicationContext).collectAsState(initial = null)
+            val lang = remember(prefs?.language) {
+                when (prefs?.language) {
+                    "hi" -> AppLanguage.HINDI
+                    "en" -> AppLanguage.ENGLISH
+                    else -> {
+                        val locale = resources.configuration.locales[0]
+                        if (locale.language.startsWith("hi")) AppLanguage.HINDI else AppLanguage.ENGLISH
+                    }
+                }
+            }
+            CompositionLocalProvider(LocalAppLanguage provides lang) {
+                AmarTheme {
+                    PdfViewerScreen(
+                        uri = uri,
+                        targetPage = targetPage,
+                        searchQuery = searchQuery,
+                        matchText = matchText,
+                        fileName = fileName,
+                        onBack = { finish() },
+                    )
+                }
             }
         }
     }
@@ -162,7 +152,6 @@ private object PageReader {
         )
     }
 
-    /** [lookingFor] decides the reader: the Devanagari one when the words sought are in that script. */
     suspend fun words(page: Bitmap, lookingFor: String): List<WordOnPage> {
         val client = if (lookingFor.any { it in '\u0900'..'\u097F' }) devanagari else latin
         val found = client.process(com.google.mlkit.vision.common.InputImage.fromBitmap(page, 0)).await()
@@ -178,28 +167,6 @@ private object PageReader {
     }
 }
 
-/** What the viewer says when the file it was asked to show is not there. */
-internal object FileGoneWords {
-    const val GONE =
-        "This file is no longer where it was when you added it: it was moved, renamed or deleted. " +
-            "Its text can still be searched. Show the app where the file is now and it opens again."
-
-    /** For a file the vault has no document for, which cannot be found again from here. */
-    const val GONE_ADD_AGAIN =
-        "This file is no longer where it was when you added it: it was moved, renamed or deleted. " +
-            "Add it again from Import documents."
-
-    const val CANNOT_READ = "That file could not be read. Choose the file you added."
-
-    fun anotherFile(name: String): String =
-        "That is a different file: its contents are not the ones stored" +
-            (if (name.isBlank()) "." else " for \"$name\".") + " Choose the file you added."
-}
-
-// ════════════════════════════════════════════════════════════════════════════════
-// Composable viewer
-// ════════════════════════════════════════════════════════════════════════════════
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PdfViewerScreen(
@@ -212,26 +179,22 @@ private fun PdfViewerScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val lang = LocalAppLanguage.current
 
-    // Renderer state
     var renderer by remember { mutableStateOf<PdfRenderer?>(null) }
     var pageCount by remember { mutableIntStateOf(0) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    // A locked PDF: what was typed for it, how many tries, and what is said above the place to type it.
     var password by remember { mutableStateOf<String?>(null) }
     var tries by remember { mutableIntStateOf(0) }
     var lockedNote by remember { mutableStateOf<String?>(null) }
 
-    // Where the file is opened from: the address it was added at, until that leads nowhere
-    // and the user shows where the file is now.
     var openFrom by remember { mutableStateOf(uri) }
-    // True when the file is gone from a document the vault knows, which can then be found again.
     var canFind by remember { mutableStateOf(false) }
     var findNote by remember { mutableStateOf<String?>(null) }
     val finder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { picked: Uri? ->
         if (picked == null) return@rememberLauncherForActivityResult
-        findNote = "Checking the file…"
+        findNote = VaultStrings.checkingFile(lang)
         scope.launch {
             val outcomes = withContext(Dispatchers.IO) {
                 val relink = DocumentRelink.get(context)
@@ -243,23 +206,16 @@ private fun PdfViewerScreen(
                     openFrom = picked
                 }
                 outcomes.any { it is DocumentRelink.Outcome.CannotRead } ->
-                    findNote = FileGoneWords.CANNOT_READ
-                else -> findNote = FileGoneWords.anotherFile(fileName)
+                    findNote = VaultStrings.viewerCannotRead(lang)
+                else -> findNote = VaultStrings.viewerAnotherFile(lang, fileName)
             }
         }
     }
 
-    // The list starts ON the requested page (targetPage is 1-indexed, the list 0-indexed):
-    // arriving from a search result must show that page at once, not page 1 and then a scroll
-    // through every page before it.
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = (targetPage - 1).coerceAtLeast(0))
-    // PdfRenderer allows one open page at a time. Pages that come on screen together used to
-    // render at once, and the one that lost was left as a spinner for good.
     val renderLock = remember { Mutex() }
-    // Set once the words a search found have been brought into view on the page it opened on.
     var broughtIntoView by remember { mutableStateOf(false) }
 
-    // Open the PDF
     LaunchedEffect(openFrom, tries) {
         errorMessage = null
         canFind = false
@@ -270,55 +226,46 @@ private fun PdfViewerScreen(
                 val pdfRenderer = try {
                     PdfRenderer(fd)
                 } catch (locked: SecurityException) {
-                    // The file opened, so this is not a lost permission: the PDF itself refuses.
                     fd.close()
                     val fingerprint = com.amar.vault.indexing.PdfSourceReuseCache.fingerprint(context, openFrom)
                     val key = password ?: fingerprint?.let(com.amar.vault.indexing.PdfPasswords::forViewing)
                     val copy = key?.let { com.amar.vault.indexing.LockedPdfCopy.make(context, openFrom, it) }
                     if (copy == null) {
-                        lockedNote = if (password == null) LockedPdfWords.VIEWER_LOCKED else LockedPdfWords.VIEWER_WRONG
+                        lockedNote = if (password == null) VaultStrings.viewerLockedNote(lang)
+                        else VaultStrings.viewerWrongPassword(lang)
                         return@withContext
                     }
                     lockedNote = null
                     if (fingerprint != null) com.amar.vault.indexing.PdfPasswords.opens(fingerprint, key)
                     val unlocked = ParcelFileDescriptor.open(copy, ParcelFileDescriptor.MODE_READ_ONLY)
-                    // Open, it stays readable; deleted, nothing of it is left once the app is gone.
                     copy.delete()
                     PdfRenderer(unlocked)
                 }
-                // The count first: the list is built the moment the renderer is set, and a list
-                // built with no pages yet would drop the starting page above.
                 pageCount = pdfRenderer.pageCount
                 renderer = pdfRenderer
             } catch (e: Exception) {
                 errorMessage = when (e) {
-                    // A document added with the picker stays where it was; the vault holds its
-                    // text and a link to it, and the link breaks if the file goes away.
                     is SecurityException, is java.io.FileNotFoundException -> {
                         canFind = runCatching {
                             DocumentRelink.get(context).documentsAt(openFrom.toString()).isNotEmpty()
                         }.getOrDefault(false)
-                        if (canFind) FileGoneWords.GONE else FileGoneWords.GONE_ADD_AGAIN
+                        if (canFind) VaultStrings.viewerFileGone(lang) else VaultStrings.viewerFileGoneAddAgain(lang)
                     }
-                    is java.io.IOException, is IllegalArgumentException ->
-                        "This file is damaged or is not a PDF, so it cannot be shown. Its text can still be searched."
-                    else -> "The file could not be opened: ${e.message}"
+                    is java.io.IOException, is IllegalArgumentException -> VaultStrings.viewerDamaged(lang)
+                    else -> VaultStrings.viewerCouldNotOpen(lang, e.message.orEmpty())
                 }
             } catch (tooBig: OutOfMemoryError) {
-                // Taking the lock off a very large PDF: something to say, not a reason to stop.
-                errorMessage = "This file is too big for the memory this phone has free, so it cannot be shown. Its text can still be searched."
+                errorMessage = VaultStrings.viewerTooBig(lang)
             }
         }
     }
 
-    // Belt and braces for the starting page, without animation.
     LaunchedEffect(pageCount, targetPage) {
         if (pageCount > 0 && targetPage in 1..pageCount && listState.firstVisibleItemIndex != targetPage - 1) {
             listState.scrollToItem(targetPage - 1)
         }
     }
 
-    // Cleanup
     DisposableEffect(Unit) {
         onDispose {
             renderer?.close()
@@ -326,24 +273,23 @@ private fun PdfViewerScreen(
     }
 
     Scaffold(
-        containerColor = Cream,
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = {
                     Column {
                         Text(
-                            text = fileName.ifBlank { "PDF Viewer" },
-                            color = CharcoalSoft,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
+                            text = fileName.ifBlank { VaultStrings.pdfViewerTitle(lang) },
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                         if (searchQuery.isNotBlank()) {
                             Text(
-                                text = "\"$searchQuery\" found on page $targetPage",
+                                text = VaultStrings.foundOnPageNote(lang, searchQuery, targetPage),
                                 style = MaterialTheme.typography.labelMedium,
-                                color = WarmBrownDark,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -352,10 +298,14 @@ private fun PdfViewerScreen(
                 },
                 navigationIcon = {
                     TextButton(onClick = onBack) {
-                        Text("Close", color = WarmBrown)
+                        Text(VaultStrings.close(lang))
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Cream),
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                    navigationIconContentColor = MaterialTheme.colorScheme.primary,
+                ),
             )
         }
     ) { padding ->
@@ -364,9 +314,6 @@ private fun PdfViewerScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Room below the last page, so that it too can be brought to the top of the screen:
-            // without it a match on a document's final page landed part-way down, under the
-            // end of the page before it.
             val spaceAfterLastPage = maxHeight * 0.4f
             when {
                 errorMessage != null -> {
@@ -376,18 +323,26 @@ private fun PdfViewerScreen(
                             .padding(32.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        // Said calmly: a file that was moved is not something that went wrong in the app.
-                        Text(text = errorMessage!!, color = CharcoalSoft, fontSize = 15.sp, lineHeight = 22.sp)
+                        Text(
+                            text = errorMessage!!,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.bodyMedium,
+                            lineHeight = 22.sp
+                        )
                         if (canFind) {
                             Spacer(Modifier.height(16.dp))
                             Button(
                                 onClick = { finder.launch(arrayOf("application/pdf")) },
-                                colors = ButtonDefaults.buttonColors(containerColor = WarmBrownDark),
-                            ) { Text("Find the file", color = Cream) }
+                                shape = RoundedCornerShape(12.dp),
+                            ) { Text(VaultStrings.findTheFile(lang)) }
                         }
                         findNote?.let { note ->
                             Spacer(Modifier.height(12.dp))
-                            Text(text = note, color = WarmBrownDark, style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                text = note,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                     }
                 }
@@ -399,8 +354,13 @@ private fun PdfViewerScreen(
                             .padding(32.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
-                        Text(text = lockedNote!!, color = CharcoalSoft, fontSize = 15.sp, lineHeight = 22.sp)
-                        PdfPasswordField(buttonText = "Open") { typed ->
+                        Text(
+                            text = lockedNote!!,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.bodyMedium,
+                            lineHeight = 22.sp
+                        )
+                        PdfPasswordField(buttonText = VaultStrings.open(lang), lang = lang) { typed ->
                             password = typed
                             tries++
                         }
@@ -409,7 +369,7 @@ private fun PdfViewerScreen(
 
                 renderer == null -> {
                     CircularProgressIndicator(
-                        color = WarmBrown,
+                        color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.align(Alignment.Center)
                     )
                 }
@@ -430,9 +390,6 @@ private fun PdfViewerScreen(
                                 searchQuery = searchQuery,
                                 matchText = matchText,
                                 onMatchAt = { yInCard ->
-                                    // Once, and only if the words are not already in plain sight:
-                                    // a page is taller than the screen, and a match low on it was
-                                    // below the fold with nothing to say so.
                                     if (!broughtIntoView) {
                                         broughtIntoView = true
                                         val layout = listState.layoutInfo
@@ -445,8 +402,6 @@ private fun PdfViewerScreen(
                         }
                     }
 
-                    // Page indicator: the page under the middle of the screen. The first visible
-                    // row is the page BEFORE the one being read whenever its last lines still show.
                     val currentPage = remember {
                         derivedStateOf {
                             val layout = listState.layoutInfo
@@ -466,15 +421,15 @@ private fun PdfViewerScreen(
 
                     Surface(
                         shape = RoundedCornerShape(20.dp),
-                        color = CharcoalSoft.copy(alpha = 0.85f),
+                        color = MaterialTheme.colorScheme.inverseSurface,
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
                             .padding(16.dp),
                     ) {
                         Text(
-                            text = "Page ${currentPage.value} of $pageCount",
+                            text = VaultStrings.pageOf(lang, currentPage.value, pageCount),
                             style = MaterialTheme.typography.labelMedium,
-                            color = Cream,
+                            color = MaterialTheme.colorScheme.inverseOnSurface,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                         )
                     }
@@ -484,10 +439,6 @@ private fun PdfViewerScreen(
     }
 }
 
-// ════════════════════════════════════════════════════════════════════════════════
-// Single PDF page — renders bitmap, supports pinch-to-zoom
-// ════════════════════════════════════════════════════════════════════════════════
-
 @Composable
 private fun PdfPageCard(
     renderer: PdfRenderer,
@@ -496,14 +447,11 @@ private fun PdfPageCard(
     isTargetPage: Boolean,
     searchQuery: String,
     matchText: String,
-    /** Told where the match is, in pixels down from the top of this card, once it is found. */
     onMatchAt: (Float) -> Unit = {},
 ) {
-    // The page a search opened on is marked only when the search found words on it.
+    val lang = LocalAppLanguage.current
     val isMatch = isTargetPage && searchQuery.isNotBlank()
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
-    // Where the words are on the page itself. The page is a picture here, whether the PDF has a
-    // text layer or is a scan, so the words are read off the picture, with their places.
     var match by remember { mutableStateOf(PageMatch.NONE) }
     var pictureTop by remember { mutableFloatStateOf(0f) }
     var pictureHeight by remember { mutableFloatStateOf(0f) }
@@ -525,14 +473,12 @@ private fun PdfPageCard(
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
 
-    // Render this page's bitmap
     LaunchedEffect(pageIndex) {
         withContext(Dispatchers.IO) {
             try {
                 bitmap = renderLock.withLock {
                     val page = renderer.openPage(pageIndex)
                     try {
-                        // Render at 2x for clarity on high-DPI screens
                         val scaleFactor = 2
                         val bmp = Bitmap.createBitmap(
                             page.width * scaleFactor,
@@ -548,7 +494,6 @@ private fun PdfPageCard(
                     }
                 }
             } catch (e: Exception) {
-                // Page render failed — leave bitmap null
             }
         }
     }
@@ -556,56 +501,58 @@ private fun PdfPageCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        border = BorderStroke(if (isMatch) 1.5.dp else 1.dp, if (isMatch) PdfColor else CreamDark),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(
+            if (isMatch) 1.5.dp else 1.dp,
+            if (isMatch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+        ),
     ) {
         Column {
-            // Page number header
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(if (isMatch) PdfWash else CreamLight)
+                    .background(
+                        if (isMatch) MaterialTheme.colorScheme.secondaryContainer
+                        else MaterialTheme.colorScheme.surfaceContainerHigh
+                    )
                     .padding(horizontal = 12.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    text = "Page ${pageIndex + 1}",
+                    text = VaultStrings.pageBadge(lang, pageIndex + 1),
                     style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (isMatch) FontWeight.Bold else FontWeight.Normal,
-                    color = if (isMatch) PdfColor else WarmBrownDark,
+                    color = if (isMatch) MaterialTheme.colorScheme.onSecondaryContainer
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (isMatch) {
                     Text(
-                        text = "Match on this page",
+                        text = VaultStrings.matchOnThisPage(lang),
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
-                        color = PdfColor,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
                     )
                 }
             }
-            // The words the search found, so the eye knows what to look for on the page.
             if (isMatch && matchText.isNotBlank()) {
                 Text(
                     text = remember(matchText, searchQuery) { withQueryWordsMarked(matchText, searchQuery) },
-                    color = WarmBrownDark,
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(PdfWash)
+                        .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f))
                         .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
                 )
             }
 
-            // Page content
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(
                         if (bitmap != null) bitmap!!.width.toFloat() / bitmap!!.height
-                        else 0.707f // A4 ratio fallback
+                        else 0.707f
                     )
                     .onGloballyPositioned {
                         pictureTop = it.positionInParent().y
@@ -626,7 +573,6 @@ private fun PdfPageCard(
                 contentAlignment = Alignment.Center,
             ) {
                 if (bitmap != null) {
-                    // The page and the marks on it move and zoom as one.
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -639,7 +585,7 @@ private fun PdfPageCard(
                     ) {
                         Image(
                             bitmap = bitmap!!.asImageBitmap(),
-                            contentDescription = "Page ${pageIndex + 1}",
+                            contentDescription = VaultStrings.pageBadge(lang, pageIndex + 1),
                             modifier = Modifier.fillMaxSize(),
                         )
                         if (match.marks.isNotEmpty()) {
@@ -660,7 +606,10 @@ private fun PdfPageCard(
                         }
                     }
                 } else {
-                    CircularProgressIndicator(color = WarmBrown, modifier = Modifier.size(32.dp))
+                    CircularProgressIndicator(
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(32.dp)
+                    )
                 }
             }
         }
