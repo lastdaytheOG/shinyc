@@ -1,5 +1,11 @@
 package com.amar.vault
 
+import androidx.compose.material.icons.rounded.Screenshot
+import com.amar.vault.ui.components.GroupedToggleRow
+import com.amar.vault.ui.components.IconBadge
+import com.amar.vault.ui.components.Tints
+import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.automirrored.rounded.Chat
 import android.provider.MediaStore
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -17,13 +23,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.Download
-import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.PhotoCamera
-import androidx.compose.material.icons.outlined.Schedule
-import androidx.compose.material.icons.outlined.ScreenshotMonitor
-import androidx.compose.material.icons.outlined.Translate
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.PhotoCamera
+import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.ScreenshotMonitor
+import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -101,20 +107,7 @@ fun OnboardingScreen(onComplete: () -> Unit, onDocumentsChosen: () -> Unit = {})
     ) {
         Spacer(Modifier.height(56.dp))
 
-        Box(
-            modifier = Modifier
-                .size(72.dp)
-                .clip(RoundedCornerShape(20.dp))
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.Description,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(36.dp)
-            )
-        }
+        IconBadge(Icons.Rounded.Description, Tints.Blue, size = 72)
 
         Spacer(Modifier.height(20.dp))
 
@@ -150,62 +143,72 @@ fun OnboardingScreen(onComplete: () -> Unit, onDocumentsChosen: () -> Unit = {})
 
         Spacer(Modifier.height(16.dp))
 
-        ChoiceCard(
-            icon = Icons.Outlined.Image,
-            title = VaultStrings.allPhotos(lang),
-            subtitle = photoCounts["Total"]?.let { VaultStrings.photosOnDevice(lang, it) }
-                ?: VaultStrings.photosOnDevice(lang, 0),
-            checked = scanAll,
-            onCheckedChange = { scanAll = it },
-        )
-
-        if (!scanAll) {
-            Spacer(Modifier.height(10.dp))
-            ChoiceCard(
-                icon = Icons.Outlined.ScreenshotMonitor,
-                title = VaultStrings.screenshotsChoice(lang),
-                subtitle = photoCounts["Screenshots"]?.let { VaultStrings.photosCount(lang, it) }
-                    ?: VaultStrings.photosCount(lang, 0),
-                checked = scanScreenshots,
-                onCheckedChange = { scanScreenshots = it },
-            )
-            Spacer(Modifier.height(10.dp))
-            ChoiceCard(
-                icon = Icons.Outlined.PhotoCamera,
-                title = VaultStrings.cameraChoice(lang),
-                subtitle = photoCounts["Camera"]?.let { VaultStrings.photosCount(lang, it) }
-                    ?: VaultStrings.photosCount(lang, 0),
-                checked = scanCamera,
-                onCheckedChange = { scanCamera = it },
-            )
-            Spacer(Modifier.height(10.dp))
-            ChoiceCard(
-                icon = Icons.Outlined.Translate,
-                title = VaultStrings.whatsappChoice(lang),
-                subtitle = photoCounts["WhatsApp"]?.let { VaultStrings.photosCount(lang, it) }
-                    ?: VaultStrings.photosCount(lang, 0),
-                checked = scanWhatsApp,
-                onCheckedChange = { scanWhatsApp = it },
-            )
-            Spacer(Modifier.height(10.dp))
-            ChoiceCard(
-                icon = Icons.Outlined.Download,
-                title = VaultStrings.downloadsChoice(lang),
-                subtitle = photoCounts["Downloads"]?.let { VaultStrings.photosCount(lang, it) }
-                    ?: VaultStrings.photosCount(lang, 0),
-                checked = scanDownloads,
-                onCheckedChange = { scanDownloads = it },
-            )
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column {
+                GroupedToggleRow(
+                    title = VaultStrings.allPhotos(lang),
+                    subtitle = VaultStrings.photosOnDevice(lang, photoCounts["Total"] ?: 0),
+                    icon = Icons.Rounded.PhotoLibrary,
+                    tint = Tints.Blue,
+                    checked = scanAll,
+                    onCheckedChange = { scanAll = it },
+                )
+                if (!scanAll) {
+                    GroupedToggleRow(
+                        title = VaultStrings.screenshotsChoice(lang),
+                        subtitle = VaultStrings.photosCount(lang, photoCounts["Screenshots"] ?: 0),
+                        icon = Icons.Rounded.Screenshot,
+                        tint = Tints.Indigo,
+                        checked = scanScreenshots,
+                        onCheckedChange = { scanScreenshots = it },
+                    )
+                    GroupedToggleRow(
+                        title = VaultStrings.cameraChoice(lang),
+                        subtitle = VaultStrings.photosCount(lang, photoCounts["Camera"] ?: 0),
+                        icon = Icons.Rounded.PhotoCamera,
+                        tint = Tints.Gray,
+                        checked = scanCamera,
+                        onCheckedChange = { scanCamera = it },
+                    )
+                    GroupedToggleRow(
+                        title = VaultStrings.whatsappChoice(lang),
+                        subtitle = VaultStrings.photosCount(lang, photoCounts["WhatsApp"] ?: 0),
+                        icon = Icons.AutoMirrored.Rounded.Chat,
+                        tint = Tints.Green,
+                        checked = scanWhatsApp,
+                        onCheckedChange = { scanWhatsApp = it },
+                    )
+                    GroupedToggleRow(
+                        title = VaultStrings.downloadsChoice(lang),
+                        subtitle = VaultStrings.photosCount(lang, photoCounts["Downloads"] ?: 0),
+                        icon = Icons.Rounded.Download,
+                        tint = Tints.Blue,
+                        checked = scanDownloads,
+                        onCheckedChange = { scanDownloads = it },
+                    )
+                }
+            }
         }
 
-        Spacer(Modifier.height(10.dp))
-        ChoiceCard(
-            icon = Icons.Outlined.Description,
-            title = VaultStrings.documentsChoice(lang),
-            subtitle = VaultStrings.documentsChoiceHint(lang),
-            checked = scanDocuments,
-            onCheckedChange = { scanDocuments = it },
-        )
+        Spacer(Modifier.height(16.dp))
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            GroupedToggleRow(
+                title = VaultStrings.documentsChoice(lang),
+                subtitle = VaultStrings.documentsChoiceHint(lang),
+                icon = Icons.Rounded.Description,
+                tint = Tints.Orange,
+                checked = scanDocuments,
+                onCheckedChange = { scanDocuments = it },
+            )
+        }
 
         Spacer(Modifier.height(24.dp))
 
@@ -220,7 +223,7 @@ fun OnboardingScreen(onComplete: () -> Unit, onDocumentsChosen: () -> Unit = {})
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.Schedule,
+                        imageVector = Icons.Rounded.Schedule,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(22.dp)
@@ -297,50 +300,6 @@ fun OnboardingScreen(onComplete: () -> Unit, onDocumentsChosen: () -> Unit = {})
         }
 
         Spacer(Modifier.height(32.dp))
-    }
-}
-
-@Composable
-private fun ChoiceCard(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Switch(
-                checked = checked,
-                onCheckedChange = onCheckedChange,
-            )
-        }
     }
 }
 

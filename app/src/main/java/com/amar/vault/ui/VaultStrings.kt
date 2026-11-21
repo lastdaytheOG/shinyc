@@ -593,7 +593,7 @@ object VaultStrings {
 
     fun photosOnDevice(lang: AppLanguage, count: Int) = when (lang) {
         AppLanguage.HINDI -> "डिवाइस पर $count फ़ोटो"
-        else -> "$count photos on the device"
+        else -> if (count == 1) "1 photo on the device" else "$count photos on the device"
     }
 
     fun screenshotsChoice(lang: AppLanguage) = when (lang) {
@@ -628,7 +628,7 @@ object VaultStrings {
 
     fun photosCount(lang: AppLanguage, count: Int) = when (lang) {
         AppLanguage.HINDI -> "$count फ़ोटो"
-        else -> "$count photos"
+        else -> if (count == 1) "1 photo" else "$count photos"
     }
 
     fun estimateTitle(lang: AppLanguage) = when (lang) {
@@ -638,7 +638,7 @@ object VaultStrings {
 
     fun estimateLine(lang: AppLanguage, photos: Int, minutes: Int) = when (lang) {
         AppLanguage.HINDI -> "$photos फ़ोटो · लगभग $minutes मिनट"
-        else -> "$photos photos · about $minutes min"
+        else -> if (photos == 1) "1 photo · about $minutes min" else "$photos photos · about $minutes min"
     }
 
     fun estimateNote(lang: AppLanguage) = when (lang) {
@@ -648,7 +648,7 @@ object VaultStrings {
 
     fun startReading(lang: AppLanguage, photos: Int) = when (lang) {
         AppLanguage.HINDI -> "पढ़ना शुरू करें ($photos फ़ोटो)"
-        else -> "Start reading ($photos photos)"
+        else -> if (photos == 1) "Start reading (1 photo)" else "Start reading ($photos photos)"
     }
 
     fun getStarted(lang: AppLanguage) = when (lang) {
@@ -811,5 +811,120 @@ object VaultStrings {
     fun viewerCouldNotOpen(lang: AppLanguage, detail: String) = when (lang) {
         AppLanguage.HINDI -> "फ़ाइल नहीं खुली: $detail"
         else -> "The file could not be opened: $detail"
+    }
+
+    fun sectionReading(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "पढ़ना"
+        else -> "Reading"
+    }
+
+    fun foldersTitle(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "फ़ोल्डर"
+        else -> "Folders"
+    }
+
+    fun foldersChosen(lang: AppLanguage, count: Int) = when (lang) {
+        AppLanguage.HINDI -> "$count चुने गए"
+        else -> "$count chosen"
+    }
+
+    fun sectionPrivacy(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "गोपनीयता"
+        else -> "Privacy"
+    }
+
+    fun hideCodesTitle(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "कोड और कार्ड नंबर छिपाएँ"
+        else -> "Hide codes and card numbers"
+    }
+
+    fun forgetLearnedTitle(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "खोज ने जो सीखा, उसे भूलें"
+        else -> "Forget what search learned"
+    }
+
+    fun forgetLearnedBody(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "इस फ़ोन पर रखे शब्द-संबंध और खोले गए नतीजे मिट जाएँगे।"
+        else -> "Word links and opened results kept on this phone will be cleared."
+    }
+
+    fun forget(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "भूलें"
+        else -> "Forget"
+    }
+
+    fun photoSearchShort(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "फ़ोटो और अर्थ से खोज · 207 MB"
+        else -> "Photos and meaning · 207 MB"
+    }
+
+    fun linePackShort(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "कुछ फ़ोन पर तेज़ · 36 MB"
+        else -> "Faster on some phones · 36 MB"
+    }
+
+    fun downloadShort(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "डाउनलोड"
+        else -> "Download"
+    }
+
+    fun retryShort(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "फिर से"
+        else -> "Retry"
+    }
+
+    fun devToolsTitle(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "डेवलपर औज़ार"
+        else -> "Developer tools"
+    }
+
+    fun hideDevTools(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "डेवलपर औज़ार छिपाएँ"
+        else -> "Hide developer tools"
+    }
+
+    fun devUnlocked(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "डेवलपर औज़ार चालू हैं"
+        else -> "Developer tools are on"
+    }
+
+    fun photoFoldersHeader(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "फ़ोटो फ़ोल्डर"
+        else -> "Photo folders"
+    }
+
+    fun photoFoldersFooter(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "चुने गए फ़ोल्डरों की नई फ़ोटो अपने आप पढ़ी जाती हैं।"
+        else -> "New photos in chosen folders are read on their own."
+    }
+
+    fun allowPhotos(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "फ़ोटो देखने की अनुमति दें"
+        else -> "Allow access to photos"
+    }
+
+    fun noPhotoFolders(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "इस फ़ोन पर अभी कोई फ़ोटो नहीं"
+        else -> "No photos on this phone yet"
+    }
+
+    fun addDocumentFolder(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "दस्तावेज़ों का फ़ोल्डर जोड़ें"
+        else -> "Add a folder of documents"
+    }
+
+    fun documentsAdded(lang: AppLanguage, count: Int) = when (lang) {
+        AppLanguage.HINDI -> "$count दस्तावेज़ जोड़े गए, पढ़े जा रहे हैं।"
+        else -> "$count documents added and being read."
+    }
+
+    fun noNewDocuments(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "उस फ़ोल्डर में कोई नया दस्तावेज़ नहीं मिला।"
+        else -> "No new documents in that folder."
+    }
+
+    fun lookingInFolder(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "फ़ोल्डर देखा जा रहा है…"
+        else -> "Looking in the folder…"
     }
 }

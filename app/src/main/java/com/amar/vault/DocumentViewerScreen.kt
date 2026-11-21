@@ -18,12 +18,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Article
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -92,7 +91,7 @@ fun DocumentViewerScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                             contentDescription = VaultStrings.back(lang)
                         )
                     }
@@ -181,11 +180,7 @@ fun DocumentViewerScreen(
                     } else {
                         metadataList.forEach { meta ->
                             MetadataRow(label = meta.type, value = meta.value)
-                            HorizontalDivider(
-                                color = MaterialTheme.colorScheme.outlineVariant,
-                                thickness = 0.5.dp,
-                                modifier = Modifier.padding(vertical = 8.dp)
-                            )
+                            Spacer(Modifier.height(14.dp))
                         }
                     }
 
@@ -196,7 +191,7 @@ fun DocumentViewerScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        Icon(Icons.Outlined.Article, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Rounded.Article, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
                         Text(
                             text = if (showRawText) VaultStrings.hideStoredText(lang)

@@ -61,6 +61,14 @@ class BulkScanWorker @dagger.assisted.AssistedInject constructor(
                 .enqueueUniqueWork("bulk_scan", androidx.work.ExistingWorkPolicy.KEEP, request)
         }
 
+        fun enqueueAfterCurrent(context: Context) {
+            val request = OneTimeWorkRequestBuilder<BulkScanWorker>()
+                .addTag("bulk_scan")
+                .build()
+            WorkManager.getInstance(context)
+                .enqueueUniqueWork("bulk_scan", androidx.work.ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+        }
+
         /** Check if a bulk scan is currently running. */
         fun isRunning(context: Context): Boolean {
             val infos = WorkManager.getInstance(context)

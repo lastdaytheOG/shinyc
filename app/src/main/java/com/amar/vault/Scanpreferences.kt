@@ -8,6 +8,8 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.map
 
 private val Context.scanPrefsStore: DataStore<Preferences> by preferencesDataStore(name = "scan_prefs")
@@ -53,17 +55,22 @@ object ScanPreferences {
         fun foldersToScan(): List<String> {
             if (scanAll) return listOf("") // empty = all
             val folders = mutableListOf<String>()
-            if (scanScreenshots) { folders.add("Screenshots"); folders.add("DCIM/Screenshots") }
-            if (scanCamera) { folders.add("DCIM/Camera"); folders.add("Camera") }
-            if (scanWhatsApp) {
-                folders.add("WhatsApp/Media/WhatsApp Images")
-                folders.add("Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Images")
-            }
-            if (scanDownloads) { folders.add("Download"); folders.add("Downloads") }
+            if (scanScreenshots) folders.addAll(SCREENSHOT_FOLDERS)
+            if (scanCamera) folders.addAll(CAMERA_FOLDERS)
+            if (scanWhatsApp) folders.addAll(WHATSAPP_FOLDERS)
+            if (scanDownloads) folders.addAll(DOWNLOAD_FOLDERS)
             folders.addAll(customFolders)
             return folders
         }
     }
+
+    val SCREENSHOT_FOLDERS = listOf("Screenshots", "DCIM/Screenshots")
+    val CAMERA_FOLDERS = listOf("DCIM/Camera", "Camera")
+    val WHATSAPP_FOLDERS = listOf(
+        "WhatsApp/Media/WhatsApp Images",
+        "Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Images",
+    )
+    val DOWNLOAD_FOLDERS = listOf("Download", "Downloads")
 
     fun prefsFlow(context: Context): Flow<Prefs> =
         context.scanPrefsStore.data.map { p ->
@@ -101,6 +108,16 @@ object ScanPreferences {
             p[KEY_LARGER_TEXT] = prefs.largerText
             p[KEY_LANGUAGE] = prefs.language
             p[KEY_PHOTO_SEARCH_ENABLED] = prefs.photoSearchEnabled
+        }
+    }
+
+    private val changing = kotlinx.coroutines.sync.Mutex()
+
+    suspend fun update(context: Context, change: (Prefs) -> Prefs) {
+        changing.withLock {
+            val current = prefsFlow(context).first()
+            val next = change(current)
+            if (next != current) save(context, next)
         }
     }
 

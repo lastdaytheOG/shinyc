@@ -502,10 +502,7 @@ private fun PdfPageCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(
-            if (isMatch) 1.5.dp else 1.dp,
-            if (isMatch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-        ),
+        border = if (isMatch) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
     ) {
         Column {
             Row(

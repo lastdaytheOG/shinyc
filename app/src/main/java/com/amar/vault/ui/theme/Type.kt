@@ -13,7 +13,7 @@ val Typography = Typography(
         fontWeight = FontWeight.Bold,
         fontSize = 32.sp,
         lineHeight = 45.sp,
-        letterSpacing = (-0.25).sp
+        letterSpacing = (-0.5).sp
     ),
     displayMedium = TextStyle(
         fontFamily = FontFamily.Default,
@@ -56,7 +56,7 @@ val Typography = Typography(
         fontWeight = FontWeight.Normal,
         fontSize = 16.sp,
         lineHeight = 24.sp,
-        letterSpacing = 0.5.sp
+        letterSpacing = 0.sp
     ),
     bodyMedium = TextStyle(
         fontFamily = FontFamily.Default,
@@ -139,7 +139,7 @@ val LargerTypography = Typography(
         fontWeight = FontWeight.Normal,
         fontSize = 19.sp,
         lineHeight = 28.sp,
-        letterSpacing = 0.5.sp
+        letterSpacing = 0.sp
     ),
     bodyMedium = TextStyle(
         fontFamily = FontFamily.Default,

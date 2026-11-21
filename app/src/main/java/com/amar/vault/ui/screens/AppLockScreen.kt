@@ -5,7 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -44,7 +44,7 @@ fun AppLockScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Default.Lock,
+                    imageVector = Icons.Rounded.Lock,
                     contentDescription = VaultStrings.vaultLocked(lang),
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(36.dp)
