@@ -326,8 +326,12 @@ class PictureOcrMeasureDeviceTest {
         assumeTrue("run with -e ocr lines", args.getString("ocr") == "lines")
         val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
         val folder = outputFolder(app)
-        val pictures = picturesFor(args, folder)
+        val every = args.getString("every")?.toInt() ?: 1
+        val pictures = picturesFor(args, folder).filterIndexed { i, _ -> i % every == 0 }
         assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
+        val restMs = args.getString("rest")?.toLong() ?: 0L
+        val stopAt = args.getString("stopAt")?.toInt() ?: Int.MAX_VALUE
+        val power = app.getSystemService(android.os.PowerManager::class.java)
         val reader = ImageContentExtractor(app)
         val name = args.getString("out") ?: "lines"
         val page = args.getString("page") == "1"
@@ -342,6 +346,12 @@ class PictureOcrMeasureDeviceTest {
             File(folder, "$name-lines.jsonl").bufferedWriter().use { lines ->
                 File(folder, "$name-whole.jsonl").bufferedWriter().use { whole ->
                     for ((n, picture) in pictures.withIndex()) {
+                        if (n > 0 && restMs > 0) kotlinx.coroutines.delay(restMs)
+                        val heat = power.currentThermalStatus
+                        if (heat >= stopAt) {
+                            android.util.Log.w("Lines", "stopped at ${picture.name}: thermal status $heat")
+                            break
+                        }
                         val bitmap = BitmapFactory.decodeFile(picture.path) ?: continue
                         val order = if (n % 2 == 0) listOf(true, false) else listOf(false, true)
                         for (on in order) {
@@ -351,7 +361,7 @@ class PictureOcrMeasureDeviceTest {
                             val text = read(bitmap, picture)
                             val ms = (System.nanoTime() - started) / 1e6
                             val row = JSONObject().put("name", picture.name).put("width", bitmap.width)
-                                .put("height", bitmap.height).put("text", text).put("ms", ms)
+                                .put("height", bitmap.height).put("text", text).put("ms", ms).put("status", heat)
                             if (on) row.put("byLines", byLines() > before)
                             val out = if (on) lines else whole
                             out.write(row.toString())
@@ -364,6 +374,247 @@ class PictureOcrMeasureDeviceTest {
             }
         } finally {
             com.amar.vault.indexing.LineReadingControl.route = com.amar.vault.indexing.LineReadingControl.Route.CHOSEN
+        }
+    }
+
+    @Test
+    fun paint() = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("run with -e ocr paint", args.getString("ocr") == "paint")
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        val folder = outputFolder(app)
+        val every = args.getString("every")?.toInt() ?: 1
+        val pictures = picturesFor(args, folder).filterIndexed { i, _ -> i % every == 0 }
+        assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
+        val reader = ImageContentExtractor(app)
+        val name = args.getString("out") ?: "paint"
+        val keep = args.getString("keep")?.toInt() ?: 0
+        val quick = args.getString("quick") == "1"
+        val plainQuick = args.getString("plainQuick")?.let { it == "1" } ?: quick
+        val restMs = args.getString("rest")?.toLong() ?: 0L
+        val stopAt = args.getString("stopAt")?.toInt() ?: Int.MAX_VALUE
+        val power = app.getSystemService(android.os.PowerManager::class.java)
+        val pacer = if (args.getString("cool") == "1") com.amar.vault.indexing.HeatPacer.of(app, 60_000L) else null
+        fun status() = power.currentThermalStatus
+        fun headroom() = power.getThermalHeadroom(0).toDouble().takeIf { !it.isNaN() } ?: -1.0
+        val english = com.amar.vault.indexing.MlKitReader.english()
+        fun metric(key: String) = com.amar.vault.IndexMetrics.snapshot()[key] ?: 0L
+        val hiTotal = "${com.amar.vault.IndexMetrics.Timing.OCR_MLKIT_HI}.total"
+        val accepted = com.amar.vault.IndexMetrics.Event.IMAGE_OCR_TIER1_ACCEPTED
+        val again = com.amar.vault.IndexMetrics.Event.IMAGE_OCR_PAINTED_HINDI
+        val painted = com.amar.vault.indexing.AdaptiveImageOcrControl
+        val paintedBefore = painted.paintSettledLines
+        try {
+            com.amar.vault.indexing.LineReadingControl.route = com.amar.vault.indexing.LineReadingControl.Route.WHOLE
+            for (on in listOf(true, false)) {
+                painted.paintSettledLines = on
+                BitmapFactory.decodeFile(pictures.first().path)?.let { reader.extract(it); it.recycle() }
+            }
+            File(folder, "$name-paint.jsonl").bufferedWriter().use { paint ->
+                File(folder, "$name-plain.jsonl").bufferedWriter().use { plain ->
+                    for ((n, picture) in pictures.withIndex()) {
+                        if (n > 0 && restMs > 0) kotlinx.coroutines.delay(restMs)
+                        val paused = pacer?.awaitCool() ?: 0L
+                        val heatStatus = status()
+                        if (heatStatus >= stopAt) {
+                            android.util.Log.w("PaintBench", "stopped at ${picture.name}: thermal status $heatStatus")
+                            break
+                        }
+                        val bitmap = BitmapFactory.decodeFile(picture.path) ?: continue
+                        if (n < keep) {
+                            com.amar.vault.indexing.PaintOver.painted(bitmap, english.read(bitmap))?.let { shown ->
+                                File(folder, "painted-${picture.nameWithoutExtension}.png").outputStream().use {
+                                    shown.compress(Bitmap.CompressFormat.PNG, 100, it)
+                                }
+                                shown.recycle()
+                            }
+                        }
+                        val order = when (args.getString("only")) {
+                            "paint" -> listOf(true)
+                            "plain" -> listOf(false)
+                            else -> if (n % 2 == 0) listOf(true, false) else listOf(false, true)
+                        }
+                        val rows = order.map { on ->
+                            painted.paintSettledLines = on
+                            val hiBefore = metric(hiTotal)
+                            val acceptedBefore = metric(accepted)
+                            val againBefore = metric(again)
+                            val started = System.nanoTime()
+                            val content = reader.extract(bitmap, quick = if (on) quick else plainQuick)
+                            val text = content.ocrText
+                            val ms = (System.nanoTime() - started) / 1e6
+                            on to JSONObject().put("name", picture.name).put("width", bitmap.width)
+                                .put("height", bitmap.height).put("text", text).put("ms", ms)
+                                .put("hiMs", metric(hiTotal) - hiBefore).put("accepted", metric(accepted) > acceptedBefore)
+                                .put("hindiAgain", metric(again) > againBefore).put("deeper", content.deeper)
+                                .put("pausedMs", paused).put("status", heatStatus)
+                                .put("first", on == order.first())
+                        }
+                        val heatHeadroom = headroom()
+                        for ((on, row) in rows) {
+                            val out = if (on) paint else plain
+                            out.write(row.put("headroom", heatHeadroom).toString())
+                            out.newLine()
+                            out.flush()
+                        }
+                        bitmap.recycle()
+                    }
+                }
+            }
+        } finally {
+            painted.paintSettledLines = paintedBefore
+            com.amar.vault.indexing.LineReadingControl.route = com.amar.vault.indexing.LineReadingControl.Route.CHOSEN
+        }
+    }
+
+    @Test
+    fun paintReads() = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("run with -e ocr paintreads", args.getString("ocr") == "paintreads")
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        val folder = outputFolder(app)
+        val pictures = picturesFor(args, folder)
+        assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
+        val english = com.amar.vault.indexing.MlKitReader.english()
+        val hindi = com.amar.vault.indexing.MlKitReader.hindi()
+        fun lines(found: com.amar.vault.indexing.FoundText) = JSONArray().also { all ->
+            for ((b, block) in found.blocks.withIndex()) for (line in block.lines) {
+                val box = line.box
+                all.put(JSONObject().put("block", b).put("text", line.text).put("confidence", line.confidence.toDouble())
+                    .put("box", if (box == null) JSONObject.NULL else JSONArray(listOf(box.left, box.top, box.right, box.bottom))))
+            }
+        }
+        File(folder, (args.getString("out") ?: "paintreads") + ".jsonl").bufferedWriter().use { out ->
+            for (picture in pictures) {
+                val bitmap = BitmapFactory.decodeFile(picture.path) ?: continue
+                val en = english.read(bitmap)
+                val hi = hindi.read(bitmap)
+                val painted = com.amar.vault.indexing.PaintOver.painted(bitmap, en)
+                val hiPainted = painted?.let { hindi.read(it) }
+                painted?.recycle()
+                val row = JSONObject().put("name", picture.name).put("en", lines(en)).put("hi", lines(hi))
+                    .put("hiPainted", if (hiPainted == null) JSONObject.NULL else lines(hiPainted))
+                out.write(row.toString())
+                out.newLine()
+                out.flush()
+                bitmap.recycle()
+            }
+        }
+    }
+
+    @Test
+    fun hindiLater() = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("run with -e ocr hindilater", args.getString("ocr") == "hindilater")
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        val folder = outputFolder(app)
+        val every = args.getString("every")?.toInt() ?: 1
+        val pictures = picturesFor(args, folder).filterIndexed { i, _ -> i % every == 0 }
+        assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
+        val restMs = args.getString("rest")?.toLong() ?: 0L
+        val stopAt = args.getString("stopAt")?.toInt() ?: Int.MAX_VALUE
+        val power = app.getSystemService(android.os.PowerManager::class.java)
+        val reader = ImageContentExtractor(app)
+        val route = com.amar.vault.indexing.LineReadingControl.route
+        try {
+            com.amar.vault.indexing.LineReadingControl.route = com.amar.vault.indexing.LineReadingControl.Route.WHOLE
+            BitmapFactory.decodeFile(pictures.first().path)?.let { b ->
+                reader.extract(b, quick = true, hindi = true)
+                reader.extract(b, quick = true, hindi = false)
+                b.recycle()
+            }
+            File(folder, (args.getString("out") ?: "hindilater") + ".jsonl").bufferedWriter().use { out ->
+                for ((n, picture) in pictures.withIndex()) {
+                    if (n > 0 && restMs > 0) kotlinx.coroutines.delay(restMs)
+                    val heat = power.currentThermalStatus
+                    if (heat >= stopAt) {
+                        android.util.Log.w("HindiLater", "stopped at ${picture.name}: thermal status $heat")
+                        break
+                    }
+                    val bitmap = BitmapFactory.decodeFile(picture.path) ?: continue
+                    val row = JSONObject().put("name", picture.name).put("status", heat)
+                    for (hindi in if (n % 2 == 0) listOf(true, false) else listOf(false, true)) {
+                        val key = if (hindi) "with" else "without"
+                        val started = System.nanoTime()
+                        val content = reader.extract(bitmap, quick = true, hindi = hindi)
+                        row.put("${key}Ms", (System.nanoTime() - started) / 1e6).put("${key}Text", content.ocrText)
+                            .put("${key}Deeper", content.deeper).put("${key}Later", content.hindiPutOff)
+                        if (hindi) row.put("hindiSeen", content.hindiSeen == true)
+                    }
+                    row.put("headroom", power.getThermalHeadroom(0).toDouble().takeIf { !it.isNaN() } ?: -1.0)
+                    out.write(row.toString())
+                    out.newLine()
+                    out.flush()
+                    bitmap.recycle()
+                }
+            }
+        } finally {
+            com.amar.vault.indexing.LineReadingControl.route = route
+        }
+    }
+
+    @Test
+    fun sideBySide() = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("run with -e ocr sidebyside", args.getString("ocr") == "sidebyside")
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext
+        val folder = outputFolder(app)
+        val every = args.getString("every")?.toInt() ?: 1
+        val pictures = picturesFor(args, folder).filterIndexed { i, _ -> i % every == 0 }
+        assertTrue("no pictures in ${folder.path}", pictures.isNotEmpty())
+        val restMs = args.getString("rest")?.toLong() ?: 0L
+        val stopAt = args.getString("stopAt")?.toInt() ?: Int.MAX_VALUE
+        val power = app.getSystemService(android.os.PowerManager::class.java)
+        val enPool = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val hiPool = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val shared = com.amar.vault.indexing.MlKitReader.english() to com.amar.vault.indexing.MlKitReader.hindi()
+        val own = com.amar.vault.indexing.MlKitReader(
+            TextRecognition.getClient(TextRecognizerOptions.Builder().setExecutor(enPool).build()),
+        ) to com.amar.vault.indexing.MlKitReader(
+            TextRecognition.getClient(DevanagariTextRecognizerOptions.Builder().setExecutor(hiPool).build()),
+        )
+        val ways = listOf("inTurn", "together", "ownThreads")
+        suspend fun read(way: String, bitmap: Bitmap): Pair<String, String> = when (way) {
+            "inTurn" -> shared.first.read(bitmap).text to shared.second.read(bitmap).text
+            "together" -> {
+                val en = async { shared.first.read(bitmap) }
+                val hi = async { shared.second.read(bitmap) }
+                en.await().text to hi.await().text
+            }
+            else -> {
+                val en = async { own.first.read(bitmap) }
+                val hi = async { own.second.read(bitmap) }
+                en.await().text to hi.await().text
+            }
+        }
+        try {
+            BitmapFactory.decodeFile(pictures.first().path)?.let { b -> ways.forEach { read(it, b) }; b.recycle() }
+            File(folder, (args.getString("out") ?: "sidebyside") + ".jsonl").bufferedWriter().use { out ->
+                for ((n, picture) in pictures.withIndex()) {
+                    if (n > 0 && restMs > 0) kotlinx.coroutines.delay(restMs)
+                    val heat = power.currentThermalStatus
+                    if (heat >= stopAt) {
+                        android.util.Log.w("SideBySide", "stopped at ${picture.name}: thermal status $heat")
+                        break
+                    }
+                    val bitmap = BitmapFactory.decodeFile(picture.path) ?: continue
+                    val order = (0 until ways.size).map { ways[(it + n) % ways.size] }
+                    val row = JSONObject().put("name", picture.name).put("status", heat)
+                    for (way in order) {
+                        val started = System.nanoTime()
+                        val (en, hi) = read(way, bitmap)
+                        row.put("${way}Ms", (System.nanoTime() - started) / 1e6)
+                            .put("${way}En", en).put("${way}Hi", hi)
+                    }
+                    out.write(row.toString())
+                    out.newLine()
+                    out.flush()
+                    bitmap.recycle()
+                }
+            }
+        } finally {
+            enPool.shutdown()
+            hiPool.shutdown()
         }
     }
 

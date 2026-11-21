@@ -88,6 +88,11 @@ class ImageContentExtractor(
         /** Three Devanagari letters in a row: what says Hindi is on a picture ([readScreen]). */
         internal fun saysHindi(read: String): Boolean = HINDI_WORD.containsMatchIn(read)
 
+        private const val SURE_HINDI = 0.7f
+
+        fun showsHindi(found: FoundText): Boolean =
+            found.blocks.any { block -> block.lines.any { it.confidence >= SURE_HINDI && saysHindi(it.text) } }
+
         /** Round-to-nearest ms for sub-millisecond stages (merge/NFC would floor to 0). */
         private fun nsToMs(ns: Long): Long = (ns + 500_000) / 1_000_000
     }
@@ -99,7 +104,15 @@ class ImageContentExtractor(
     }
 
     /** OCR text + QR payloads extracted from a single bitmap. */
-    data class ImageContent(val ocrText: String, val qrPayloads: List<String>)
+    data class ImageContent(
+        val ocrText: String,
+        val qrPayloads: List<String>,
+        val deeper: Boolean = false,
+        val hindiSeen: Boolean? = null,
+        val hindiPutOff: Boolean = false,
+    )
+
+    private class ScreenRead(val text: String, val deeper: Boolean = false, val hindiSeen: Boolean? = null, val hindiPutOff: Boolean = false)
 
     /**
      * Run OCR and QR/barcode scanning concurrently and return both — the same parallel
@@ -110,10 +123,16 @@ class ImageContentExtractor(
      * instrumentation is disabled (production default) [recorder] is null and every timing
      * wrapper below is a pure pass-through — output is byte-identical to the uninstrumented path.
      */
-    suspend fun extract(bitmap: Bitmap, sourceId: String? = null, photo: Boolean = false): ImageContent {
+    suspend fun extract(
+        bitmap: Bitmap,
+        sourceId: String? = null,
+        photo: Boolean = false,
+        quick: Boolean = false,
+        hindi: Boolean = true,
+    ): ImageContent {
         // Production Evaluation Mode: a real indexing pass is captured only when the dev
         // toggle is on (recorderOrNull() → non-null). Off = null recorder = pure pass-through.
-        val (content, report) = extractInternal(bitmap, sourceId, OcrInstrumentation.recorderOrNull(), photo)
+        val (content, report) = extractInternal(bitmap, sourceId, OcrInstrumentation.recorderOrNull(), photo, quick, hindi)
         report?.let { OcrInstrumentation.publish(it) }
         return content
     }
@@ -139,13 +158,16 @@ class ImageContentExtractor(
         sourceId: String?,
         recorder: OcrStrategyRecorder?,
         photo: Boolean = false,
+        quick: Boolean = false,
+        hindi: Boolean = true,
     ): Pair<ImageContent, OcrImageReport?> = coroutineScope {
         // Sprint E4 — record input geometry + whole-OCR wall time (observation only).
         recorder?.setInput(bitmap.width, bitmap.height)
         val tOcr = System.currentTimeMillis()
-        val ocrDeferred = async { if (photo) readPhoto(bitmap, recorder) else readScreen(bitmap, recorder) }
+        val ocrDeferred = async { if (photo) ScreenRead(readPhoto(bitmap, recorder)) else readScreen(bitmap, recorder, quick, hindi || !quick) }
         val qrDeferred = async(Dispatchers.IO) { scanBarcode(bitmap) }
-        val mergedOcr = ocrDeferred.await()
+        val screen = ocrDeferred.await()
+        val mergedOcr = screen.text
         recorder?.setTotalMs((System.currentTimeMillis() - tOcr).toDouble())
         val qr = qrDeferred.await()
         // Observation only: attribute the (already-final) merged text to its source strategies.
@@ -153,7 +175,7 @@ class ImageContentExtractor(
         // Sprint 4A: NFC at the OCR ingestion boundary — one site covers screenshots,
         // images AND the PDF trust-gate fallback. ML Kit output is NFC in practice, so
         // this is a no-op for existing behaviour; it guarantees canonical bytes in Room.
-        ImageContent(normalize(mergedOcr), qr) to report
+        ImageContent(normalize(mergedOcr), qr, screen.deeper, screen.hindiSeen, screen.hindiPutOff) to report
     }
 
     /** Sprint E1 — time one strategy's work into [recorder]; pure pass-through when null. */
@@ -396,8 +418,25 @@ class ImageContentExtractor(
     // Aggressive multi-pass OCR
     // ════════════════════════════════════════════════════════════════════════
 
-    private suspend fun readScreen(bitmap: Bitmap, recorder: OcrStrategyRecorder? = null): String =
-        routes.read(ReadingRoutes.SCREENS, { readByLines(it, bitmap, recorder) }) { readWhole(bitmap, recorder) }
+    private suspend fun readScreen(bitmap: Bitmap, recorder: OcrStrategyRecorder?, quick: Boolean, readHindi: Boolean): ScreenRead {
+        var deeper = false
+        var hindiSeen: Boolean? = null
+        var hindiPutOff = false
+        val text = routes.read(ReadingRoutes.SCREENS, { readByLines(it, bitmap, recorder) }) {
+            readWhole(
+                bitmap,
+                recorder,
+                if (quick) { { deeper = true } } else null,
+                readHindi,
+                { seen -> hindiSeen = seen },
+                { hindiPutOff = true },
+            )
+        }
+        return ScreenRead(text, deeper, hindiSeen, hindiPutOff && !deeper)
+    }
+
+    suspend fun readHindiOnly(bitmap: Bitmap): FoundText =
+        process(mlKitHi, bitmap, IndexMetrics.Timing.OCR_MLKIT_HI, null)
 
     /**
      * A screenshot, read several ways and the readings put together ([ReadingMerge]): one read
@@ -414,14 +453,27 @@ class ImageContentExtractor(
      * and a lone letter was not: the Hindi reader takes icons for letters. With Hindi seen every read
      * is made, and what is stored is what it always was.
      */
-    private suspend fun readWhole(bitmap: Bitmap, recorder: OcrStrategyRecorder?): String {
+    private suspend fun readWhole(
+        bitmap: Bitmap,
+        recorder: OcrStrategyRecorder?,
+        putOff: (() -> Unit)? = null,
+        readHindi: Boolean = true,
+        hindiSeen: (Boolean) -> Unit = {},
+        hindiLater: () -> Unit = {},
+    ): String {
         var hiAsIs = ""
         var unsure = false
         var enFound: FoundText? = null
         var hiFound: FoundText? = null
         val asIs = timedStrategy(recorder, OcrStrategy.RAW) {
             val en = process(mlKitEn, bitmap, IndexMetrics.Timing.OCR_MLKIT_EN, recorder)
-            val hi = process(mlKitHi, bitmap, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
+            val hi = if (readHindi || putOff == null) {
+                hindiBeside(bitmap, en, recorder).also { hindiSeen(showsHindi(it)) }
+            } else {
+                IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_HINDI_PUT_OFF)
+                hindiLater()
+                FoundText("", emptyList())
+            }
             enFound = en
             hiFound = hi
             unsure = hasUnsureLine(en) || hasUnsureLine(hi)
@@ -432,6 +484,11 @@ class ImageContentExtractor(
             val tier1Final = normalize(ReadingMerge.text(listOf(asIs)))
             if (!unsure && tier1Healthy(tier1Final, IMAGE_TIER1_MIN_WORDS)) {
                 IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_TIER1_ACCEPTED)
+                return tier1Final
+            }
+            if (putOff != null) {
+                IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_PUT_OFF)
+                putOff()
                 return tier1Final
             }
             IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_ESCALATED)
@@ -497,6 +554,23 @@ class ImageContentExtractor(
         } finally {
             gray.recycle()
         }
+    }
+
+    private suspend fun hindiBeside(bitmap: Bitmap, en: FoundText, recorder: OcrStrategyRecorder?): FoundText {
+        val settled = if (AdaptiveImageOcrControl.paintSettledLines) PaintOver.toPaint(en) else emptyList()
+        val painted = if (settled.isEmpty()) null else preprocess { PaintOver.painted(bitmap, en, settled) }
+        if (painted == null) return process(mlKitHi, bitmap, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
+        val leftovers = try {
+            PaintOver.withoutSpecks(process(mlKitHi, painted, IndexMetrics.Timing.OCR_MLKIT_HI, recorder))
+        } finally {
+            painted.recycle()
+        }
+        if (saysHindi(leftovers.text)) {
+            IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_PAINTED_HINDI)
+            return process(mlKitHi, bitmap, IndexMetrics.Timing.OCR_MLKIT_HI, recorder)
+        }
+        IndexMetrics.increment(IndexMetrics.Event.IMAGE_OCR_PAINTED)
+        return PaintOver.withSettled(leftovers, settled)
     }
 
     private suspend fun readByLines(reader: PictureReader, bitmap: Bitmap, recorder: OcrStrategyRecorder?): String? {

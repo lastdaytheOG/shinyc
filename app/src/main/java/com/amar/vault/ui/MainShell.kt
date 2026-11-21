@@ -1,20 +1,42 @@
 package com.amar.vault.ui
 
-import androidx.compose.animation.*
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarDefaults
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.fragment.app.FragmentActivity
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.amar.vault.*
-import com.amar.vault.ui.screens.*
+import com.amar.vault.DocumentViewerScreen
+import com.amar.vault.OnboardingScreen
+import com.amar.vault.ScanPreferences
+import com.amar.vault.SearchViewModel
+import com.amar.vault.ui.screens.AppLockScreen
+import com.amar.vault.ui.screens.DocumentsScreen
+import com.amar.vault.ui.screens.SearchScreen
+import com.amar.vault.ui.screens.SettingsScreen
 import com.amar.vault.ui.security.AppLockManager
 import com.amar.vault.ui.theme.AmarTheme
 
@@ -49,7 +71,6 @@ fun MainShell() {
         }
     }
 
-    // App Lock State
     var isUnlocked by remember { mutableStateOf(!prefs.appLockEnabled) }
 
     LaunchedEffect(prefs.appLockEnabled) {
@@ -121,21 +142,21 @@ private fun ShellContent(prefs: ScanPreferences.Prefs) {
                         tonalElevation = NavigationBarDefaults.Elevation
                     ) {
                         NavigationTabItem(
-                            icon = Icons.Default.Search,
+                            icon = Icons.Filled.Search,
                             label = VaultStrings.searchNav(lang),
                             selected = currentTab == MainTab.SEARCH,
                             onClick = { currentTab = MainTab.SEARCH }
                         )
 
                         NavigationTabItem(
-                            icon = DocumentNavIcon,
+                            icon = Icons.Filled.Description,
                             label = VaultStrings.docsNav(lang),
                             selected = currentTab == MainTab.DOCUMENTS,
                             onClick = { currentTab = MainTab.DOCUMENTS }
                         )
 
                         NavigationTabItem(
-                            icon = Icons.Default.Settings,
+                            icon = Icons.Filled.Settings,
                             label = VaultStrings.settingsNav(lang),
                             selected = currentTab == MainTab.SETTINGS,
                             onClick = { currentTab = MainTab.SETTINGS }
@@ -194,9 +215,9 @@ private fun RowScope.NavigationTabItem(
         icon = { Icon(imageVector = icon, contentDescription = label) },
         label = { Text(text = label, style = MaterialTheme.typography.labelMedium) },
         colors = NavigationBarItemDefaults.colors(
-            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-            selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            selectedTextColor = MaterialTheme.colorScheme.primary,
+            indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
+            selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            selectedTextColor = MaterialTheme.colorScheme.onSurface,
             unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
             unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
         )

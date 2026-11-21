@@ -55,6 +55,13 @@ object IndexMetrics {
         const val IMAGE_OCR_PACKED = "image.ocr_packed"
         const val IMAGE_OCR_BY_LINES = "image.ocr_by_lines"
         const val IMAGE_OCR_LINES_FAILED = "image.ocr_lines_failed"
+        const val IMAGE_OCR_PAINTED = "image.ocr_painted"
+        const val IMAGE_OCR_PAINTED_HINDI = "image.ocr_painted_hindi"
+        const val IMAGE_OCR_PUT_OFF = "image.ocr_put_off"
+        const val IMAGE_OCR_HINDI_PUT_OFF = "image.ocr_hindi_put_off"
+        const val IMAGE_OCR_HINDI_CHECKED = "image.ocr_hindi_checked"
+        const val IMAGE_OCR_HINDI_FOUND_LATER = "image.ocr_hindi_found_later"
+        const val INDEX_HEAT_PAUSE = "index.heat_pause"
         // Sprint E4 — pathological-OCR guard hit counters (the "optimization hit rate"
         // signal: each counts one pipeline unit where a guard actually fired).
         const val OCR_TESS_TIMEOUT = "ocr.tess_timeout"
@@ -116,6 +123,7 @@ object IndexMetrics {
         // amplification signal: one pathological page stalls every other document's
         // strategy 5 in the process, which is how a slow page becomes a slow BATCH.
         const val OCR_TESSERACT_QUEUE = "ocr.tesseract_queue_ms"
+        const val INDEX_HEAT_PAUSED = "index.heat_paused_ms"
     }
 
     fun increment(name: String, delta: Long = 1) {

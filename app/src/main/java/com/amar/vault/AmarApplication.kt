@@ -65,6 +65,7 @@ class AmarApplication : Application(), Configuration.Provider {
             SavedLeftovers.clearOnce(applicationContext)
             // Pictures read with an older reader are read again, once (PictureTextUpkeep).
             com.amar.vault.indexing.PictureTextUpkeep.enqueueIfNeeded(applicationContext)
+            com.amar.vault.indexing.DeeperReadUpkeep.enqueueIfNeeded(applicationContext)
 
             // 4e. Carry on reading documents whose reading was cut short when the app last
             //     stopped. WorkManager starts its own work again; this covers what it lost.

@@ -119,6 +119,33 @@ class LineModelFilesTest {
     }
 
     @Test
+    fun oneFileCanHoldEverySizeEachUnderItsOwnSignature() {
+        putEverything()
+        put(
+            "manifest.json",
+            manifest
+                .replace(
+                    "\"unclip\": 1.6}",
+                    "\"unclip\": 1.6, \"gpu\": [{\"model\": \"finder.tflite\", \"width\": 576, \"height\": 1280, \"signature\": \"576x1280\"}, " +
+                        "{\"model\": \"finder.tflite\", \"width\": 704, \"height\": 1280, \"signature\": \"704x1280\"}]}",
+                )
+                .replace(
+                    "\"all\": {\"model\": \"all.onnx\", \"letters\": \"all.txt\"}",
+                    "\"all\": {\"model\": \"all.onnx\", \"letters\": \"all.txt\", " +
+                        "\"gpu\": [{\"model\": \"all.tflite\", \"width\": 320, \"signature\": \"48x320\"}, {\"model\": \"all.tflite\", \"width\": 640}]}",
+                ),
+        )
+        put("finder.tflite")
+        put("all.tflite")
+        val files = LineModelFiles(folder.root)
+
+        assertEquals(listOf("576x1280", "704x1280"), files.fixedFinders().map { it.signature })
+        assertEquals(setOf(File(folder.root, "finder.tflite").path), files.fixedFinders().map { it.path }.toSet())
+        assertEquals(listOf("48x320", null), files.fixedReaders(LineModelFiles.ALL).map { it.signature })
+        assertEquals(listOf(320, 640), files.fixedReaders(LineModelFiles.ALL).map { it.width })
+    }
+
+    @Test
     fun aManifestWithoutFixedSizeModelsHasNone() {
         putEverything()
 

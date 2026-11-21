@@ -8,7 +8,6 @@ import com.amar.vault.indexing.BatchPolicy
 import com.amar.vault.indexing.BitmapDecoding
 import com.amar.vault.indexing.DiscoveryEngine
 import com.amar.vault.indexing.DiscoverySpec
-import com.amar.vault.indexing.ThermalAdaptiveBatchPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
@@ -40,11 +39,12 @@ class NightlyIndexWorker @dagger.assisted.AssistedInject constructor(
                 // Empty → success WITHOUT advancing the last-indexed timestamp (unchanged).
                 if (candidates.isEmpty()) return@withContext Result.success()
 
-                val policy: BatchPolicy = ThermalAdaptiveBatchPolicy(applicationContext)
+                val policy: BatchPolicy = com.amar.vault.indexing.MemoryAwareBatchPolicy(applicationContext)
                 engine.process(
                     candidates = candidates,
                     policy = policy,
                     isActive = { cancelSignal.isActive },
+                    pacer = com.amar.vault.indexing.HeatPacer.of(applicationContext, com.amar.vault.indexing.HeatPacer.IN_THE_BACKGROUND_MS),
                     indexOne = { _, _, uri ->
                         var bmp: Bitmap? = null
                         try {

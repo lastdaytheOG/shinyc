@@ -22,7 +22,7 @@ FINDER_SIZES = [(544, 1280), (576, 1280), (608, 1280), (640, 1280), (704, 1280)]
 READER_WIDTHS = [320, 640, 960]
 FIXED_READERS = {"all", "numbers"}
 LONG_SIDE = 1280
-VERSION = 1
+VERSION = 2
 
 
 def settings(name):
@@ -53,20 +53,30 @@ def main():
         readers[role] = {"model": name + ".onnx", "letters": name + ".txt", "widths": READER_WIDTHS}
         if role in FIXED_READERS:
             fixed = []
-            for width in READER_WIDTHS:
-                file = "%s-48x%d.tflite" % (name, width)
-                if (MODELS / file).exists():
-                    shutil.copyfile(MODELS / file, PACK / file)
-                    fixed.append({"model": file, "width": width})
+            merged = "%s-48.tflite" % name
+            if (MODELS / merged).exists():
+                shutil.copyfile(MODELS / merged, PACK / merged)
+                fixed = [{"model": merged, "width": width, "signature": "48x%d" % width} for width in READER_WIDTHS]
+            else:
+                for width in READER_WIDTHS:
+                    file = "%s-48x%d.tflite" % (name, width)
+                    if (MODELS / file).exists():
+                        shutil.copyfile(MODELS / file, PACK / file)
+                        fixed.append({"model": file, "width": width})
             if fixed:
                 readers[role]["gpu"] = fixed
     post = settings(FINDER)["PostProcess"]
     sizes = []
-    for width, height in FINDER_SIZES:
-        file = "%s-%dx%d.tflite" % (FINDER, width, height)
-        if (MODELS / file).exists():
-            shutil.copyfile(MODELS / file, PACK / file)
-            sizes.append({"model": file, "width": width, "height": height})
+    merged = "%s-x%d.tflite" % (FINDER, LONG_SIDE)
+    if (MODELS / merged).exists():
+        shutil.copyfile(MODELS / merged, PACK / merged)
+        sizes = [{"model": merged, "width": w, "height": h, "signature": "%dx%d" % (w, h)} for w, h in FINDER_SIZES]
+    else:
+        for width, height in FINDER_SIZES:
+            file = "%s-%dx%d.tflite" % (FINDER, width, height)
+            if (MODELS / file).exists():
+                shutil.copyfile(MODELS / file, PACK / file)
+                sizes.append({"model": file, "width": width, "height": height})
     gpu = {"gpu": sizes} if sizes else {}
     manifest = {
         "id": "ppocr-v6-tiny-finder-v5-readers",

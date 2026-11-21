@@ -6,7 +6,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
-class FixedReaderFile(val model: String, val width: Int)
+class FixedReaderFile(val model: String, val width: Int, val signature: String? = null)
 
 class ReaderFiles(
     val model: String,
@@ -15,7 +15,7 @@ class ReaderFiles(
     val fixed: List<FixedReaderFile> = emptyList(),
 )
 
-class FixedFinderFile(val model: String, val width: Int, val height: Int)
+class FixedFinderFile(val model: String, val width: Int, val height: Int, val signature: String? = null)
 
 class LineModelManifest(
     val id: String,
@@ -59,11 +59,11 @@ class LineModelFiles(val dir: File) {
     fun finder(): File = File(dir, manifest()!!.finderModel)
 
     fun fixedFinders(): List<FinderModel> = manifest()?.fixedFinders.orEmpty()
-        .map { FinderModel(File(dir, it.model).path, it.width, it.height) }
+        .map { FinderModel(File(dir, it.model).path, it.width, it.height, it.signature) }
         .filter { File(it.path).exists() }
 
     fun fixedReaders(role: String): List<ReaderModel> = manifest()?.readers?.get(role)?.fixed.orEmpty()
-        .map { ReaderModel(File(dir, it.model).path, it.width) }
+        .map { ReaderModel(File(dir, it.model).path, it.width, it.signature) }
         .filter { File(it.path).exists() }
 
     fun widths(role: String): List<Int> = manifest()!!.readers.getValue(role).widths
@@ -101,14 +101,16 @@ class LineModelFiles(val dir: File) {
                         reader.getString("letters"),
                         reader.optJSONArray("widths")?.let { list -> List(list.length()) { list.getInt(it) } }
                             ?.takeIf { it.isNotEmpty() }?.sorted() ?: LineStrips.WIDTHS,
-                        objects(reader.opt("gpu")).map { FixedReaderFile(it.getString("model"), it.getInt("width")) },
+                        objects(reader.opt("gpu")).map { FixedReaderFile(it.getString("model"), it.getInt("width"), signatureOf(it)) },
                     )
                 },
                 fixedFinders = objects(finder.opt("gpu")).map {
-                    FixedFinderFile(it.getString("model"), it.getInt("width"), it.getInt("height"))
+                    FixedFinderFile(it.getString("model"), it.getInt("width"), it.getInt("height"), signatureOf(it))
                 },
             )
         }
+
+        private fun signatureOf(entry: JSONObject): String? = entry.optString("signature").takeIf { it.isNotEmpty() }
 
         private fun objects(value: Any?): List<JSONObject> = when (value) {
             is JSONObject -> listOf(value)

@@ -22,28 +22,15 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-
-/** The words around the password of a locked PDF. */
-internal object LockedPdfWords {
-    const val HINT = "Capitals matter. For e-Aadhaar it is the first 4 letters of your name in capitals, then your birth year."
-
-    /** Said where a password is typed to read a file: what becomes of the password, and of the text. */
-    const val WHAT_IS_KEPT =
-        "The password is not kept. The text read from this file stays in your vault, " +
-            "where anyone who opens this app can search it."
-
-    const val OTHERS_TOO = "If it opens this file, it is tried on your other locked files too."
-
-    const val VIEWER_LOCKED ="This PDF is locked. Type its password to open it. The password is not kept."
-    const val VIEWER_WRONG = "That password did not open it."
-}
+import com.amar.vault.ui.AppLanguage
+import com.amar.vault.ui.VaultStrings
 
 /**
  * Where a password is typed. Its value is held in plain [remember], so it does not go into the
  * saved state of the screen, and it is cleared once it has been handed over.
  */
 @Composable
-internal fun PdfPasswordField(buttonText: String, onPassword: (String) -> Unit) {
+internal fun PdfPasswordField(buttonText: String, lang: AppLanguage, onPassword: (String) -> Unit) {
     var password by remember { mutableStateOf("") }
     var showing by remember { mutableStateOf(false) }
     val submit = {
@@ -56,18 +43,20 @@ internal fun PdfPasswordField(buttonText: String, onPassword: (String) -> Unit) 
         OutlinedTextField(
             value = password,
             onValueChange = { password = it },
-            label = { Text("Password") },
+            label = { Text(VaultStrings.passwordLabel(lang)) },
             singleLine = true,
             visualTransformation = if (showing) VisualTransformation.None else PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { submit() }),
             trailingIcon = {
-                TextButton(onClick = { showing = !showing }) { Text(if (showing) "Hide" else "Show") }
+                TextButton(onClick = { showing = !showing }) {
+                    Text(if (showing) VaultStrings.hide(lang) else VaultStrings.show(lang))
+                }
             },
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
-            LockedPdfWords.HINT,
+            VaultStrings.passwordHint(lang),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

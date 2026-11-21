@@ -5,6 +5,8 @@ from pathlib import Path
 from tensorflow.lite.python import schema_py_generated as fb
 from tensorflow.lite.tools import flatbuffer_utils as fu
 
+from gpu_ops import rewrite
+
 HERE = Path(__file__).resolve().parent
 MODELS = HERE / "models"
 GROUPS = {
@@ -84,9 +86,11 @@ def main():
         if missing:
             raise SystemExit("missing: " + ", ".join(missing))
         out = MODELS / name
-        fu.write_model(merge(parts), str(out))
+        model = merge(parts)
+        changed = rewrite(model)
+        fu.write_model(model, str(out))
         before = sum(p.stat().st_size for _, p in parts)
-        print("%s: %d signatures, %.1f MB from %.1f MB" % (name, len(parts), out.stat().st_size / 1e6, before / 1e6))
+        print("%s: %d signatures, %.1f MB from %.1f MB, rewritten for the GPU: %s" % (name, len(parts), out.stat().st_size / 1e6, before / 1e6, changed))
 
 
 if __name__ == "__main__":
