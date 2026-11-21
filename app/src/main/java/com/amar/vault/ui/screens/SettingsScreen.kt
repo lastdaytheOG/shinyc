@@ -28,6 +28,8 @@ import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Password
 import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -56,6 +58,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.amar.vault.BuildConfig
+import com.amar.vault.BulkScanWorker
 import com.amar.vault.PhotoFolders
 import com.amar.vault.ScanPreferences
 import com.amar.vault.VaultDatabase
@@ -139,6 +142,7 @@ private fun SettingsList(onOpenFolders: () -> Unit, onOpenDevTools: () -> Unit) 
                     value = folderSummary,
                     onClick = onOpenFolders
                 )
+                ReadPhotosRows(lang)
             }
 
             GroupedSection(header = VaultStrings.sectionSearchModels(lang)) {
@@ -404,5 +408,54 @@ private fun LanguageRow(lang: AppLanguage, current: String, onChoose: (String) -
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ReadPhotosRows(lang: AppLanguage) {
+    val context = LocalContext.current
+    val app = context.applicationContext
+    val progress by remember { BulkScanWorker.progress(app) }.collectAsState(initial = null)
+    var confirmAgain by remember { mutableStateOf(false) }
+    val current = progress
+    val busy = current != null
+
+    GroupedRow(
+        title = VaultStrings.readNewNow(lang),
+        subtitle = current?.let {
+            if (it.total > 0) VaultStrings.readingProgress(lang, it.current, it.total) else VaultStrings.readingStarting(lang)
+        },
+        icon = Icons.Rounded.Refresh,
+        tint = Tints.Green,
+        chevron = false,
+        onClick = if (busy) null else ({ BulkScanWorker.enqueueAfterCurrent(app) }),
+        trailing = if (busy) ({
+            CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+        }) else null
+    )
+    GroupedRow(
+        title = VaultStrings.readAllAgain(lang),
+        icon = Icons.Rounded.RestartAlt,
+        tint = Tints.Orange,
+        enabled = !busy,
+        chevron = false,
+        onClick = { confirmAgain = true }
+    )
+
+    if (confirmAgain) {
+        AlertDialog(
+            onDismissRequest = { confirmAgain = false },
+            title = { Text(VaultStrings.readAllAgain(lang)) },
+            text = { Text(VaultStrings.readAllAgainBody(lang)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmAgain = false
+                    BulkScanWorker.enqueueAfterCurrent(app, again = true)
+                }) { Text(VaultStrings.readAgainConfirm(lang), fontWeight = FontWeight.SemiBold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmAgain = false }) { Text(VaultStrings.cancel(lang)) }
+            }
+        )
     }
 }

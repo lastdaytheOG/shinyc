@@ -94,7 +94,7 @@ class DiscoveryEngine(context: Context) {
      * left: read in full it cost almost what the first scan did, for nothing. A picture counts as
      * changed when the gallery says its file was modified after the row was written.
      */
-    suspend fun toRead(spec: DiscoverySpec): List<ToRead> {
+    suspend fun toRead(spec: DiscoverySpec, again: Boolean = false): List<ToRead> {
         val collection = resolveCollection(spec.mediaScope)
         val read = HashMap<String, com.amar.vault.ItemRead>()
         for (item in dao.itemsRead()) read[item.uri] = item
@@ -105,7 +105,8 @@ class DiscoveryEngine(context: Context) {
         contentResolver.query(collection, projection, selection, selectionArgs, "${MediaStore.Images.Media.DATE_ADDED} DESC")?.use { c ->
             while (c.moveToNext()) {
                 val uri = ContentUris.withAppendedId(collection, c.getLong(0))
-                when (decide(read[uri.toString()], c.getLong(1))) {
+                val stored = read[uri.toString()]
+                when (if (again && stored != null) Decision.READ_AGAIN else decide(stored, c.getLong(1))) {
                     Decision.READ -> found += ToRead(uri, null)
                     Decision.READ_AGAIN -> found += ToRead(uri, read.getValue(uri.toString()).id)
                     Decision.LEAVE -> {}

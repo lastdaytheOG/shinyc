@@ -927,4 +927,44 @@ object VaultStrings {
         AppLanguage.HINDI -> "फ़ोल्डर देखा जा रहा है…"
         else -> "Looking in the folder…"
     }
+
+    fun readNewNow(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "नई फ़ोटो अभी पढ़ें"
+        else -> "Read new photos now"
+    }
+
+    fun readAllAgain(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "सारी फ़ोटो फिर से पढ़ें"
+        else -> "Read all photos again"
+    }
+
+    fun readAllAgainBody(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "चुने गए फ़ोल्डरों की हर फ़ोटो फिर से पढ़ी जाएगी। इसमें समय और बैटरी लगती है।"
+        else -> "Every photo in the chosen folders is read again. This takes a while and uses battery."
+    }
+
+    fun readAgainConfirm(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "फिर से पढ़ें"
+        else -> "Read again"
+    }
+
+    fun readingProgress(lang: AppLanguage, done: Int, total: Int) = when (lang) {
+        AppLanguage.HINDI -> "$total में से $done पढ़ी गईं"
+        else -> "Reading $done of $total"
+    }
+
+    fun readingStarting(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "पढ़ना शुरू हो रहा है…"
+        else -> "Starting…"
+    }
+
+    fun seeAll(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "सभी देखें"
+        else -> "See all"
+    }
+
+    fun viewerPosition(lang: AppLanguage, position: Int, total: Int) = when (lang) {
+        AppLanguage.HINDI -> "$total में से $position"
+        else -> "$position of $total"
+    }
 }

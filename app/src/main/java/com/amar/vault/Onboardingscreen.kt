@@ -58,6 +58,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.amar.vault.ui.LocalAppLanguage
 import com.amar.vault.ui.VaultStrings
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -265,11 +266,11 @@ fun OnboardingScreen(onComplete: () -> Unit, onDocumentsChosen: () -> Unit = {})
                         scanDocuments = scanDocuments,
                     )
                     if (scanDocuments) onDocumentsChosen()
-                    ScanPreferences.save(context, prefs)
-                    ScanPreferences.markOnboardingDone(context)
-
-                    if (totalPhotos > 0) {
-                        BulkScanWorker.enqueue(context)
+                    val app = context.applicationContext
+                    withContext(NonCancellable) {
+                        ScanPreferences.save(app, prefs)
+                        ScanPreferences.markOnboardingDone(app)
+                        if (totalPhotos > 0) BulkScanWorker.enqueue(app)
                     }
 
                     onComplete()
