@@ -23,22 +23,23 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.FolderOff
-import androidx.compose.material.icons.outlined.LinkOff
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.FolderOff
+import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -51,6 +52,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -122,27 +124,14 @@ fun DocumentsScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = VaultStrings.docsNav(lang),
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-
-            Button(
-                onClick = { picker.launch(PICKER_MIME_TYPES) },
-                shape = RoundedCornerShape(24.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(text = VaultStrings.addDocuments(lang), style = MaterialTheme.typography.labelLarge)
+        com.amar.vault.ui.components.LargeTitle(VaultStrings.docsNav(lang)) {
+            IconButton(onClick = { picker.launch(PICKER_MIME_TYPES) }) {
+                Icon(
+                    Icons.Rounded.Add,
+                    contentDescription = VaultStrings.addDocuments(lang),
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(30.dp)
+                )
             }
         }
 
@@ -157,24 +146,12 @@ fun DocumentsScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(88.dp)
-                            .clip(RoundedCornerShape(24.dp))
-                            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Description,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(40.dp)
-                        )
-                    }
+                    com.amar.vault.ui.components.IconBadge(Icons.Rounded.Description, com.amar.vault.ui.components.Tints.Blue, size = 64)
                     Spacer(Modifier.height(20.dp))
                     Text(
                         text = VaultStrings.emptyVaultTitle(lang),
                         style = MaterialTheme.typography.titleLarge,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface,
                         textAlign = TextAlign.Center
                     )
@@ -189,9 +166,9 @@ fun DocumentsScreen(
                     Spacer(Modifier.height(24.dp))
                     Button(
                         onClick = { picker.launch(PICKER_MIME_TYPES) },
-                        shape = RoundedCornerShape(24.dp)
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text(VaultStrings.addDocuments(lang))
+                        Text(VaultStrings.addDocuments(lang), fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
                     }
                 }
             }
@@ -259,7 +236,7 @@ fun DocumentsScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
-                                    Icons.Outlined.LinkOff,
+                                    Icons.Rounded.LinkOff,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.onTertiaryContainer
                                 )
@@ -371,7 +348,7 @@ private fun LockedPdfCard(
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    Icons.Default.Lock,
+                    Icons.Rounded.Lock,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onTertiaryContainer,
                     modifier = Modifier.size(20.dp)
@@ -394,7 +371,7 @@ private fun LockedPdfCard(
             )
             Spacer(Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
+                TextField(
                     value = password,
                     onValueChange = { password = it },
                     placeholder = {
@@ -404,7 +381,15 @@ private fun LockedPdfCard(
                     modifier = Modifier
                         .weight(1f)
                         .height(56.dp),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(12.dp),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent,
+                        errorIndicatorColor = Color.Transparent,
+                    ),
                 )
                 Spacer(Modifier.width(8.dp))
                 Button(
@@ -434,7 +419,7 @@ private fun FailedImportCard(
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    Icons.Outlined.FolderOff,
+                    Icons.Rounded.FolderOff,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.error,
                     modifier = Modifier.size(20.dp)
@@ -462,7 +447,7 @@ private fun FailedImportCard(
             )
             if (ImportWords.canTryAgain(failure)) {
                 Spacer(Modifier.height(12.dp))
-                OutlinedButton(
+                FilledTonalButton(
                     onClick = onRetry,
                     shape = RoundedCornerShape(12.dp)
                 ) {
@@ -499,7 +484,7 @@ private fun CompletedDocumentCard(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    Icons.Outlined.Description,
+                    Icons.Rounded.Description,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onPrimaryContainer,
                     modifier = Modifier.size(22.dp)
@@ -522,14 +507,14 @@ private fun CompletedDocumentCard(
                 )
             }
             Icon(
-                Icons.Default.CheckCircle,
+                Icons.Rounded.CheckCircle,
                 contentDescription = VaultStrings.ready(lang),
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(20.dp)
             )
             Spacer(Modifier.width(4.dp))
             Icon(
-                Icons.AutoMirrored.Filled.ArrowForward,
+                Icons.AutoMirrored.Rounded.ArrowForward,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(18.dp)

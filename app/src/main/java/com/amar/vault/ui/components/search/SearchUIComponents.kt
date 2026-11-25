@@ -15,8 +15,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -131,12 +131,12 @@ fun RecentSearchesView(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Search, contentDescription = null, tint = WarmBrown, modifier = Modifier.size(20.dp))
+                        Icon(Icons.Rounded.Search, contentDescription = null, tint = WarmBrown, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(12.dp))
                         Text(search, color = CharcoalSoft, fontSize = 15.sp)
                     }
                     IconButton(onClick = { onDeleteSearch(search) }, modifier = Modifier.size(24.dp)) {
-                        Icon(Icons.Default.Close, contentDescription = "Remove", tint = WarmBrown)
+                        Icon(Icons.Rounded.Close, contentDescription = "Remove", tint = WarmBrown)
                     }
                 }
             }

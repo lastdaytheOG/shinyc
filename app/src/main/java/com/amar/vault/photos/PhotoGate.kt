@@ -7,15 +7,9 @@ import com.amar.vault.VaultConfig
  * shows lists no photos instead of the closest 24 of whatever is there.
  *
  * A photo's similarity to a query is not a probability: one photo is close to every query and
- * another to none, so no single floor tells a match from the closest of the rest. What does is how
- * much better the query describes the photo than words that describe any photo ("a photo", "an
- * image"): a photo of a cat beats them clearly for "cat"; for a person's name every photo is
- * described as well by "a photo" as by the query. A photo is kept when that margin is at least
- * [VaultConfig.Retrieval.PHOTO_MATCH_MARGIN] and its similarity is within
- * [VaultConfig.Retrieval.PHOTO_BEST_GAP] of the best kept one. Both were set with the models the
- * app ships, on the owner's phone (real matches cleared 0.056–0.150, searches no photo answers at
- * most 0.041), and checked on the gallery set (tools/visual-search): the right photo is still
- * listed for all 93 English and 93 Hindi searches.
+ * another to none. Use the calibrated fixed bar across the whole index so a match does not vanish
+ * when unrelated photos are added. The generic prompts provide a query-independent reference for
+ * how much better the query describes a photo than words that describe any photo.
  */
 object PhotoGate {
 
@@ -50,30 +44,23 @@ object PhotoGate {
         }
     }
 
-    /**
-     * [candidates] (the most alike first) that are a match, most alike first. [vectorOf] gives a
-     * candidate's stored vector; [generic] are the vectors of [GENERIC] from the query model.
-     */
-    fun keep(
-        candidates: List<PhotoMatch>,
-        generic: List<FloatArray>,
-        vectorOf: (String) -> FloatArray?,
-        margin: Float = VaultConfig.Retrieval.PHOTO_MATCH_MARGIN,
-        gap: Float = VaultConfig.Retrieval.PHOTO_BEST_GAP,
-    ): List<PhotoMatch> {
-        if (generic.isEmpty()) return candidates
-        val matches = candidates.mapNotNull { c ->
-            val v = vectorOf(c.itemId) ?: return@mapNotNull null
-            val m = c.score - generic.maxOf { dot(it, v) }
-            if (m >= margin) c.copy(margin = m) else null
-        }
-        val best = matches.maxOfOrNull { it.score } ?: return emptyList()
-        return matches.filter { it.score >= best - gap }
-    }
+    fun strength(score: Float, margin: Float): Float =
+        score + VaultConfig.Retrieval.PHOTO_STRENGTH_MARGIN_WEIGHT * margin
 
-    private fun dot(a: FloatArray, b: FloatArray): Float {
-        var s = 0f
-        for (i in a.indices) s += a[i] * b[i]
-        return s
+    fun matches(
+        index: PhotoIndex,
+        query: FloatArray,
+        margin: Float = VaultConfig.Retrieval.PHOTO_MATCH_MARGIN,
+        only: ((String) -> Boolean)? = null,
+    ): List<PhotoMatch> {
+        // Evaluate both fixed bars against every vector; neither tier depends on vault size.
+        val found = index.scanMatches(query, only) { score, m ->
+            if (index.generic.isEmpty()) score >= VaultConfig.Retrieval.PHOTO_POSSIBLE_STRENGTH
+            else m >= margin && strength(score, m) >= VaultConfig.Retrieval.PHOTO_POSSIBLE_STRENGTH
+        }
+        return found.matches.map { match ->
+            match.copy(possible = strength(match.score, match.margin) < VaultConfig.Retrieval.PHOTO_SURE_STRENGTH)
+        }
+            .sortedWith(compareByDescending<PhotoMatch> { strength(it.score, it.margin) }.thenBy { it.itemId })
     }
 }

@@ -14,7 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,7 +37,7 @@ fun PreviewHero(
     previewUri: Any?, // String URL or Uri
     title: String?,
     domain: String?,
-    fallbackIcon: ImageVector = Icons.Outlined.Folder,
+    fallbackIcon: ImageVector = Icons.Rounded.Folder,
     fallbackColor: Color = Color.DarkGray,
     modifier: Modifier = Modifier
 ) {

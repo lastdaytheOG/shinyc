@@ -61,8 +61,6 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) :
     @Volatile private var photo: PhotoEncoder? = null
     @Volatile private var index: PhotoIndex? = null
     @Volatile private var failed: String? = null
-    /** [PhotoGate.GENERIC] through the query model, once: what any photo is described by. */
-    @Volatile private var generic: List<FloatArray> = emptyList()
 
     /** The models are on the device and loaded, or can be. */
     val isReady: Boolean get() = ENGINE && failed == null && (index != null || files.present() || files.bundled())
@@ -100,9 +98,8 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) :
             check(q.dim == manifest.dim && p.dim == manifest.dim) {
                 "model dimensions differ: query ${q.dim}, photo ${p.dim}, manifest ${manifest.dim}"
             }
-            val idx = PhotoIndex(manifest.dim)
+            val idx = PhotoIndex(manifest.dim, PhotoGate.GENERIC.map { q.encode(it) })
             idx.load(vectorsFor(manifest))
-            generic = PhotoGate.GENERIC.map { q.encode(it) }
             textAnchors = TEXT_ANCHORS.map { q.encode(it) }
             query = q; photo = p; index = idx
             VaultLog.i(TAG, "photo search ready: ${manifest.id}, ${idx.size} pictures")
@@ -136,17 +133,13 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) :
         }
     }
 
-    /**
-     * Up to [k] photos that match [text], most alike first: of the photos most like it, those
-     * [PhotoGate] finds to be a match. None when nothing does, or without models.
-     */
     suspend fun search(text: String, k: Int, only: ((String) -> Boolean)? = null): List<PhotoMatch> {
         if (text.isBlank() || !ensureLoaded()) return emptyList()
         val idx = index ?: return emptyList()
         if (idx.size == 0) return emptyList()
         val v = queryVector(text) ?: return emptyList()
         return withContext(Dispatchers.Default) {
-            PhotoGate.keep(idx.top(v, maxOf(k, CANDIDATES), only), generic, idx::vectorOf, margin = PhotoGate.marginFor(text)).take(k)
+            PhotoGate.matches(idx, v, PhotoGate.marginFor(text), only = only).take(k)
         }
     }
 
@@ -228,7 +221,7 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) :
             textIndex ?: run {
                 val dao = db.textVectorDao()
                 val rows = dao.allOf(model)
-                val idx = PhotoIndex(files.manifest()!!.dim)
+                val idx = PhotoIndex(files.manifest()!!.dim, textAnchors)
                 idx.loadAll(rows.filter { it.part == 0 }.map { Triple(it.rowId, it.vector, it.scale) })
                 textHashes.clear()
                 rows.forEach { if (it.part == 0) textHashes[it.rowId] = it.textHash }
@@ -283,18 +276,19 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) :
     val meaning: MeaningRetriever = object : MeaningRetriever {
         override val isReady: Boolean get() = this@PhotoSearch.isReady
 
-        override suspend fun scan(query: String, k: Int, only: ((String) -> Boolean)?): MeaningScan? {
+        override suspend fun scan(query: String, @Suppress("UNUSED_PARAMETER") k: Int, only: ((String) -> Boolean)?): MeaningScan? {
             val v = queryVector(query) ?: return null
             val idx = textIndex() ?: return null
-            val anchors = textAnchors
             return withContext(Dispatchers.Default) {
-                val s = idx.scan(v, k, only)
-                val hits = s.top.map { m ->
-                    val vec = idx.vectorOf(m.itemId)
-                    val margin = if (vec == null || anchors.isEmpty()) 0f else m.score - anchors.maxOf { dot(it, vec) }
-                    MeaningHit(m.itemId, m.score, margin)
+                // Apply the size-independent bar while scanning all stored passages. Taking the
+                // top k first made a correct passage disappear whenever unrelated scores changed.
+                val found = idx.scanMatches(v, only) { score, margin ->
+                    score >= com.amar.vault.VaultConfig.Retrieval.MEANING_FIXED_SCORE &&
+                        margin >= com.amar.vault.VaultConfig.Retrieval.MEANING_FIXED_MARGIN
                 }
-                MeaningScan(hits, s.mean, s.deviation, s.count, textCoverage)
+                val hits = found.matches.sortedByDescending { it.score }
+                    .map { MeaningHit(it.itemId, it.score, it.margin) }
+                MeaningScan(hits, found.mean, found.deviation, found.count, textCoverage)
             }
         }
 
@@ -306,12 +300,6 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) :
         }
     }
 
-    private fun dot(a: FloatArray, b: FloatArray): Float {
-        var s = 0f
-        for (i in a.indices) s += a[i] * b[i]
-        return s
-    }
-
     /** Encoders for Developer Tools' timing; null without models. */
     suspend fun encodersForBenchmark(): Pair<QueryEncoder, PhotoEncoder>? =
         if (ensureLoaded()) query!! to photo!! else null
@@ -319,8 +307,6 @@ class PhotoSearch(private val context: Context, private val db: VaultDatabase) :
     companion object {
         private val ENGINE = com.amar.vault.BuildConfig.PHOTO_ENGINE
         private const val TAG = "PhotoSearch"
-        /** The most alike photos [PhotoGate] looks at, before it keeps the ones that match. */
-        private const val CANDIDATES = 48
         val TEXT_ANCHORS = listOf(
             "a document", "some text", "a page of a document", "a screenshot", "a file", "a message",
             "एक दस्तावेज़", "कुछ लिखा हुआ", "ek document",

@@ -2,6 +2,13 @@
 
 package com.amar.vault.ui.screens
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import android.content.Context
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -26,24 +33,26 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.ExpandMore
-import androidx.compose.material.icons.outlined.FolderOff
-import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.Schedule
-import androidx.compose.material.icons.outlined.SearchOff
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.Clear
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.FolderOff
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -89,6 +98,13 @@ import com.amar.vault.queryWordsOf
 import com.amar.vault.share.open.ShareContentUri
 import com.amar.vault.ui.LocalAppLanguage
 import com.amar.vault.ui.VaultStrings
+import com.amar.vault.ui.components.GroupedRow
+import com.amar.vault.ui.components.GroupedSection
+import com.amar.vault.ui.components.IconBadge
+import com.amar.vault.ui.components.LargeTitle
+import com.amar.vault.ui.components.SearchField
+import com.amar.vault.ui.components.SegmentedControl
+import com.amar.vault.ui.components.Tints
 import com.amar.vault.ui.theme.LocalReducedMotion
 
 @Composable
@@ -110,6 +126,7 @@ fun SearchScreen(
     val understood by viewModel.understood.collectAsState()
     val readingNote by viewModel.readingNote.collectAsState()
     val photoMatches by viewModel.photoMatches.collectAsState()
+    val possiblePhotoMatches by viewModel.possiblePhotoMatches.collectAsState()
     val meaningMatches by viewModel.meaningMatches.collectAsState()
     val meaningFirst by viewModel.meaningFirst.collectAsState()
     val meaningCoverage by viewModel.meaningCoverage.collectAsState()
@@ -122,6 +139,7 @@ fun SearchScreen(
     val readingImports = imports.filter { !it.isFinished && !it.waitsForCharger }
 
     var toRemove by remember { mutableStateOf<VaultItem?>(null) }
+    var allPhotos by remember(queryText, activeFilter) { mutableStateOf<List<VaultItem>?>(null) }
     var showPartial by remember(queryText) { mutableStateOf(false) }
 
     val (directHits, partialHits) = remember(searchHits, queryText, similarSpellingsOnly) {
@@ -132,7 +150,7 @@ fun SearchScreen(
         }
     }
 
-    val partialOpen = showPartial || (directHits.isEmpty() && photoMatches.isEmpty() && meaningMatches.isEmpty() && !similarSpellingsOnly)
+    val partialOpen = showPartial || (directHits.isEmpty() && photoMatches.isEmpty() && possiblePhotoMatches.isEmpty() && meaningMatches.isEmpty() && !similarSpellingsOnly)
     val listState = rememberLazyListState()
 
     LaunchedEffect(Unit) {
@@ -140,39 +158,61 @@ fun SearchScreen(
         viewModel.refreshSearch()
     }
 
-    Column(
+    val shownPhotos = allPhotos
+    if (shownPhotos != null) {
+        AllPhotosScreen(
+            photos = shownPhotos,
+            lang = lang,
+            backLabel = VaultStrings.searchNav(lang),
+            reducedMotion = reducedMotion,
+            onBack = { allPhotos = null },
+            onOpen = { index ->
+                viewModel.recordSearch(queryText)
+                viewModel.recordOpen(queryText, shownPhotos[index])
+                AmarImageViewerActivity.open(context, shownPhotos, index)
+            },
+            onLongClick = { toRemove = it }
+        )
+    } else Column(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        SearchHeroBar(
+        LargeTitle(VaultStrings.searchNav(lang))
+
+        SearchField(
             query = queryText,
             placeholder = VaultStrings.searchPlaceholder(lang),
             clearDescription = VaultStrings.clearSearch(lang),
             onQueryChange = { viewModel.updateQuery(it) },
-            onClear = { viewModel.updateQuery("") }
+            onClear = { viewModel.updateQuery("") },
+            modifier = Modifier.padding(horizontal = 16.dp)
         )
 
-        FilterChipsRow(
-            activeFilter = activeFilter,
-            understood = understood,
-            lang = lang,
-            onFilter = { viewModel.updateFilter(it) },
-            onTakeBack = { viewModel.takeBack(it) }
+        val filters = listOf(SearchFilter.ALL, SearchFilter.IMAGES, SearchFilter.DOCUMENTS)
+        SegmentedControl(
+            options = listOf(VaultStrings.filterAll(lang), VaultStrings.filterPhotos(lang), VaultStrings.filterDocs(lang)),
+            selected = filters.indexOf(activeFilter).coerceAtLeast(0),
+            onSelect = { viewModel.updateFilter(filters[it]) },
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp)
         )
+
+        if (understood.isNotEmpty()) {
+            UnderstoodRow(understood = understood, lang = lang, onTakeBack = { viewModel.takeBack(it) })
+        }
 
         if (readingImports.isNotEmpty()) {
             val first = readingImports.first()
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
-                    .clip(RoundedCornerShape(24.dp))
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .clip(RoundedCornerShape(14.dp))
                     .combinedClickable(
                         onClick = onNavigateToDocuments,
                         role = Role.Button
                     ),
-                shape = RoundedCornerShape(24.dp),
+                shape = RoundedCornerShape(14.dp),
                 color = MaterialTheme.colorScheme.tertiaryContainer
             ) {
                 Row(
@@ -181,7 +221,7 @@ fun SearchScreen(
                 ) {
                     if (reducedMotion) {
                         Icon(
-                            imageVector = Icons.Outlined.Schedule,
+                            imageVector = Icons.Rounded.Schedule,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onTertiaryContainer,
                             modifier = Modifier.size(16.dp)
@@ -206,8 +246,6 @@ fun SearchScreen(
             }
         }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 1.dp)
-
         if (queryText.isBlank()) {
             IdleGlanceContent(
                 documentsCount = documentsCount,
@@ -227,6 +265,7 @@ fun SearchScreen(
                 directHits = directHits,
                 partialHits = partialHits,
                 photoMatches = photoMatches,
+                possiblePhotoMatches = possiblePhotoMatches,
                 meaningMatches = meaningMatches,
                 meaningFirst = meaningFirst,
                 meaningCoverage = meaningCoverage,
@@ -243,10 +282,14 @@ fun SearchScreen(
                     openHitAtMatch(context, hit, queryText, onOpenItemDetail)
                 },
                 onResultLongClick = { hit -> toRemove = hit.row },
-                onPhotoClick = { photo ->
+                activeFilter = activeFilter,
+                onOpenPhotos = { photos, index ->
                     viewModel.recordSearch(queryText)
-                    AmarImageViewerActivity.open(context, photo)
-                }
+                    viewModel.recordOpen(queryText, photos[index])
+                    AmarImageViewerActivity.open(context, photos, index)
+                },
+                onSeeAllPhotos = { allPhotos = it },
+                onPhotoLongClick = { toRemove = it }
             )
         }
     }
@@ -260,7 +303,7 @@ fun SearchScreen(
             onDismissRequest = { toRemove = null },
             icon = {
                 Icon(
-                    imageVector = Icons.Outlined.FolderOff,
+                    imageVector = Icons.Rounded.FolderOff,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -300,122 +343,33 @@ fun SearchScreen(
 }
 
 @Composable
-private fun SearchHeroBar(
-    query: String,
-    placeholder: String,
-    clearDescription: String,
-    onQueryChange: (String) -> Unit,
-    onClear: () -> Unit
-) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        shape = RoundedCornerShape(28.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp)
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Search,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .padding(start = 8.dp)
-                    .size(22.dp)
-            )
-            Spacer(Modifier.width(8.dp))
-            androidx.compose.material3.TextField(
-                value = query,
-                onValueChange = onQueryChange,
-                placeholder = {
-                    Text(
-                        text = placeholder,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                },
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-                colors = androidx.compose.material3.TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent
-                ),
-                modifier = Modifier.weight(1f)
-            )
-            if (query.isNotBlank()) {
-                IconButton(onClick = onClear) {
-                    Icon(
-                        imageVector = Icons.Filled.Clear,
-                        contentDescription = clearDescription,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            } else {
-                Spacer(Modifier.width(48.dp))
-            }
-        }
-    }
-}
-
-@Composable
-private fun FilterChipsRow(
-    activeFilter: String,
+private fun UnderstoodRow(
     understood: List<com.amar.vault.Understood>,
     lang: com.amar.vault.ui.AppLanguage,
-    onFilter: (String) -> Unit,
     onTakeBack: (com.amar.vault.Understood) -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 6.dp),
+            .padding(horizontal = 16.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        FilterChip(
-            selected = activeFilter == SearchFilter.ALL,
-            onClick = { onFilter(SearchFilter.ALL) },
-            label = { Text(VaultStrings.filterAll(lang)) },
-            colors = chipColors()
-        )
-        FilterChip(
-            selected = activeFilter == SearchFilter.IMAGES,
-            onClick = { onFilter(SearchFilter.IMAGES) },
-            label = { Text(VaultStrings.filterPhotos(lang)) },
-            leadingIcon = if (activeFilter == SearchFilter.IMAGES) {
-                { Icon(Icons.Outlined.Image, contentDescription = null, Modifier.size(18.dp)) }
-            } else null,
-            colors = chipColors()
-        )
-        FilterChip(
-            selected = activeFilter == SearchFilter.DOCUMENTS,
-            onClick = { onFilter(SearchFilter.DOCUMENTS) },
-            label = { Text(VaultStrings.filterDocs(lang)) },
-            leadingIcon = if (activeFilter == SearchFilter.DOCUMENTS) {
-                { Icon(Icons.Outlined.Description, contentDescription = null, Modifier.size(18.dp)) }
-            } else null,
-            colors = chipColors()
-        )
-
         understood.forEach { reading ->
             AssistChip(
                 onClick = { onTakeBack(reading) },
                 label = { Text(reading.chip) },
+                shape = RoundedCornerShape(50),
+                border = null,
+                colors = AssistChipDefaults.assistChipColors(
+                    containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                    labelColor = MaterialTheme.colorScheme.primary,
+                    trailingIconContentColor = MaterialTheme.colorScheme.primary
+                ),
                 trailingIcon = {
                     Icon(
-                        Icons.Filled.Close,
+                        Icons.Rounded.Close,
                         contentDescription = VaultStrings.takeBackReading(lang),
                         modifier = Modifier.size(16.dp)
                     )
@@ -424,15 +378,6 @@ private fun FilterChipsRow(
         }
     }
 }
-
-@Composable
-private fun chipColors() = FilterChipDefaults.filterChipColors(
-    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-    selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-    selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer,
-    selectedLeadingIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
-)
 
 @Composable
 private fun IdleGlanceContent(
@@ -448,35 +393,23 @@ private fun IdleGlanceContent(
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        contentPadding = PaddingValues(top = 16.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(28.dp)
     ) {
         if (documentsCount == 0 && picturesCount == 0) {
             item {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 48.dp),
+                        .padding(start = 32.dp, end = 32.dp, top = 48.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(88.dp)
-                            .clip(RoundedCornerShape(24.dp))
-                            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Description,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(40.dp)
-                        )
-                    }
+                    IconBadge(Icons.Rounded.Description, Tints.Blue, size = 64)
                     Spacer(Modifier.height(20.dp))
                     Text(
                         text = VaultStrings.emptyVaultTitle(lang),
                         style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Spacer(Modifier.height(6.dp))
@@ -484,79 +417,73 @@ private fun IdleGlanceContent(
                         text = VaultStrings.emptyVaultHint(lang),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        textAlign = TextAlign.Center
                     )
                     Spacer(Modifier.height(20.dp))
-                    Button(onClick = onAddDocuments, shape = RoundedCornerShape(24.dp)) {
-                        Text(VaultStrings.addDocuments(lang))
+                    Button(onClick = onAddDocuments, shape = RoundedCornerShape(12.dp)) {
+                        Text(VaultStrings.addDocuments(lang), fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
         } else {
             item {
-                Text(
-                    text = VaultStrings.vaultGlance(lang, documentsCount, picturesCount),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    CountTile(
+                        icon = Icons.Rounded.Description,
+                        tint = Tints.Blue,
+                        count = documentsCount,
+                        label = VaultStrings.docsNav(lang),
+                        onClick = onAddDocuments,
+                        modifier = Modifier.weight(1f)
+                    )
+                    CountTile(
+                        icon = Icons.Rounded.PhotoLibrary,
+                        tint = Tints.Purple,
+                        count = picturesCount,
+                        label = VaultStrings.filterPhotos(lang),
+                        onClick = null,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
 
             if (recentSearches.isNotEmpty()) {
                 item {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = VaultStrings.recentSearches(lang),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                    GroupedSection(header = VaultStrings.recentSearches(lang)) {
                         recentSearches.take(6).forEach { entry ->
-                            Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                color = Color.Transparent,
-                                modifier = Modifier.fillMaxWidth()
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .combinedClickable(onClick = { onSearch(entry) }, role = Role.Button)
+                                    .padding(start = 16.dp, end = 4.dp)
+                                    .height(48.dp)
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clip(RoundedCornerShape(16.dp))
-                                            .combinedClickable(
-                                                onClick = { onSearch(entry) },
-                                                role = Role.Button
-                                            )
-                                            .padding(horizontal = 8.dp, vertical = 12.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Search,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                        Spacer(Modifier.width(12.dp))
-                                        Text(
-                                            text = entry,
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                    IconButton(
-                                        onClick = { onDeleteSearch(entry) },
-                                        colors = IconButtonDefaults.iconButtonColors(
-                                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Close,
-                                            contentDescription = VaultStrings.deleteSearch(lang),
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
+                                Icon(
+                                    imageVector = Icons.Rounded.History,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    text = entry,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(onClick = { onDeleteSearch(entry) }) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = VaultStrings.deleteSearch(lang),
+                                        tint = MaterialTheme.colorScheme.outline,
+                                        modifier = Modifier.size(18.dp)
+                                    )
                                 }
                             }
                         }
@@ -566,70 +493,58 @@ private fun IdleGlanceContent(
 
             if (newestDocs.isNotEmpty()) {
                 item {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = VaultStrings.recentDocuments(lang),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                    GroupedSection(header = VaultStrings.recentDocuments(lang)) {
                         newestDocs.forEach { doc ->
-                            Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .combinedClickable(
-                                        onClick = { onOpenDocument(doc) },
-                                        role = Role.Button
-                                    )
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(14.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(40.dp)
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(MaterialTheme.colorScheme.primaryContainer),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Outlined.Description,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            modifier = Modifier.size(22.dp)
-                                        )
-                                    }
-                                    Spacer(Modifier.width(12.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Text(
-                                            text = doc.name,
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = doc.pageCount?.let { VaultStrings.pagesCount(lang, it) }
-                                                ?: VaultStrings.documentLabel(lang),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
+                            GroupedRow(
+                                title = doc.name,
+                                subtitle = doc.pageCount?.let { VaultStrings.pagesCount(lang, it) }
+                                    ?: VaultStrings.documentLabel(lang),
+                                icon = Icons.Rounded.Description,
+                                tint = Tints.Red,
+                                onClick = { onOpenDocument(doc) }
+                            )
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun CountTile(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    tint: Color,
+    count: Int,
+    label: String,
+    onClick: (() -> Unit)?,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .then(if (onClick != null) Modifier.combinedClickable(onClick = onClick, role = Role.Button) else Modifier)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconBadge(icon, tint, size = 32)
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = count.toString(),
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -641,6 +556,7 @@ private fun SearchResultsContent(
     directHits: List<SearchHit>,
     partialHits: List<SearchHit>,
     photoMatches: List<VaultItem>,
+    possiblePhotoMatches: List<VaultItem>,
     meaningMatches: List<SearchHit>,
     meaningFirst: Boolean,
     meaningCoverage: Float,
@@ -653,9 +569,18 @@ private fun SearchResultsContent(
     onShowPartial: () -> Unit,
     onResultClick: (SearchHit) -> Unit,
     onResultLongClick: (SearchHit) -> Unit,
-    onPhotoClick: (VaultItem) -> Unit
+    activeFilter: String,
+    onOpenPhotos: (List<VaultItem>, Int) -> Unit,
+    onSeeAllPhotos: (List<VaultItem>) -> Unit,
+    onPhotoLongClick: (VaultItem) -> Unit
 ) {
-    if (isLoading && directHits.isEmpty() && photoMatches.isEmpty() && partialHits.isEmpty() && meaningMatches.isEmpty()) {
+    val showDocuments = activeFilter != SearchFilter.IMAGES
+    val documentHits = if (showDocuments) directHits.filterNot { it.row.itemType.isImage } else emptyList()
+    val photos = remember(directHits, photoMatches, activeFilter) {
+        if (activeFilter == SearchFilter.DOCUMENTS) emptyList()
+        else com.amar.vault.ResultWording.mixed(directHits.filter { it.row.itemType.isImage }.map { it.row }, photoMatches)
+    }
+    if (isLoading && documentHits.isEmpty() && photos.isEmpty() && possiblePhotoMatches.isEmpty() && partialHits.isEmpty() && meaningMatches.isEmpty()) {
         Box(
             modifier = Modifier.fillMaxSize().padding(32.dp),
             contentAlignment = Alignment.Center
@@ -681,7 +606,7 @@ private fun SearchResultsContent(
         return
     }
 
-    if (directHits.isEmpty() && partialHits.isEmpty() && photoMatches.isEmpty() && meaningMatches.isEmpty()) {
+    if (documentHits.isEmpty() && partialHits.isEmpty() && photos.isEmpty() && possiblePhotoMatches.isEmpty() && meaningMatches.isEmpty()) {
         Box(
             modifier = Modifier.fillMaxSize().padding(32.dp),
             contentAlignment = Alignment.Center
@@ -695,7 +620,7 @@ private fun SearchResultsContent(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.SearchOff,
+                        imageVector = Icons.Rounded.SearchOff,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(40.dp)
@@ -747,7 +672,7 @@ private fun SearchResultsContent(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.Info,
+                            imageVector = Icons.Rounded.Info,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(20.dp)
@@ -763,27 +688,29 @@ private fun SearchResultsContent(
             }
         }
 
-        if (photoMatches.isNotEmpty()) {
+        if (photos.isNotEmpty()) {
             item(key = "photos_section") {
-                Text(
-                    text = VaultStrings.photosSection(lang, photoMatches.size),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary
+                PhotoResults(
+                    photos = photos,
+                    lang = lang,
+                    reducedMotion = reducedMotion,
+                    onOpen = { index -> onOpenPhotos(photos, index) },
+                    onSeeAll = { onSeeAllPhotos(photos) },
+                    onLongClick = onPhotoLongClick
                 )
-                Spacer(Modifier.height(8.dp))
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    items(photoMatches, key = { it.id }) { photo ->
-                        PhotoMatchThumbnail(
-                            photo = photo,
-                            description = photo.title ?: VaultStrings.photoContentDesc(lang),
-                            reducedMotion = reducedMotion,
-                            onClick = { onPhotoClick(photo) }
-                        )
-                    }
-                }
+            }
+        }
+
+        if (possiblePhotoMatches.isNotEmpty()) {
+            item(key = "possible_photos_section") {
+                PossiblePhotoResults(
+                    photos = possiblePhotoMatches,
+                    lang = lang,
+                    reducedMotion = reducedMotion,
+                    onOpenPhotos = onOpenPhotos,
+                    onSeeAllPhotos = onSeeAllPhotos,
+                    onPhotoLongClick = onPhotoLongClick,
+                )
             }
         }
 
@@ -799,7 +726,7 @@ private fun SearchResultsContent(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.Info,
+                            imageVector = Icons.Rounded.Info,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(20.dp)
@@ -817,16 +744,17 @@ private fun SearchResultsContent(
 
         if (meaningFirst) meaningSection(meaningMatches, queryText, lang, onResultClick, onResultLongClick)
 
-        if (directHits.isNotEmpty()) {
+        if (documentHits.isNotEmpty()) {
             item(key = "documents_header") {
                 Text(
-                    text = VaultStrings.docsSection(lang, directHits.size),
+                    text = VaultStrings.docsSection(lang, documentHits.size),
                     style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
-            items(directHits, key = { it.row.id }) { hit ->
+            items(documentHits, key = { it.row.id }) { hit ->
                 DocumentHitCard(
                     hit = hit,
                     query = queryText,
@@ -855,7 +783,7 @@ private fun SearchResultsContent(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.ExpandMore,
+                            imageVector = Icons.Rounded.ExpandMore,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp)
@@ -897,28 +825,202 @@ private fun SearchResultsContent(
     }
 }
 
+private const val PHOTO_PREVIEW = 6
+
 @Composable
-private fun PhotoMatchThumbnail(
+private fun PossiblePhotoResults(
+    photos: List<VaultItem>,
+    lang: com.amar.vault.ui.AppLanguage,
+    reducedMotion: Boolean,
+    onOpenPhotos: (List<VaultItem>, Int) -> Unit,
+    onSeeAllPhotos: (List<VaultItem>) -> Unit,
+    onPhotoLongClick: (VaultItem) -> Unit,
+) {
+    var expanded by remember(photos) { mutableStateOf(false) }
+    if (expanded) {
+        PhotoResults(
+            photos = photos,
+            lang = lang,
+            reducedMotion = reducedMotion,
+            possible = true,
+            onOpen = { index -> onOpenPhotos(photos, index) },
+            onSeeAll = { onSeeAllPhotos(photos) },
+            onLongClick = onPhotoLongClick,
+        )
+    } else {
+        TextButton(
+            onClick = { expanded = true },
+            contentPadding = PaddingValues(horizontal = 0.dp),
+        ) {
+            Text(
+                text = VaultStrings.possiblePhotosSection(lang, photos.size),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PhotoResults(
+    photos: List<VaultItem>,
+    lang: com.amar.vault.ui.AppLanguage,
+    reducedMotion: Boolean,
+    possible: Boolean = false,
+    onOpen: (Int) -> Unit,
+    onSeeAll: () -> Unit,
+    onLongClick: (VaultItem) -> Unit
+) {
+    Column {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .combinedClickable(onClick = onSeeAll, role = Role.Button)
+                .padding(vertical = 4.dp)
+        ) {
+            Text(
+                text = if (possible) VaultStrings.possiblePhotosSection(lang, photos.size)
+                    else VaultStrings.photosSection(lang, photos.size),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = VaultStrings.seeAll(lang),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Icon(
+                Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        val more = photos.size - PHOTO_PREVIEW
+        photos.take(PHOTO_PREVIEW).chunked(3).forEachIndexed { row, three ->
+            if (row > 0) Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                three.forEachIndexed { column, photo ->
+                    val index = row * 3 + column
+                    val last = index == PHOTO_PREVIEW - 1 && more > 0
+                    PhotoTile(
+                        photo = photo,
+                        description = photo.title ?: VaultStrings.photoContentDesc(lang),
+                        reducedMotion = reducedMotion,
+                        modifier = Modifier.weight(1f),
+                        onClick = { if (last) onSeeAll() else onOpen(index) },
+                        onLongClick = { onLongClick(photo) },
+                        overlay = if (last) "+${more + 1}" else null
+                    )
+                }
+                repeat(3 - three.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PhotoTile(
     photo: VaultItem,
     description: String,
     reducedMotion: Boolean,
-    onClick: () -> Unit
+    modifier: Modifier,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    overlay: String? = null,
+    corner: androidx.compose.ui.unit.Dp = 10.dp
 ) {
-    val context = LocalContext.current
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier
-            .size(112.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .combinedClickable(onClick = onClick, role = Role.Button)
+    Box(
+        modifier = modifier
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(corner))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick, role = Role.Button)
     ) {
         com.amar.vault.ui.components.VaultPicture(
             address = photo.uri,
             contentDescription = description,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
-            crossfade = !reducedMotion
+            crossfade = !reducedMotion,
+            failedIconSize = 22.dp
         )
+        if (overlay != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.45f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = overlay,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AllPhotosScreen(
+    photos: List<VaultItem>,
+    lang: com.amar.vault.ui.AppLanguage,
+    backLabel: String,
+    reducedMotion: Boolean,
+    onBack: () -> Unit,
+    onOpen: (Int) -> Unit,
+    onLongClick: (VaultItem) -> Unit
+) {
+    BackHandler(onBack = onBack)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(start = 4.dp, top = 8.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .combinedClickable(onClick = onBack, role = Role.Button)
+                .padding(end = 12.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(30.dp)
+            )
+            Text(backLabel, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary)
+        }
+        LargeTitle(VaultStrings.photosSection(lang, photos.size))
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(3),
+            contentPadding = PaddingValues(start = 2.dp, end = 2.dp, top = 4.dp, bottom = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            itemsIndexed(photos, key = { _, photo -> photo.id }) { index, photo ->
+                PhotoTile(
+                    photo = photo,
+                    description = photo.title ?: VaultStrings.photoContentDesc(lang),
+                    reducedMotion = reducedMotion,
+                    modifier = Modifier,
+                    onClick = { onOpen(index) },
+                    onLongClick = { onLongClick(photo) },
+                    corner = 0.dp
+                )
+            }
+        }
     }
 }
 
@@ -959,23 +1061,18 @@ private fun DocumentHitCard(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(
-                                if (isPicture) MaterialTheme.colorScheme.secondaryContainer
-                                else MaterialTheme.colorScheme.primaryContainer
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = if (isPicture) Icons.Outlined.Image else Icons.Outlined.Description,
+                    if (isPicture) {
+                        com.amar.vault.ui.components.VaultPicture(
+                            address = item.uri,
                             contentDescription = null,
-                            tint = if (isPicture) MaterialTheme.colorScheme.onSecondaryContainer
-                            else MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.size(20.dp)
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(RoundedCornerShape(10.dp)),
+                            failedIconSize = 18.dp
                         )
+                    } else {
+                        IconBadge(Icons.Rounded.Description, if (isPdf) Tints.Red else Tints.Blue, size = 36)
                     }
                     Spacer(Modifier.width(10.dp))
                     Text(
@@ -1010,7 +1107,7 @@ private fun DocumentHitCard(
                     text = annotatedExcerpt,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 3,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
             }
@@ -1024,23 +1121,6 @@ private fun DocumentHitCard(
                 )
             }
 
-            if (hit.page != null) {
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = VaultStrings.openPage(lang, hit.page!!),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(14.dp)
-                    )
-                }
-            }
         }
     }
 }
@@ -1114,7 +1194,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.meaningSection(
             Text(
                 text = VaultStrings.meaningSection(lang, hits.size),
                 style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
                 text = VaultStrings.meaningNote(lang),

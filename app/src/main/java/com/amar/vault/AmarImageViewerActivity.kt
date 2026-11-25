@@ -8,10 +8,12 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,12 +25,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.amar.vault.ui.AppLanguage
 import com.amar.vault.ui.LocalAppLanguage
 import com.amar.vault.ui.VaultStrings
 import com.amar.vault.ui.theme.AmarTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class AmarImageViewerActivity : ComponentActivity() {
     companion object {
@@ -37,14 +39,24 @@ class AmarImageViewerActivity : ComponentActivity() {
         private const val EXTRA_TITLE = "image_title"
         private const val EXTRA_TEXT = "image_text"
         private const val EXTRA_TIMESTAMP = "image_timestamp"
+        private const val EXTRA_IDS = "image_ids"
+        private const val MOST_PHOTOS = 500
 
-        fun open(context: Context, item: VaultItem) {
+        fun open(context: Context, item: VaultItem) = open(context, listOf(item), 0)
+
+        fun open(context: Context, items: List<VaultItem>, start: Int) {
+            if (items.isEmpty()) return
+            val at = start.coerceIn(0, items.lastIndex)
+            val item = items[at]
+            val from = (at - MOST_PHOTOS / 2).coerceIn(0, maxOf(0, items.size - MOST_PHOTOS))
+            val window = items.subList(from, minOf(items.size, from + MOST_PHOTOS))
             val intent = Intent(context, AmarImageViewerActivity::class.java).apply {
                 putExtra(EXTRA_ID, item.id)
                 putExtra(EXTRA_URI, item.uri)
                 putExtra(EXTRA_TITLE, item.title ?: item.sourceFile)
                 putExtra(EXTRA_TEXT, item.ocrText)
                 putExtra(EXTRA_TIMESTAMP, item.timestamp)
+                putStringArrayListExtra(EXTRA_IDS, ArrayList(window.map { it.id }))
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             context.startActivity(intent)
@@ -54,7 +66,7 @@ class AmarImageViewerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val uri = intent.getStringExtra(EXTRA_URI) ?: run { finish(); return }
-        val item = VaultItem(
+        val first = VaultItem(
             id = intent.getStringExtra(EXTRA_ID) ?: uri,
             uri = uri,
             ocrText = intent.getStringExtra(EXTRA_TEXT).orEmpty(),
@@ -65,6 +77,7 @@ class AmarImageViewerActivity : ComponentActivity() {
             title = intent.getStringExtra(EXTRA_TITLE),
             mimeType = "image/*",
         )
+        val ids = intent.getStringArrayListExtra(EXTRA_IDS)?.takeIf { it.isNotEmpty() } ?: arrayListOf(first.id)
 
         setContent {
             val prefs by ScanPreferences.prefsFlow(applicationContext).collectAsState(initial = null)
@@ -78,9 +91,26 @@ class AmarImageViewerActivity : ComponentActivity() {
                     }
                 }
             }
+            var items by remember { mutableStateOf(listOf(first)) }
+            LaunchedEffect(Unit) {
+                if (ids.size > 1) {
+                    val loaded = withContext(Dispatchers.IO) {
+                        runCatching { VaultDatabase.get(applicationContext).vaultDao().getByIds(ids) }.getOrDefault(emptyList())
+                    }
+                    val byId = loaded.associateBy { it.id }
+                    val ordered = ids.mapNotNull { byId[it] }
+                    if (ordered.size > 1 && ordered.any { it.id == first.id }) items = ordered
+                }
+            }
             CompositionLocalProvider(LocalAppLanguage provides lang) {
                 AmarTheme(darkTheme = true) {
-                    FullScreenPhotoViewer(item = item, onClose = { finish() })
+                    key(items.size) {
+                        FullScreenPhotoViewer(
+                            items = items,
+                            start = items.indexOfFirst { it.id == first.id }.coerceAtLeast(0),
+                            onClose = { finish() }
+                        )
+                    }
                 }
             }
         }
@@ -89,28 +119,36 @@ class AmarImageViewerActivity : ComponentActivity() {
 
 @Composable
 private fun FullScreenPhotoViewer(
-    item: VaultItem,
+    items: List<VaultItem>,
+    start: Int,
     onClose: () -> Unit
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
     val lang = LocalAppLanguage.current
+    val pager = rememberPagerState(initialPage = start) { items.size }
     var showOcrText by remember { mutableStateOf(false) }
+    val item = items[pager.currentPage.coerceIn(0, items.lastIndex)]
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        com.amar.vault.ui.components.VaultPicture(
-            address = item.uri,
-            contentDescription = item.title ?: item.sourceFile,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize(),
-            failedIconSize = 56.dp,
-            failedMessage = VaultStrings.pictureCannotOpen(lang)
-        )
+        HorizontalPager(
+            state = pager,
+            key = { items[it].id },
+            modifier = Modifier.fillMaxSize()
+        ) { page ->
+            val shown = items[page]
+            com.amar.vault.ui.components.VaultPicture(
+                address = shown.uri,
+                contentDescription = shown.title ?: shown.sourceFile,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+                failedIconSize = 56.dp,
+                failedMessage = VaultStrings.pictureCannotOpen(lang)
+            )
+        }
 
-        // Top Overlay Bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -126,7 +164,7 @@ private fun FullScreenPhotoViewer(
                     .background(Color.Black.copy(alpha = 0.5f))
             ) {
                 Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                     contentDescription = VaultStrings.back(lang),
                     tint = Color.White
                 )
@@ -134,15 +172,23 @@ private fun FullScreenPhotoViewer(
 
             Spacer(Modifier.width(12.dp))
 
-            Text(
-                text = item.title ?: item.sourceFile.substringAfterLast('/'),
-                color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = item.title ?: item.sourceFile.substringAfterLast('/'),
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (items.size > 1) {
+                    Text(
+                        text = VaultStrings.viewerPosition(lang, pager.currentPage + 1, items.size),
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp
+                    )
+                }
+            }
 
             if (item.ocrText.isNotBlank()) {
                 Surface(
@@ -161,7 +207,6 @@ private fun FullScreenPhotoViewer(
             }
         }
 
-        // Bottom OCR Excerpt Sheet (if toggled)
         if (showOcrText && item.ocrText.isNotBlank()) {
             Surface(
                 modifier = Modifier
@@ -177,8 +222,7 @@ private fun FullScreenPhotoViewer(
                         text = VaultStrings.readFromPicture(lang),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFFA8C7FA),
-                        letterSpacing = 0.5.sp
+                        color = Color(0xFF8EC5FF)
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(

@@ -1,5 +1,6 @@
 package com.amar.vault.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,36 +18,48 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.outlined.CloudOff
-import androidx.compose.material.icons.outlined.DocumentScanner
-import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.PhotoCamera
-import androidx.compose.material.icons.outlined.Translate
-import androidx.compose.material3.Button
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.DocumentScanner
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.FormatSize
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Password
+import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.RestartAlt
+import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.amar.vault.BuildConfig
+import com.amar.vault.BulkScanWorker
+import com.amar.vault.PhotoFolders
 import com.amar.vault.ScanPreferences
 import com.amar.vault.VaultDatabase
 import com.amar.vault.indexing.ppocr.LineModelDownloader
@@ -56,440 +69,243 @@ import com.amar.vault.photos.PhotoModelFiles
 import com.amar.vault.ui.AppLanguage
 import com.amar.vault.ui.LocalAppLanguage
 import com.amar.vault.ui.VaultStrings
+import com.amar.vault.ui.components.GroupedRow
+import com.amar.vault.ui.components.GroupedSection
+import com.amar.vault.ui.components.GroupedToggleRow
+import com.amar.vault.ui.components.LargeTitle
+import com.amar.vault.ui.components.Tints
+import com.amar.vault.vectors.Sensitive
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+private const val TAPS_FOR_DEVELOPER = 7
 
 @Composable
 fun SettingsScreen(
     onOpenDevTools: () -> Unit = {}
 ) {
+    var showFolders by rememberSaveable { mutableStateOf(false) }
+    val lang = LocalAppLanguage.current
+    if (showFolders) {
+        FoldersScreen(onBack = { showFolders = false }, backLabel = VaultStrings.settingsNav(lang))
+    } else {
+        SettingsList(onOpenFolders = { showFolders = true }, onOpenDevTools = onOpenDevTools)
+    }
+}
+
+@Composable
+private fun SettingsList(onOpenFolders: () -> Unit, onOpenDevTools: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val lang = LocalAppLanguage.current
+    val db = remember { VaultDatabase.get(context) }
 
     val prefs by ScanPreferences.prefsFlow(context).collectAsState(initial = null)
     val developerMode = prefs?.developerMode == true
-    val appLockEnabled = prefs?.appLockEnabled == true
-    val largerText = prefs?.largerText == true
-    val currentLang = prefs?.language ?: "system"
+    val totalCount by remember { db.vaultDao().observeCount() }.collectAsState(initial = 0)
 
-    val totalCount by remember { VaultDatabase.get(context).vaultDao().observeCount() }.collectAsState(initial = 0)
+    var folderSummary by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(prefs) {
+        val current = prefs ?: return@LaunchedEffect
+        folderSummary = if (current.scanAll) VaultStrings.allPhotos(lang) else {
+            val chosen = withContext(Dispatchers.IO) { PhotoFolders.chosenCount(current, PhotoFolders.list(context)) }
+            VaultStrings.foldersChosen(lang, chosen)
+        }
+    }
 
-    val modelFiles = remember { PhotoModelFiles(context) }
-    var photoModelReady by remember { mutableStateOf(modelFiles.present()) }
-    val downloader = remember { PhotoModelDownloader(context) }
-    val downloadState by downloader.state.collectAsState()
+    var excludeCodes by remember { mutableStateOf(Sensitive.excludeFromIndex) }
+    var learned by remember { mutableIntStateOf(0) }
+    var learnedRefresh by remember { mutableIntStateOf(0) }
+    var confirmForget by remember { mutableStateOf(false) }
+    LaunchedEffect(learnedRefresh) {
+        learned = withContext(Dispatchers.IO) { db.aliasDao().all().size + db.openDao().count() }
+    }
 
-    var tapCount by remember { mutableStateOf(0) }
-    val showDeveloperSection = BuildConfig.DEBUG || developerMode || tapCount >= 7
+    var taps by remember { mutableIntStateOf(0) }
+    val showDeveloper = BuildConfig.DEBUG || developerMode
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp)
     ) {
-        Text(
-            text = VaultStrings.settingsNav(lang),
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.padding(top = 16.dp, bottom = 12.dp)
-        )
+        LargeTitle(VaultStrings.settingsNav(lang))
 
-        SettingsSection(title = VaultStrings.sectionSecurity(lang)) {
-            SettingsToggleRow(
-                icon = { tint ->
-                    Icon(Icons.Outlined.Lock, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
-                },
-                title = VaultStrings.appLockTitle(lang),
-                subtitle = VaultStrings.appLockDesc(lang),
-                checked = appLockEnabled,
-                onCheckedChange = { enable -> scope.launch { ScanPreferences.setAppLock(context, enable) } }
+        Column(verticalArrangement = Arrangement.spacedBy(28.dp), modifier = Modifier.padding(top = 8.dp)) {
+            GroupedSection(header = VaultStrings.sectionReading(lang)) {
+                GroupedRow(
+                    title = VaultStrings.foldersTitle(lang),
+                    icon = Icons.Rounded.Folder,
+                    tint = Tints.Blue,
+                    value = folderSummary,
+                    onClick = onOpenFolders
+                )
+                ReadPhotosRows(lang)
+            }
+
+            GroupedSection(header = VaultStrings.sectionSearchModels(lang)) {
+                PhotoSearchRow(lang)
+                TextReaderRow(lang)
+            }
+
+            GroupedSection(header = VaultStrings.sectionPrivacy(lang)) {
+                GroupedToggleRow(
+                    title = VaultStrings.appLockTitle(lang),
+                    icon = Icons.Rounded.Lock,
+                    tint = Tints.Indigo,
+                    checked = prefs?.appLockEnabled == true,
+                    onCheckedChange = { on -> scope.launch { ScanPreferences.setAppLock(context, on) } }
+                )
+                GroupedToggleRow(
+                    title = VaultStrings.hideCodesTitle(lang),
+                    icon = Icons.Rounded.Password,
+                    tint = Tints.Gray,
+                    checked = excludeCodes,
+                    onCheckedChange = { on ->
+                        excludeCodes = on
+                        Sensitive.setExcludeFromIndex(context, on)
+                    }
+                )
+                GroupedRow(
+                    title = VaultStrings.forgetLearnedTitle(lang),
+                    icon = Icons.Rounded.History,
+                    tint = Tints.Red,
+                    value = learned.takeIf { it > 0 }?.toString(),
+                    enabled = learned > 0,
+                    onClick = { confirmForget = true },
+                    chevron = false
+                )
+            }
+
+            GroupedSection(header = VaultStrings.sectionDisplay(lang)) {
+                LanguageRow(lang = lang, current = prefs?.language ?: "system") { code ->
+                    scope.launch { ScanPreferences.setLanguage(context, code) }
+                }
+                GroupedToggleRow(
+                    title = VaultStrings.largerTextTitle(lang),
+                    icon = Icons.Rounded.FormatSize,
+                    tint = Tints.Blue,
+                    checked = prefs?.largerText == true,
+                    onCheckedChange = { on -> scope.launch { ScanPreferences.setLargerText(context, on) } }
+                )
+            }
+
+            if (showDeveloper) {
+                GroupedSection(header = VaultStrings.sectionDeveloper(lang)) {
+                    GroupedRow(
+                        title = VaultStrings.devToolsTitle(lang),
+                        icon = Icons.Rounded.Build,
+                        tint = Tints.Gray,
+                        onClick = onOpenDevTools
+                    )
+                    if (!BuildConfig.DEBUG) {
+                        GroupedRow(
+                            title = VaultStrings.hideDevTools(lang),
+                            icon = Icons.Rounded.VisibilityOff,
+                            tint = Tints.Gray,
+                            chevron = false,
+                            onClick = {
+                                taps = 0
+                                scope.launch { ScanPreferences.setDeveloperMode(context, false) }
+                            }
+                        )
+                    }
+                }
+            }
+
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(
+                        enabled = !showDeveloper,
+                        role = Role.Button,
+                        onClick = {
+                            taps++
+                            if (taps >= TAPS_FOR_DEVELOPER) {
+                                scope.launch { ScanPreferences.setDeveloperMode(context, true) }
+                                Toast.makeText(context, VaultStrings.devUnlocked(lang), Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    )
+                    .padding(vertical = 12.dp)
+            ) {
+                Text(
+                    text = VaultStrings.versionLine(lang),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = VaultStrings.totalItems(lang, totalCount),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+
+    if (confirmForget) {
+        AlertDialog(
+            onDismissRequest = { confirmForget = false },
+            title = { Text(VaultStrings.forgetLearnedTitle(lang)) },
+            text = { Text(VaultStrings.forgetLearnedBody(lang)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmForget = false
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            db.aliasDao().clear()
+                            db.openDao().clear()
+                        }
+                        learnedRefresh++
+                    }
+                }) { Text(VaultStrings.forget(lang), color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmForget = false }) { Text(VaultStrings.cancel(lang)) }
+            }
+        )
+    }
+}
+
+@Composable
+private fun PhotoSearchRow(lang: AppLanguage) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val files = remember { PhotoModelFiles(context) }
+    var ready by remember { mutableStateOf(files.present()) }
+    val downloader = remember { PhotoModelDownloader(context) }
+    val state by downloader.state.collectAsState()
+
+    val progress = (state as? PhotoModelDownloader.DownloadState.Downloading)?.percent
+    val failed = state is PhotoModelDownloader.DownloadState.Failed
+    LaunchedEffect(state) { if (state is PhotoModelDownloader.DownloadState.Completed) ready = true }
+
+    GroupedRow(
+        title = VaultStrings.photoSearchTitle(lang),
+        subtitle = VaultStrings.photoSearchShort(lang),
+        icon = Icons.Rounded.PhotoLibrary,
+        tint = Tints.Purple,
+        chevron = false,
+        trailing = {
+            DownloadState(
+                lang = lang,
+                ready = ready,
+                percent = progress ?: if (state is PhotoModelDownloader.DownloadState.Verifying) 100 else null,
+                failed = failed,
+                onDownload = { scope.launch { if (downloader.download()) ready = true } }
             )
         }
-
-        Spacer(Modifier.height(20.dp))
-
-        SearchPrivacySection()
-
-        Spacer(Modifier.height(20.dp))
-
-        SettingsSection(title = VaultStrings.sectionSearchModels(lang)) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                            Icon(
-                                Icons.Outlined.PhotoCamera,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(22.dp)
-                            )
-                            Spacer(Modifier.width(12.dp))
-                            Column {
-                                Text(
-                                    text = VaultStrings.photoSearchTitle(lang),
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = VaultStrings.photoSearchDesc(lang),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-
-                        if (photoModelReady || downloadState is PhotoModelDownloader.DownloadState.Completed) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Default.CheckCircle,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    text = VaultStrings.ready(lang),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                        }
-                    }
-
-                    when (val state = downloadState) {
-                        is PhotoModelDownloader.DownloadState.Downloading -> {
-                            Spacer(Modifier.height(12.dp))
-                            Text(
-                                text = VaultStrings.downloadingFile(lang, state.currentFile, state.percent),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            LinearProgressIndicator(
-                                progress = { state.percent / 100f },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(6.dp)
-                                    .clip(RoundedCornerShape(3.dp)),
-                                color = MaterialTheme.colorScheme.primary,
-                                trackColor = MaterialTheme.colorScheme.outlineVariant
-                            )
-                        }
-                        is PhotoModelDownloader.DownloadState.Verifying -> {
-                            Spacer(Modifier.height(12.dp))
-                            Text(
-                                text = VaultStrings.verifying(lang),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        is PhotoModelDownloader.DownloadState.Failed -> {
-                            Spacer(Modifier.height(12.dp))
-                            Text(
-                                text = VaultStrings.downloadFailed(lang, state.reason),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            OutlinedButton(
-                                onClick = { scope.launch { downloader.download() } },
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text(VaultStrings.retryDownload(lang))
-                            }
-                        }
-                        is PhotoModelDownloader.DownloadState.Idle -> {
-                            if (!photoModelReady) {
-                                Spacer(Modifier.height(12.dp))
-                                Button(
-                                    onClick = {
-                                        scope.launch {
-                                            val ok = downloader.download()
-                                            if (ok) photoModelReady = true
-                                        }
-                                    },
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(VaultStrings.downloadPhotoModel(lang))
-                                }
-                            }
-                        }
-                        is PhotoModelDownloader.DownloadState.Completed -> {
-                            photoModelReady = true
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            LineReaderPackCard(lang)
-        }
-
-        Spacer(Modifier.height(20.dp))
-
-        SettingsSection(title = VaultStrings.sectionDisplay(lang)) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    SettingsToggleRow(
-                        icon = { tint ->
-                            Icon(Icons.Outlined.Translate, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
-                        },
-                        title = VaultStrings.largerTextTitle(lang),
-                        subtitle = VaultStrings.largerTextDesc(lang),
-                        checked = largerText,
-                        onCheckedChange = { enable ->
-                            scope.launch { ScanPreferences.setLargerText(context, enable) }
-                        },
-                        containerIsFlat = true
-                    )
-
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
-
-                    Text(
-                        text = VaultStrings.languageTitle(lang),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(Modifier.height(10.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        LanguageChoiceChip(
-                            label = "English",
-                            isSelected = currentLang == "en",
-                            onClick = { scope.launch { ScanPreferences.setLanguage(context, "en") } }
-                        )
-                        LanguageChoiceChip(
-                            label = "हिन्दी",
-                            isSelected = currentLang == "hi",
-                            onClick = { scope.launch { ScanPreferences.setLanguage(context, "hi") } }
-                        )
-                        LanguageChoiceChip(
-                            label = VaultStrings.languageSystem(lang),
-                            isSelected = currentLang == "system",
-                            onClick = { scope.launch { ScanPreferences.setLanguage(context, "system") } }
-                        )
-                    }
-                }
-            }
-        }
-
-        Spacer(Modifier.height(20.dp))
-
-        SettingsSection(title = VaultStrings.sectionAbout(lang)) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Outlined.CloudOff,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            text = "Amar Vault",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = VaultStrings.offlineDesc(lang),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = VaultStrings.totalItems(lang, totalCount),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        text = VaultStrings.versionLine(lang),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.clickable { if (tapCount < 7) tapCount++ }
-                    )
-                }
-            }
-        }
-
-        if (showDeveloperSection) {
-            Spacer(Modifier.height(20.dp))
-
-            SettingsSection(title = VaultStrings.sectionDeveloper(lang)) {
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    text = VaultStrings.developerModeTitle(lang),
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = VaultStrings.developerModeDesc(lang),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-
-                            Switch(
-                                checked = BuildConfig.DEBUG || developerMode,
-                                enabled = !BuildConfig.DEBUG,
-                                onCheckedChange = { on ->
-                                    scope.launch { ScanPreferences.setDeveloperMode(context, on) }
-                                }
-                            )
-                        }
-
-                        Spacer(Modifier.height(12.dp))
-                        Button(
-                            onClick = onOpenDevTools,
-                            enabled = BuildConfig.DEBUG || developerMode,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(VaultStrings.openDevTools(lang))
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(Modifier.height(32.dp))
-    }
+    )
 }
 
 @Composable
-private fun SettingsSection(title: String, content: @Composable () -> Unit) {
-    Column {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
-        )
-        content()
-    }
-}
-
-@Composable
-private fun SettingsToggleRow(
-    icon: @Composable (androidx.compose.ui.graphics.Color) -> Unit,
-    title: String,
-    subtitle: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    containerIsFlat: Boolean = false
-) {
-    val row: @Composable () -> Unit = {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                icon(MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            Switch(checked = checked, onCheckedChange = onCheckedChange)
-        }
-    }
-    if (containerIsFlat) {
-        row()
-    } else {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Box(modifier = Modifier.padding(horizontal = 16.dp)) { row() }
-        }
-    }
-}
-
-@Composable
-private fun LanguageChoiceChip(
-    label: String,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = if (isSelected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
-        modifier = Modifier
-            .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-            color = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
-        )
-    }
-}
-
-@Composable
-private fun LineReaderPackCard(lang: AppLanguage) {
+private fun TextReaderRow(lang: AppLanguage) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val files = remember { LineModelFiles(context) }
@@ -497,105 +313,149 @@ private fun LineReaderPackCard(lang: AppLanguage) {
     var percent by remember { mutableStateOf<Int?>(null) }
     var failed by remember { mutableStateOf(false) }
 
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    Icon(
-                        Icons.Outlined.DocumentScanner,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Column {
-                        Text(
-                            text = VaultStrings.linePackTitle(lang),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = VaultStrings.linePackDesc(lang),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-                if (ready) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Default.CheckCircle,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            text = VaultStrings.ready(lang),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-            }
-
-            val shown = percent
-            if (!ready && shown != null) {
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    text = VaultStrings.downloadingPercent(lang, shown),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(6.dp))
-                LinearProgressIndicator(
-                    progress = { shown / 100f },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp)
-                        .clip(RoundedCornerShape(3.dp)),
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.outlineVariant
-                )
-            } else if (!ready) {
-                if (failed) {
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        text = VaultStrings.downloadNotFinished(lang),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-                Button(
-                    onClick = {
-                        failed = false
-                        percent = 0
-                        scope.launch {
-                            val ok = LineModelDownloader(files, LineModelDownloader.DEFAULT_BASE_URL).download { done, total ->
-                                if (total > 0) percent = (done * 100 / total).toInt()
-                            }
-                            ready = ok && files.present()
-                            failed = !ready
-                            percent = null
+    GroupedRow(
+        title = VaultStrings.linePackTitle(lang),
+        subtitle = VaultStrings.linePackShort(lang),
+        icon = Icons.Rounded.DocumentScanner,
+        tint = Tints.Teal,
+        chevron = false,
+        trailing = {
+            DownloadState(
+                lang = lang,
+                ready = ready,
+                percent = percent,
+                failed = failed,
+                onDownload = {
+                    failed = false
+                    percent = 0
+                    scope.launch {
+                        val ok = LineModelDownloader(files, LineModelDownloader.DEFAULT_BASE_URL).download { done, total ->
+                            if (total > 0) percent = (done * 100 / total).toInt()
                         }
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(if (failed) VaultStrings.retryDownload(lang) else VaultStrings.downloadLinePack(lang))
+                        ready = ok && files.present()
+                        failed = !ready
+                        percent = null
+                    }
                 }
+            )
+        }
+    )
+}
+
+@Composable
+private fun DownloadState(lang: AppLanguage, ready: Boolean, percent: Int?, failed: Boolean, onDownload: () -> Unit) {
+    when {
+        ready -> Icon(
+            Icons.Rounded.CheckCircle,
+            contentDescription = VaultStrings.ready(lang),
+            tint = Tints.Green,
+            modifier = Modifier.size(22.dp)
+        )
+        percent != null -> Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(
+                progress = { percent / 100f },
+                strokeWidth = 2.5.dp,
+                trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                modifier = Modifier.size(22.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("$percent%", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        else -> Surface(
+            shape = RoundedCornerShape(50),
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+            modifier = Modifier.clickable(role = Role.Button, onClick = onDownload)
+        ) {
+            Text(
+                text = if (failed) VaultStrings.retryShort(lang) else VaultStrings.downloadShort(lang),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun LanguageRow(lang: AppLanguage, current: String, onChoose: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val choices = listOf("system" to VaultStrings.languageSystem(lang), "en" to "English", "hi" to "हिन्दी")
+    Box {
+        GroupedRow(
+            title = VaultStrings.languageTitle(lang),
+            icon = Icons.Rounded.Language,
+            tint = Tints.Blue,
+            value = choices.firstOrNull { it.first == current }?.second ?: choices.first().second,
+            onClick = { open = true }
+        )
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            shape = RoundedCornerShape(14.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+        ) {
+            choices.forEach { (code, label) ->
+                DropdownMenuItem(
+                    text = { Text(label, fontWeight = if (code == current) FontWeight.SemiBold else FontWeight.Normal) },
+                    trailingIcon = if (code == current) {
+                        { Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp)) }
+                    } else null,
+                    onClick = {
+                        open = false
+                        onChoose(code)
+                    }
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun ReadPhotosRows(lang: AppLanguage) {
+    val context = LocalContext.current
+    val app = context.applicationContext
+    val progress by remember { BulkScanWorker.progress(app) }.collectAsState(initial = null)
+    var confirmAgain by remember { mutableStateOf(false) }
+    val current = progress
+    val busy = current != null
+
+    GroupedRow(
+        title = VaultStrings.readNewNow(lang),
+        subtitle = current?.let {
+            if (it.total > 0) VaultStrings.readingProgress(lang, it.current, it.total) else VaultStrings.readingStarting(lang)
+        },
+        icon = Icons.Rounded.Refresh,
+        tint = Tints.Green,
+        chevron = false,
+        onClick = if (busy) null else ({ BulkScanWorker.enqueueAfterCurrent(app) }),
+        trailing = if (busy) ({
+            CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+        }) else null
+    )
+    GroupedRow(
+        title = VaultStrings.readAllAgain(lang),
+        icon = Icons.Rounded.RestartAlt,
+        tint = Tints.Orange,
+        enabled = !busy,
+        chevron = false,
+        onClick = { confirmAgain = true }
+    )
+
+    if (confirmAgain) {
+        AlertDialog(
+            onDismissRequest = { confirmAgain = false },
+            title = { Text(VaultStrings.readAllAgain(lang)) },
+            text = { Text(VaultStrings.readAllAgainBody(lang)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmAgain = false
+                    BulkScanWorker.enqueueAfterCurrent(app, again = true)
+                }) { Text(VaultStrings.readAgainConfirm(lang), fontWeight = FontWeight.SemiBold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmAgain = false }) { Text(VaultStrings.cancel(lang)) }
+            }
+        )
     }
 }

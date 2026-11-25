@@ -36,5 +36,17 @@ class ResultWordingTest {
         assertFalse(says("कुत्ते", "कुत्त"))
     }
 
+    private fun picture(id: String) = VaultItem(
+        id = id, uri = "content://$id", ocrText = "", lang = "zxx", itemType = ItemType.PHOTO, sourceFile = id, timestamp = 0,
+    )
+
+    @Test fun picturesThatSayItDoNotHideTheOnesThatShowIt() {
+        val saying = (1..40).map { picture("says$it") }
+        val looking = listOf(picture("looks1"), picture("looks2"), picture("says30"))
+        val first = ResultWording.mixed(saying, looking).map { it.id }
+        assertEquals(listOf("says30", "says1", "looks1", "says2", "looks2", "says3"), first.take(6))
+        assertEquals(42, first.size)
+    }
+
     @Test fun romanisedSmallWordsAreSmall() = assertFalse(says("ghar mein sab", "barf mein kutta"))
 }

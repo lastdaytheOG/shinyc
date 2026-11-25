@@ -44,9 +44,9 @@ class SensitiveAndLearningTest {
     @Test
     fun aSearchThatFoundNothingThenAnOpenWithinAMinuteTeachesAnAlias() = runBlocking {
         val memory = AliasMemory(db) { now }
-        memory.searched("light bill")
+        memory.searched("light bill", found = false)
         now += 20_000
-        memory.searched("electricity bill march")
+        memory.searched("electricity bill march", found = true)
         now += 5_000
         memory.opened("electricity bill march", "doc-7", "POSSIBLE")
         val alias = db.aliasDao().all().single()
@@ -56,11 +56,30 @@ class SensitiveAndLearningTest {
     }
 
     @Test
+    fun aSearchThatFoundSomethingTeachesNothingToTheNextOne() = runBlocking {
+        val memory = AliasMemory(db) { now }
+        memory.searched("guitar", found = true)
+        now += 10_000
+        memory.searched("passport", found = true)
+        memory.opened("passport", "doc-2", "OPENED")
+        assertTrue(db.aliasDao().all().isEmpty())
+    }
+
+    @Test
+    fun anOpenBeforeTheSearchFinishedLooksAtTheSearchJustBefore() = runBlocking {
+        val memory = AliasMemory(db) { now }
+        memory.searched("old typo", found = false)
+        memory.searched("guitar", found = true)
+        memory.opened("passport", "doc-2", "OPENED")
+        assertTrue(db.aliasDao().all().isEmpty())
+    }
+
+    @Test
     fun aSlowFollowUpTeachesNothing() = runBlocking {
         val memory = AliasMemory(db) { now }
-        memory.searched("light bill")
+        memory.searched("light bill", found = false)
         now += 5 * 60_000
-        memory.searched("electricity bill")
+        memory.searched("electricity bill", found = true)
         memory.opened("electricity bill", "doc-7", "POSSIBLE")
         assertTrue(db.aliasDao().all().isEmpty())
     }
@@ -68,7 +87,7 @@ class SensitiveAndLearningTest {
     @Test
     fun opensAreCappedAndFade() = runBlocking {
         val memory = AliasMemory(db) { now }
-        repeat(3) { memory.searched("rent"); memory.opened("rent", "doc-1", "POSSIBLE") }
+        repeat(3) { memory.searched("rent", found = true); memory.opened("rent", "doc-1", "POSSIBLE") }
         assertEquals(AliasMemory.MAX_OPEN_WEIGHT, memory.openedBefore("rent").getValue("doc-1"), 0.001f)
         now += (60.0 * 24 * 3_600_000).toLong()
         assertTrue(memory.openedBefore("rent").getValue("doc-1") < AliasMemory.MAX_OPEN_WEIGHT)

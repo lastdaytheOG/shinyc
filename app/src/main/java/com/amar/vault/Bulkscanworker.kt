@@ -22,7 +22,9 @@ import com.amar.vault.indexing.DiscoverySpec
 import com.amar.vault.indexing.FixedBatchPolicy
 import com.amar.vault.indexing.HeatPacer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 
 /**
@@ -61,6 +63,29 @@ class BulkScanWorker @dagger.assisted.AssistedInject constructor(
                 .enqueueUniqueWork("bulk_scan", androidx.work.ExistingWorkPolicy.KEEP, request)
         }
 
+        private const val KEY_AGAIN = "read_again"
+
+        fun enqueueAfterCurrent(context: Context, again: Boolean = false) {
+            val request = OneTimeWorkRequestBuilder<BulkScanWorker>()
+                .addTag("bulk_scan")
+                .setInputData(workDataOf(KEY_AGAIN to again))
+                .build()
+            WorkManager.getInstance(context)
+                .enqueueUniqueWork("bulk_scan", androidx.work.ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+        }
+
+        data class Progress(val current: Int, val total: Int)
+
+        fun progress(context: Context): Flow<Progress?> =
+            WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow("bulk_scan").map { infos ->
+                val running = infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
+                when {
+                    running != null -> Progress(running.progress.getInt("current", 0), running.progress.getInt("total", 0))
+                    infos.any { it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.BLOCKED } -> Progress(0, 0)
+                    else -> null
+                }
+            }
+
         /** Check if a bulk scan is currently running. */
         fun isRunning(context: Context): Boolean {
             val infos = WorkManager.getInstance(context)
@@ -90,7 +115,7 @@ class BulkScanWorker @dagger.assisted.AssistedInject constructor(
                 sinceEpochSeconds = null,
                 dedupAgainstIndexed = false,
             )
-            val toRead = engine.toRead(spec)
+            val toRead = engine.toRead(spec, again = inputData.getBoolean(KEY_AGAIN, false))
             val uris = toRead.map { it.uri }
 
             Log.d(TAG, "Starting bulk scan: ${uris.size} photos from ${folders.size} folders")

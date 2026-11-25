@@ -5,16 +5,19 @@ import java.util.Locale
 
 class AliasMemory(private val db: VaultDatabase, private val clock: () -> Long = System::currentTimeMillis) {
 
-    data class Search(val query: String, val at: Long, val opened: Boolean)
+    data class Search(val query: String, val at: Long, val opened: Boolean, val found: Boolean)
 
     @Volatile private var last: Search? = null
 
-    fun searched(query: String) {
+    fun searched(query: String, found: Boolean) {
         val q = norm(query)
         if (q.isEmpty()) return
         val previous = last
-        if (previous != null && previous.query == q) return
-        last = Search(q, clock(), opened = false)
+        if (previous != null && previous.query == q) {
+            if (found) last = previous.copy(found = true)
+            return
+        }
+        last = Search(q, clock(), opened = false, found = found)
         earlier = previous
     }
 
@@ -26,8 +29,8 @@ class AliasMemory(private val db: VaultDatabase, private val clock: () -> Long =
         val now = clock()
         db.openDao().insert(Open(queryNorm = q, itemId = itemId, verdict = verdict, at = now))
         db.openDao().deleteBefore(now - OPENS_KEPT_MS)
-        val before = earlier
-        if (before != null && !before.opened && now - before.at <= WINDOW_MS && before.query != q) {
+        val before = if (last?.query == q) earlier else last
+        if (before != null && !before.opened && !before.found && now - before.at <= WINDOW_MS && before.query != q) {
             val from = words(before.query)
             val to = words(q).filter { it !in from }
             if (from.isNotEmpty() && to.isNotEmpty() && from.size <= 4) {

@@ -32,7 +32,7 @@ object PhotoVectors {
 }
 
 /** A photo found by what it looks like, and how close it came to the query (cosine, -1…1). */
-data class PhotoMatch(val itemId: String, val score: Float, val margin: Float = 0f)
+data class PhotoMatch(val itemId: String, val score: Float, val margin: Float = 0f, val possible: Boolean = false)
 
 /**
  * Every picture's vector of one model, held in memory and compared with a query by an exact scan:
@@ -42,12 +42,13 @@ data class PhotoMatch(val itemId: String, val score: Float, val margin: Float = 
  *
  * Thread-safe: writes and searches take the same lock; a search is a few milliseconds.
  */
-class PhotoIndex(val dim: Int) {
+class PhotoIndex(val dim: Int, val generic: List<FloatArray> = emptyList()) {
 
     private val ids = ArrayList<String>()
     private val positionOf = HashMap<String, Int>()
     private var vectors = ByteArray(0)
     private var scales = FloatArray(0)
+    private var common = FloatArray(0)
 
     val size: Int @Synchronized get() = ids.size
 
@@ -73,6 +74,7 @@ class PhotoIndex(val dim: Int) {
         }
         System.arraycopy(bytes, 0, vectors, at * dim, dim)
         scales[at] = scale
+        if (generic.isNotEmpty()) common[at] = mostGeneric(bytes, scale)
     }
 
     /** Takes the picture out; the last one moves into its place. */
@@ -86,6 +88,7 @@ class PhotoIndex(val dim: Int) {
             positionOf[moved] = at
             System.arraycopy(vectors, last * dim, vectors, at * dim, dim)
             scales[at] = scales[last]
+            common[at] = common[last]
         }
         ids.removeAt(last)
         return true
@@ -95,7 +98,7 @@ class PhotoIndex(val dim: Int) {
     @Synchronized
     fun load(rows: List<PhotoVector>) {
         ids.clear(); positionOf.clear()
-        vectors = ByteArray(0); scales = FloatArray(0)
+        vectors = ByteArray(0); scales = FloatArray(0); common = FloatArray(0)
         ensureCapacity(rows.size)
         for (row in rows) if (row.vector.size == dim) put(row.itemId, row.vector, row.scale)
     }
@@ -107,12 +110,47 @@ class PhotoIndex(val dim: Int) {
     @Synchronized
     fun top(query: FloatArray, k: Int, only: ((String) -> Boolean)? = null): List<PhotoMatch> = scan(query, k, only).top
 
+    class ThresholdScan(
+        val matches: List<PhotoMatch>,
+        val mean: Float,
+        val deviation: Float,
+        val count: Int,
+    )
+
+    @Synchronized
+    fun scanMatches(
+        query: FloatArray,
+        only: ((String) -> Boolean)? = null,
+        isSure: (score: Float, margin: Float) -> Boolean,
+    ): ThresholdScan {
+        require(query.size == dim) { "a $dim-dimension index was given a ${query.size}-dimension query" }
+        val n = ids.size
+        if (n == 0) return ThresholdScan(emptyList(), 0f, 0f, 0)
+        val scores = FloatArray(n)
+        PhotoScan.scores(query, vectors, scales, dim, n, scores)
+        val sure = ArrayList<PhotoMatch>()
+        var sum = 0.0
+        var sumSq = 0.0
+        var count = 0
+        for (p in 0 until n) {
+            if (only != null && !only(ids[p])) continue
+            val score = scores[p].toDouble()
+            sum += score
+            sumSq += score * score
+            count++
+            if (isSure(scores[p], marginAt(p, scores[p]))) sure += matchAt(p, scores[p])
+        }
+        val mean = if (count > 0) sum / count else 0.0
+        val deviation = if (count > 1) kotlin.math.sqrt(maxOf(0.0, sumSq / count - mean * mean)) else 0.0
+        return ThresholdScan(sure, mean.toFloat(), deviation.toFloat(), count)
+    }
+
     class Scan(val top: List<PhotoMatch>, val mean: Float, val deviation: Float, val count: Int)
 
     @Synchronized
     fun loadAll(entries: List<Triple<String, ByteArray, Float>>) {
         ids.clear(); positionOf.clear()
-        vectors = ByteArray(0); scales = FloatArray(0)
+        vectors = ByteArray(0); scales = FloatArray(0); common = FloatArray(0)
         ensureCapacity(entries.size)
         for ((id, bytes, scale) in entries) if (bytes.size == dim) put(id, bytes, scale)
     }
@@ -173,7 +211,17 @@ class PhotoIndex(val dim: Int) {
         }
         return (0 until size).map { heap[it] }
             .sortedWith(compareByDescending<Int> { scores[it] }.thenBy { it })
-            .map { PhotoMatch(ids[it], scores[it]) }
+            .map { matchAt(it, scores[it]) }
+    }
+
+    private fun marginAt(at: Int, score: Float): Float = if (generic.isEmpty()) 0f else score - common[at]
+
+    private fun matchAt(at: Int, score: Float) = PhotoMatch(ids[at], score, marginAt(at, score))
+
+    private fun mostGeneric(bytes: ByteArray, scale: Float): Float = generic.maxOf { words ->
+        var sum = 0f
+        for (i in 0 until dim) sum += words[i] * bytes[i]
+        sum * scale
     }
 
     private fun ensureCapacity(count: Int) {
@@ -181,6 +229,7 @@ class PhotoIndex(val dim: Int) {
         val cap = maxOf(count, scales.size * 2, 64)
         vectors = vectors.copyOf(cap * dim)
         scales = scales.copyOf(cap)
+        common = common.copyOf(cap)
     }
 }
 

@@ -18,6 +18,7 @@ data class CandidateBudget(
     val substring: Int = VaultConfig.Retrieval.SUBSTRING_BUDGET,
     val fuzzy: Int = VaultConfig.Retrieval.FUZZY_BUDGET,
     val fts: Int = VaultConfig.Retrieval.FTS_BUDGET,
+    val shown: Int = VaultConfig.Retrieval.FUSION_TOPN,
 )
 
 /**
@@ -117,6 +118,11 @@ data class RetrievalRequest(
             else QueryPlanner.parse(typed, forResultList = true, asWords = asWords + narrowing).cleanedQuery
             return RetrievalRequest(
                 plan.cleanedQuery, plan.copy(limit = null),
+                budget = CandidateBudget(
+                    bm25 = VaultConfig.Retrieval.LIST_BUDGET,
+                    substring = VaultConfig.Retrieval.LIST_BUDGET,
+                    shown = VaultConfig.Retrieval.LIST_BUDGET,
+                ),
                 tuning = RetrievalTuning(relaxEmptyFilter = true),
                 only = only,
                 wordsIfFilterEmpty = asPlainWords,
@@ -196,7 +202,7 @@ data class MeaningResult(
 data class ResultGroup(val kind: EvidenceKind, val verdict: Verdict, val ids: List<String>)
 
 /** A picture found by what is in it, and how close it came (cosine, -1…1). */
-data class PhotoHit(val item: VaultItem, val score: Float, val margin: Float = 0f)
+data class PhotoHit(val item: VaultItem, val score: Float, val margin: Float = 0f, val possible: Boolean = false)
 
 data class MeaningHit(val rowId: String, val score: Float, val margin: Float)
 

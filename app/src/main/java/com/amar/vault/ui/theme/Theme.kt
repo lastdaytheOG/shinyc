@@ -7,10 +7,13 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 
 private val DarkColorScheme = darkColorScheme(
     primary = VaultDarkPrimary,
@@ -39,6 +42,13 @@ private val DarkColorScheme = darkColorScheme(
     outlineVariant = VaultDarkOutlineVariant,
     inverseSurface = VaultDarkInverseSurface,
     inverseOnSurface = VaultDarkInverseOnSurface,
+    surfaceContainerLowest = VaultDarkSurfaceLowest,
+    surfaceContainerLow = VaultDarkSurfaceLow,
+    surfaceContainer = VaultDarkSurfaceContainer,
+    surfaceContainerHigh = VaultDarkSurfaceHigh,
+    surfaceContainerHighest = VaultDarkSurfaceHighest,
+    surfaceBright = VaultDarkSurfaceBright,
+    surfaceTint = VaultDarkPrimary,
 )
 
 private val LightColorScheme = lightColorScheme(
@@ -68,6 +78,13 @@ private val LightColorScheme = lightColorScheme(
     outlineVariant = VaultLightOutlineVariant,
     inverseSurface = VaultLightInverseSurface,
     inverseOnSurface = VaultLightInverseOnSurface,
+    surfaceContainerLowest = VaultLightSurfaceLowest,
+    surfaceContainerLow = VaultLightSurfaceLow,
+    surfaceContainer = VaultLightSurfaceContainer,
+    surfaceContainerHigh = VaultLightSurfaceHigh,
+    surfaceContainerHighest = VaultLightSurfaceHighest,
+    surfaceBright = VaultLightSurfaceBright,
+    surfaceTint = VaultLightPrimary,
 )
 
 data class VaultExtraColors(
@@ -75,6 +92,7 @@ data class VaultExtraColors(
     val successContainer: Color,
     val onSuccessContainer: Color,
     val scrim: Color,
+    val switchOn: Color = VaultLightSwitchOn,
 )
 
 val LocalVaultExtraColors = staticCompositionLocalOf {
@@ -112,6 +130,7 @@ fun AmarTheme(
             successContainer = VaultDarkSuccessContainer,
             onSuccessContainer = Color(0xFFC9F2D3),
             scrim = Color(0xD9000000),
+            switchOn = VaultDarkSwitchOn,
         )
     } else {
         VaultExtraColors(
@@ -120,6 +139,17 @@ fun AmarTheme(
             onSuccessContainer = Color(0xFF072711),
             scrim = Color(0x8A000000),
         )
+    }
+
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = view.context.findActivity()?.window ?: return@SideEffect
+            WindowCompat.getInsetsController(window, view).apply {
+                isAppearanceLightStatusBars = !darkTheme
+                isAppearanceLightNavigationBars = !darkTheme
+            }
+        }
     }
 
     CompositionLocalProvider(
@@ -132,4 +162,10 @@ fun AmarTheme(
             content = content
         )
     }
+}
+
+private tailrec fun android.content.Context.findActivity(): android.app.Activity? = when (this) {
+    is android.app.Activity -> this
+    is android.content.ContextWrapper -> baseContext.findActivity()
+    else -> null
 }

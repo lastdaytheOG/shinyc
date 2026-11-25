@@ -7,6 +7,7 @@ import com.amar.vault.VaultConfig
 import com.amar.vault.VaultItem
 import com.amar.vault.VaultLog
 import com.amar.vault.isDocumentPiece
+import com.amar.vault.photos.PhotoGate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -151,7 +152,9 @@ class HybridSearchService(
         val guesser = spellings.takeIf { tuning.hinglishModel && hinglish != null && !hinglish.isEmpty }
 
         val aliasTerms: List<String> = if (tuning.learning && learned != null) {
-            runCatching { learned.expand(qLower) }.getOrDefault(emptyList()).flatMap { it.split(' ') }.distinct()
+            runCatching { learned.expand(qLower) }.getOrDefault(emptyList())
+                .takeIf { it.isNotEmpty() && lexical.fts(q, 1).isEmpty() }
+                .orEmpty().flatMap { it.split(' ') }.distinct()
         } else emptyList()
         val openedBefore: Map<String, Float> = if (tuning.learning && learned != null) {
             runCatching { learned.openedBefore(qLower) }.getOrDefault(emptyMap())
@@ -186,7 +189,7 @@ class HybridSearchService(
                 val matches = photos.search(text, VaultConfig.Retrieval.PHOTO_BUDGET, inPeriod)
                 if (matches.isEmpty()) return emptyList()
                 val rows = repository.getByIds(matches.map { it.itemId }).associateBy { it.id }
-                matches.mapNotNull { m -> rows[m.itemId]?.let { PhotoHit(it, m.score, m.margin) } }
+                matches.mapNotNull { m -> rows[m.itemId]?.let { PhotoHit(it, m.score, m.margin, m.possible) } }
                     .filter { only == null || only(it.item) }
             } catch (e: CancellationException) {
                 throw e
@@ -335,8 +338,27 @@ class HybridSearchService(
                 VaultLog.e("HybridSearch", "Hinglish spelling error: ${e.message}"); null
             }
         }
+        val photoHindiQueryDeferred = async(Dispatchers.Default) {
+            if (guesser == null || !tuning.hinglishModel) return@async null
+            val found = substringDeferred.await().wordsFound
+            val marked = typedWords.any { Hinglish.isMarker(it.bare) }
+            val hasUnmatchedWord = typedWords.any {
+                it.bare.length >= 3 && !Hinglish.isLittle(it.bare) && it.typed !in found
+            }
+            if (!marked && !hasUnmatchedWord) return@async null
+            try {
+                val words = typedWords.map { w ->
+                    if (Hinglish.isLatinWord(w.bare)) guesser.hindi(w.bare) ?: w.bare else w.bare
+                }
+                words.joinToString(" ").takeIf { Hinglish.isDevanagari(it) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                VaultLog.e("HybridSearch", "Photo Hinglish spelling error: ${e.message}"); null
+            }
+        }
         val photoHindiDeferred = async(Dispatchers.Default) {
-            hindiQueryDeferred.await()?.let { photoHits(it) }.orEmpty()
+            photoHindiQueryDeferred.await()?.let { photoHits(it) }.orEmpty()
         }
         val missingWordsDeferred = async(Dispatchers.IO) {
             if (legacyTypoHelp) null
@@ -417,7 +439,7 @@ class HybridSearchService(
         claimDocuments(bm25Lane, judge = null)
         if (onStage != null && bm25Lane.isNotEmpty()) {
             surface(RetrievalStage.KEYWORD, fuseAndRank(bm25Lane.asDocumentRows(), emptyList(), emptyList(),
-                plan, qLower, gate(emptyList()), openedBefore))
+                plan, qLower, gate(emptyList()), openedBefore, budget.shown))
         }
 
         val substringLane = substringDeferred.await().hits
@@ -437,7 +459,7 @@ class HybridSearchService(
         var lexicalFusion: Fusion? = null
         if (onStage != null &&
             (bm25Results.isNotEmpty() || substringResults.isNotEmpty() || fuzzyResults.isNotEmpty())) {
-            lexicalFusion = fuseAndRank(bm25Results, substringResults, fuzzyResults, plan, qLower, lexicalGate, openedBefore)
+            lexicalFusion = fuseAndRank(bm25Results, substringResults, fuzzyResults, plan, qLower, lexicalGate, openedBefore, budget.shown)
             surface(RetrievalStage.LEXICAL, lexicalFusion)
         }
 
@@ -456,7 +478,7 @@ class HybridSearchService(
 
         // ── 6–8. Fuse, boost, gate, re-rank ───────────────────────────────
         val fusion = lexicalFusion
-            ?: fuseAndRank(bm25Results, substringResults, fuzzyResults, plan, qLower, lexicalGate, openedBefore)
+            ?: fuseAndRank(bm25Results, substringResults, fuzzyResults, plan, qLower, lexicalGate, openedBefore, budget.shown)
 
         val trace = sink?.let {
             RetrievalTrace(
@@ -610,9 +632,12 @@ class HybridSearchService(
         val best = LinkedHashMap<String, PhotoHit>()
         for (hit in typed + hindi) {
             val kept = best[hit.item.id]
-            if (kept == null || hit.score > kept.score) best[hit.item.id] = hit
+            if (kept == null || (!hit.possible && kept.possible) ||
+                (hit.possible == kept.possible && PhotoGate.strength(hit.score, hit.margin) > PhotoGate.strength(kept.score, kept.margin))) {
+                best[hit.item.id] = hit
+            }
         }
-        return best.values.sortedByDescending { it.score }.take(VaultConfig.Retrieval.PHOTO_BUDGET)
+        return best.values.sortedByDescending { PhotoGate.strength(it.score, it.margin) }.take(VaultConfig.Retrieval.PHOTO_BUDGET)
     }
 
     private fun hinglishFound(hinglish: Hinglish.Query?, rows: List<VaultItem>): Set<String> {
@@ -769,7 +794,7 @@ class HybridSearchService(
     private suspend fun boundedBaseSet(q: String, budget: CandidateBudget, bm25Hydrated: List<VaultItem>): List<VaultItem> {
         val ftsIds = lexical.fts(q, budget.fts)
         val words = q.lowercase().split(WHITESPACE).filter { it.length >= 2 && !com.amar.vault.ResultWording.isSmall(it) }.distinct()
-        val perWord = if (words.size < 2) emptyList() else words.flatMap { lexical.bm25(it, budget.bm25) }
+        val perWord = if (words.size < 2) emptyList() else words.flatMap { lexical.bm25(it, minOf(budget.bm25, VaultConfig.Retrieval.BM25_BUDGET)) }
         val unionIds = (bm25Hydrated.map { it.id } + ftsIds + perWord).distinct()
         val union = repository.inSnapshotOrder(unionIds)
         return if (union.isEmpty()) repository.allItemsSnapshot() else union
@@ -886,7 +911,8 @@ class HybridSearchService(
         substringResults: List<VaultItem>, fuzzyResults: List<VaultItem>,
         plan: QueryPlan?, qLower: String,
         gate: Gate,
-        openedBefore: Map<String, Float> = emptyMap(),
+        openedBefore: Map<String, Float>,
+        shown: Int,
     ): Fusion {
         val cfg = VaultConfig.Retrieval
         val weights = mapOf(
@@ -987,7 +1013,7 @@ class HybridSearchService(
                 .thenBy { it.key })
             .map { it.value }
 
-        var finalResults = ranked.take(cfg.FUSION_TOPN)
+        var finalResults = ranked.take(shown)
         val sortOrder = plan?.sortIntent
         if (sortOrder != null) {
             val topN = ranked.take(cfg.RERANK_TOPN)

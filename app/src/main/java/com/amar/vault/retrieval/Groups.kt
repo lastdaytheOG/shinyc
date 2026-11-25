@@ -14,7 +14,8 @@ object MeaningLane {
         gate: MeaningGate = MeaningGate(),
     ): MeaningResult {
         if (scan.hits.isEmpty()) return MeaningResult(emptyList(), emptyList(), Verdict.NOTHING, scan.coverage, mean = scan.mean, deviation = scan.deviation)
-        val rows = repository.getByIds(scan.hits.map { it.rowId }).associateBy { it.id }
+        val rows = scan.hits.map { it.rowId }.distinct().chunked(900)
+            .flatMap { repository.getByIds(it) }.associateBy { it.id }
         var matches = scan.hits.mapNotNull { h ->
             val row = rows[h.rowId] ?: return@mapNotNull null
             if (!meaning.isCurrent(row)) return@mapNotNull null
@@ -28,36 +29,19 @@ object MeaningLane {
 }
 
 class MeaningGate(
-    private val keepStanding: Float = VaultConfig.Retrieval.MEANING_KEEP_STANDING,
-    private val keepMargin: Float = VaultConfig.Retrieval.MEANING_KEEP_MARGIN,
-    private val gap: Float = VaultConfig.Retrieval.MEANING_GAP,
-    private val sureStanding: Float = VaultConfig.Retrieval.MEANING_SURE_STANDING,
-    private val sureLead: Float = VaultConfig.Retrieval.MEANING_SURE_LEAD,
     private val limit: Int = VaultConfig.Retrieval.MEANING_SHOWN,
 ) {
-    fun keep(matches: List<MeaningMatch>, scanned: Int = Int.MAX_VALUE): List<MeaningMatch> {
-        if (scanned < VaultConfig.Retrieval.MEANING_SPREAD_MIN_ROWS) return keepInASmallVault(matches)
-        val passing = matches.filter { it.standing >= keepStanding && it.margin >= keepMargin }
-        val best = passing.maxOfOrNull { it.score } ?: return emptyList()
-        return passing.filter { it.score >= best - gap }.take(limit)
-    }
-
-    private fun keepInASmallVault(matches: List<MeaningMatch>): List<MeaningMatch> {
-        val c = VaultConfig.Retrieval
-        val ranked = matches.sortedByDescending { it.score }
-        val top = ranked.firstOrNull() ?: return emptyList()
-        val lead = if (ranked.size > 1) top.score - ranked[1].score else Float.MAX_VALUE
-        val clear = lead >= c.MEANING_SMALL_VAULT_LEAD || top.margin >= keepMargin
-        if (!clear || top.margin < c.MEANING_SMALL_VAULT_MARGIN) return emptyList()
-        return ranked.filter { it.score >= top.score - gap && it.margin >= c.MEANING_SMALL_VAULT_MARGIN }.take(limit)
+    fun keep(matches: List<MeaningMatch>, @Suppress("UNUSED_PARAMETER") scanned: Int = Int.MAX_VALUE): List<MeaningMatch> {
+        val passing = matches.filter {
+            it.score >= VaultConfig.Retrieval.MEANING_FIXED_SCORE &&
+                it.margin >= VaultConfig.Retrieval.MEANING_FIXED_MARGIN
+        }
+        return passing.sortedByDescending { it.score }.take(limit)
     }
 
     fun verdict(shown: List<MeaningMatch>, coverage: Float): Verdict {
         if (shown.isEmpty()) return if (coverage < 1f) Verdict.NOTHING_YET else Verdict.NOTHING
-        val top = shown[0]
-        val lead = if (shown.size > 1) top.score - shown[1].score else Float.MAX_VALUE
-        return if (Groups.meaningChance(MeaningResult(shown, shown, Verdict.POSSIBLE, coverage)) >= VaultConfig.Retrieval.MEANING_SURE_AT &&
-            lead >= sureLead) Verdict.SURE else Verdict.POSSIBLE
+        return Verdict.POSSIBLE
     }
 }
 

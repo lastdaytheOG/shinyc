@@ -230,11 +230,12 @@ class SearchViewModel @Inject constructor(
     private val readAsWords = MutableStateFlow<Set<String>>(emptySet())
 
     /**
-     * Pictures that look like the query in the box, most alike first: photo search's own list
-     * ([com.amar.vault.retrieval.RetrievalResult.photos]), shown as a band above the result list.
-     * They are found by what is in them, not by a word they say, and the band says so.
+     * Pictures that clear the fixed visual-match bar, shown before the result list.
      */
     val photoMatches = MutableStateFlow<List<VaultItem>>(emptyList())
+
+    /** Lower-bar visual matches, available in the collapsed "More possible photos" tier. */
+    val possiblePhotoMatches = MutableStateFlow<List<VaultItem>>(emptyList())
 
     val meaningMatches = MutableStateFlow<List<SearchHit>>(emptyList())
 
@@ -282,6 +283,7 @@ class SearchViewModel @Inject constructor(
                 understood.value = emptyList()
                 readingNote.value = null
                 photoMatches.value = emptyList()
+                possiblePhotoMatches.value = emptyList()
             meaningMatches.value = emptyList()
                 meaningMatches.value = emptyList()
                 emit(emptyList())
@@ -290,6 +292,7 @@ class SearchViewModel @Inject constructor(
             isSearchLoading.value = true
             readingNote.value = null
             photoMatches.value = emptyList()
+            possiblePhotoMatches.value = emptyList()
             meaningMatches.value = emptyList()
             // True once any result list for this query is on screen — a later-stage failure must
             // not wipe results the user is already looking at.
@@ -320,7 +323,7 @@ class SearchViewModel @Inject constructor(
                     val kept = if (ops.hasAny) applyOperators(items, ops) else items
                     hiddenByFilters = if (kept.isEmpty() && items.isNotEmpty())
                         oneCardPerDocument(items, queryWords, hindi).size else 0
-                    return oneCardPerDocument(kept, queryWords, hindi)
+                    return withContext(Dispatchers.Default) { oneCardPerDocument(kept, queryWords, hindi) }
                 }
                 if (effectiveQuery.isBlank()) {
                     // Operator-only query (e.g. "type:pdf"): no free-text to rank — nothing for the
@@ -334,7 +337,6 @@ class SearchViewModel @Inject constructor(
                     // Progressive retrieval: keyword hits paint as soon as the native BM25 lane
                     // returns; the substring/fuzzy and semantic stages then replace the list in
                     // place. The FINAL stage is the same ranking retrieve() returns.
-                    learned.searched(effectiveQuery)
                     retrievalService.retrieveProgressive(request.copy(only = only)).collect { update ->
                         val rows = toRows(update.result.items, update.result.hindiSpellings)
                         val isFinal = update.stage == com.amar.vault.retrieval.RetrievalStage.FINAL
@@ -344,10 +346,17 @@ class SearchViewModel @Inject constructor(
                         // The engine is asked before its first stage; once the words say nothing,
                         // only the last stage can bring photos.
                         if (isFinal) {
+                            learned.searched(
+                                effectiveQuery,
+                                found = update.result.photos.any { !it.possible } ||
+                                    (update.result.items.isNotEmpty() && !update.result.similarSpellingsOnly),
+                            )
                             // Photos come with the last stage only: the photo model is the slow part.
                             // Filters written into the query narrow them as they narrow the list.
-                            val photoRows = update.result.photos.map { it.item }
-                            photoMatches.value = if (ops.hasAny) applyOperators(photoRows, ops) else photoRows
+                            val surePhotoRows = update.result.photos.filterNot { it.possible }.map { it.item }
+                            val possiblePhotoRows = update.result.photos.filter { it.possible }.map { it.item }
+                            photoMatches.value = if (ops.hasAny) applyOperators(surePhotoRows, ops) else surePhotoRows
+                            possiblePhotoMatches.value = if (ops.hasAny) applyOperators(possiblePhotoRows, ops) else possiblePhotoRows
                             val meaningRows = update.result.meaning?.shown?.map { it.item }.orEmpty()
                             val keptMeaning = if (ops.hasAny) applyOperators(meaningRows, ops) else meaningRows
                             meaningMatches.value = keptMeaning.map { row ->
