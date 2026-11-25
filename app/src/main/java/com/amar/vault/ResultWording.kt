@@ -34,6 +34,16 @@ internal object ResultWording {
             .any { text -> UnicodeText.nfc(text).lowercase().let { lower -> words.any { containsAsWord(lower, it) } } }
     }
 
+    fun mixed(saying: List<VaultItem>, looking: List<VaultItem>): List<VaultItem> {
+        val sayingIds = saying.mapTo(HashSet()) { it.id }
+        val both = looking.filter { it.id in sayingIds }
+        val bothIds = both.mapTo(HashSet()) { it.id }
+        val said = saying.filterNot { it.id in bothIds }
+        val looked = looking.filterNot { it.id in bothIds }
+        val taken = (0 until maxOf(said.size, looked.size)).flatMap { listOfNotNull(said.getOrNull(it), looked.getOrNull(it)) }
+        return (both + taken).distinctBy { it.id }
+    }
+
     /** [word] stands in [text] with no letter, digit or vowel sign joined to either side of it. */
     fun containsAsWord(text: String, word: String): Boolean {
         if (word.isEmpty()) return false

@@ -116,6 +116,16 @@ object VaultStrings {
         else -> "Photos ($count)"
     }
 
+    fun possiblePhotosSection(lang: AppLanguage, count: Int) = when (lang) {
+        AppLanguage.HINDI -> "और संभावित फ़ोटो ($count)"
+        else -> "More possible photos ($count)"
+    }
+
+    fun hidePossiblePhotos(lang: AppLanguage) = when (lang) {
+        AppLanguage.HINDI -> "कम दिखाएँ"
+        else -> "Hide"
+    }
+
     fun meaningSection(lang: AppLanguage, count: Int) = when (lang) {
         AppLanguage.HINDI -> "अर्थ से मिलते-जुलते ($count)"
         else -> "Related by meaning ($count)"

@@ -58,23 +58,12 @@ object VaultConfig {
 
         const val MEANING_DEADLINE_MS = 2500L
 
-        const val MEANING_KEEP_STANDING = 4.0f
+        // bench2 fixed bar: 0.73 score / 0.03 anchor margin. Calibrated on captions as OCR stand-ins.
+        const val MEANING_FIXED_SCORE = 0.73f
 
-        const val MEANING_KEEP_MARGIN = 0.06f
+        const val MEANING_FIXED_MARGIN = 0.03f
 
-        const val MEANING_GAP = 0.04f
-
-        const val MEANING_SURE_STANDING = 6.0f
-
-        const val MEANING_SURE_LEAD = 0.0f
-
-        const val MEANING_SHOWN = 10
-
-        const val MEANING_SPREAD_MIN_ROWS = 200
-
-        const val MEANING_SMALL_VAULT_LEAD = 0.05f
-
-        const val MEANING_SMALL_VAULT_MARGIN = -0.03f
+        const val MEANING_SHOWN = 500
 
         const val SAYS_BIAS = -3.5844
         const val SAYS_COVERAGE = 5.2243
@@ -104,14 +93,21 @@ object VaultConfig {
 
         const val PHOTO_LANE = true
 
-        const val PHOTO_BUDGET = 24
+        const val LIST_BUDGET = 300
+
+        const val PHOTO_BUDGET = 500
+
+        // bench2 fixed bar: score + 0.6665 * generic-prompt margin.
+        const val PHOTO_STRENGTH_MARGIN_WEIGHT = 0.6665f
+
+        const val PHOTO_SURE_STRENGTH = 0.49f
+
+        const val PHOTO_POSSIBLE_STRENGTH = 0.41f
 
         const val PHOTO_MATCH_MARGIN = 0.05f
 
         const val PHOTO_MATCH_MARGIN_HINDI = 0.05f
 
         const val PHOTO_MATCH_MARGIN_ROMANISED = 0.04f
-
-        const val PHOTO_BEST_GAP = 0.08f
     }
 }

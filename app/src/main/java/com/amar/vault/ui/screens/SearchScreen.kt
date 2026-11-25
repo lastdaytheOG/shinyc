@@ -126,6 +126,7 @@ fun SearchScreen(
     val understood by viewModel.understood.collectAsState()
     val readingNote by viewModel.readingNote.collectAsState()
     val photoMatches by viewModel.photoMatches.collectAsState()
+    val possiblePhotoMatches by viewModel.possiblePhotoMatches.collectAsState()
     val meaningMatches by viewModel.meaningMatches.collectAsState()
     val meaningFirst by viewModel.meaningFirst.collectAsState()
     val meaningCoverage by viewModel.meaningCoverage.collectAsState()
@@ -149,7 +150,7 @@ fun SearchScreen(
         }
     }
 
-    val partialOpen = showPartial || (directHits.isEmpty() && photoMatches.isEmpty() && meaningMatches.isEmpty() && !similarSpellingsOnly)
+    val partialOpen = showPartial || (directHits.isEmpty() && photoMatches.isEmpty() && possiblePhotoMatches.isEmpty() && meaningMatches.isEmpty() && !similarSpellingsOnly)
     val listState = rememberLazyListState()
 
     LaunchedEffect(Unit) {
@@ -264,6 +265,7 @@ fun SearchScreen(
                 directHits = directHits,
                 partialHits = partialHits,
                 photoMatches = photoMatches,
+                possiblePhotoMatches = possiblePhotoMatches,
                 meaningMatches = meaningMatches,
                 meaningFirst = meaningFirst,
                 meaningCoverage = meaningCoverage,
@@ -554,6 +556,7 @@ private fun SearchResultsContent(
     directHits: List<SearchHit>,
     partialHits: List<SearchHit>,
     photoMatches: List<VaultItem>,
+    possiblePhotoMatches: List<VaultItem>,
     meaningMatches: List<SearchHit>,
     meaningFirst: Boolean,
     meaningCoverage: Float,
@@ -575,9 +578,9 @@ private fun SearchResultsContent(
     val documentHits = if (showDocuments) directHits.filterNot { it.row.itemType.isImage } else emptyList()
     val photos = remember(directHits, photoMatches, activeFilter) {
         if (activeFilter == SearchFilter.DOCUMENTS) emptyList()
-        else (directHits.filter { it.row.itemType.isImage }.map { it.row } + photoMatches).distinctBy { it.id }
+        else com.amar.vault.ResultWording.mixed(directHits.filter { it.row.itemType.isImage }.map { it.row }, photoMatches)
     }
-    if (isLoading && documentHits.isEmpty() && photos.isEmpty() && partialHits.isEmpty() && meaningMatches.isEmpty()) {
+    if (isLoading && documentHits.isEmpty() && photos.isEmpty() && possiblePhotoMatches.isEmpty() && partialHits.isEmpty() && meaningMatches.isEmpty()) {
         Box(
             modifier = Modifier.fillMaxSize().padding(32.dp),
             contentAlignment = Alignment.Center
@@ -603,7 +606,7 @@ private fun SearchResultsContent(
         return
     }
 
-    if (documentHits.isEmpty() && partialHits.isEmpty() && photos.isEmpty() && meaningMatches.isEmpty()) {
+    if (documentHits.isEmpty() && partialHits.isEmpty() && photos.isEmpty() && possiblePhotoMatches.isEmpty() && meaningMatches.isEmpty()) {
         Box(
             modifier = Modifier.fillMaxSize().padding(32.dp),
             contentAlignment = Alignment.Center
@@ -694,6 +697,19 @@ private fun SearchResultsContent(
                     onOpen = { index -> onOpenPhotos(photos, index) },
                     onSeeAll = { onSeeAllPhotos(photos) },
                     onLongClick = onPhotoLongClick
+                )
+            }
+        }
+
+        if (possiblePhotoMatches.isNotEmpty()) {
+            item(key = "possible_photos_section") {
+                PossiblePhotoResults(
+                    photos = possiblePhotoMatches,
+                    lang = lang,
+                    reducedMotion = reducedMotion,
+                    onOpenPhotos = onOpenPhotos,
+                    onSeeAllPhotos = onSeeAllPhotos,
+                    onPhotoLongClick = onPhotoLongClick,
                 )
             }
         }
@@ -812,10 +828,45 @@ private fun SearchResultsContent(
 private const val PHOTO_PREVIEW = 6
 
 @Composable
+private fun PossiblePhotoResults(
+    photos: List<VaultItem>,
+    lang: com.amar.vault.ui.AppLanguage,
+    reducedMotion: Boolean,
+    onOpenPhotos: (List<VaultItem>, Int) -> Unit,
+    onSeeAllPhotos: (List<VaultItem>) -> Unit,
+    onPhotoLongClick: (VaultItem) -> Unit,
+) {
+    var expanded by remember(photos) { mutableStateOf(false) }
+    if (expanded) {
+        PhotoResults(
+            photos = photos,
+            lang = lang,
+            reducedMotion = reducedMotion,
+            possible = true,
+            onOpen = { index -> onOpenPhotos(photos, index) },
+            onSeeAll = { onSeeAllPhotos(photos) },
+            onLongClick = onPhotoLongClick,
+        )
+    } else {
+        TextButton(
+            onClick = { expanded = true },
+            contentPadding = PaddingValues(horizontal = 0.dp),
+        ) {
+            Text(
+                text = VaultStrings.possiblePhotosSection(lang, photos.size),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
 private fun PhotoResults(
     photos: List<VaultItem>,
     lang: com.amar.vault.ui.AppLanguage,
     reducedMotion: Boolean,
+    possible: Boolean = false,
     onOpen: (Int) -> Unit,
     onSeeAll: () -> Unit,
     onLongClick: (VaultItem) -> Unit
@@ -830,7 +881,8 @@ private fun PhotoResults(
                 .padding(vertical = 4.dp)
         ) {
             Text(
-                text = VaultStrings.photosSection(lang, photos.size),
+                text = if (possible) VaultStrings.possiblePhotosSection(lang, photos.size)
+                    else VaultStrings.photosSection(lang, photos.size),
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
